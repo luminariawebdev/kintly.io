@@ -663,26 +663,32 @@ export function MainApp({ profile, onSettings }) {
   };
 
   React.useEffect(() => {
+    if (loading) return;
     const wrap = scrollRef.current;
     if (!wrap) return;
     let raf;
+    const compute = () => {
+      const ids = ['notes', 'tasks', 'calendar'];
+      const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
+      let cur = ids[0];
+      for (const id of ids) {
+        const el = wrap.querySelector('#sec-' + id);
+        if (!el) continue;
+        if (el.getBoundingClientRect().top - wrap.getBoundingClientRect().top - headH - 30 <= 0) cur = id;
+      }
+      setTab(cur);
+    };
     const onScroll = () => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const ids = ['notes', 'tasks', 'calendar'];
-        const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
-        let cur = ids[0];
-        for (const id of ids) {
-          const el = wrap.querySelector('#sec-' + id);
-          if (!el) continue;
-          if (el.getBoundingClientRect().top - wrap.getBoundingClientRect().top - headH - 30 <= 0) cur = id;
-        }
-        setTab(cur);
-      });
+      raf = requestAnimationFrame(compute);
     };
-    wrap.addEventListener('scroll', onScroll);
-    return () => wrap.removeEventListener('scroll', onScroll);
-  }, []);
+    wrap.addEventListener('scroll', onScroll, { passive: true });
+    compute(); // run once on mount to set the initial active tab
+    return () => {
+      cancelAnimationFrame(raf);
+      wrap.removeEventListener('scroll', onScroll);
+    };
+  }, [loading]);
 
   if (loading) {
     return (
