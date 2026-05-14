@@ -1,29 +1,70 @@
 import React from 'react';
-import { ColorDot } from '../Components';
+import { supabase } from '../lib/supabase';
 
-export function SettingsScreen({ openSwatches = false }) {
-  const [name, setName]   = React.useState('Maya Park');
-  const [color, setColor] = React.useState('maya');
-  const [showSw, setShowSw] = React.useState(openSwatches);
+const COLORS = [
+  { id: 'coral', hex: '#E27457', label: 'Coral' },
+  { id: 'blue',  hex: '#4A78B5', label: 'Blue'  },
+  { id: 'green', hex: '#5C9B6F', label: 'Green' },
+  { id: 'amber', hex: '#B8862E', label: 'Amber' },
+  { id: 'plum',  hex: '#8861A8', label: 'Plum'  },
+  { id: 'teal',  hex: '#3E8E8A', label: 'Teal'  },
+  { id: 'rose',  hex: '#C6577E', label: 'Rose'  },
+  { id: 'moss',  hex: '#5C7A37', label: 'Moss'  },
+];
 
-  const swatches = [
-    { id: 'maya', c: 'var(--u-maya)', label: 'Coral'  },
-    { id: 'theo', c: 'var(--u-theo)', label: 'Blue'   },
-    { id: 'iris', c: 'var(--u-iris)', label: 'Green'  },
-    { id: 'leo',  c: 'var(--u-leo)',  label: 'Amber'  },
-    { id: 'p1',   c: '#8861A8',       label: 'Plum'   },
-    { id: 'p2',   c: '#3E8E8A',       label: 'Teal'   },
-    { id: 'p3',   c: '#C6577E',       label: 'Rose'   },
-    { id: 'p4',   c: '#5C7A37',       label: 'Moss'   },
-  ];
-  const me = swatches.find(s => s.id === color) || swatches[0];
+export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
+  const [name, setName] = React.useState(profile?.display_name ?? '');
+  const [color, setColor] = React.useState(profile?.color ?? 'coral');
+  const [showSw, setShowSw] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const [nameErr, setNameErr] = React.useState('');
+
+  const me = COLORS.find(c => c.id === color) ?? COLORS[0];
+  const group = profile?.group;
+
+  const saveName = async () => {
+    if (!name.trim()) { setNameErr('Name cannot be empty'); return; }
+    if (name.trim() === profile?.display_name) return;
+    setSaving(true);
+    setNameErr('');
+    const { error } = await supabase
+      .from('profiles')
+      .update({ display_name: name.trim() })
+      .eq('id', profile.id);
+    setSaving(false);
+    if (error) { setNameErr(error.message); } else { onProfileUpdate(); }
+  };
+
+  const saveColor = async (newColor) => {
+    setColor(newColor);
+    setShowSw(false);
+    await supabase.from('profiles').update({ color: newColor }).eq('id', profile.id);
+    onProfileUpdate();
+  };
+
+  const copyCode = async () => {
+    if (!group?.invite_code) return;
+    try {
+      await navigator.clipboard.writeText(group.invite_code);
+    } catch {
+      // fallback for environments without clipboard API
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    onSignOut();
+  };
 
   return (
     <div className="fb-screen">
       <div className="fb-scroll">
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-row">
-            <button className="fb-link" style={{ justifySelf: 'start', textDecoration: 'none' }}>‹ Back</button>
+            <button className="fb-link" style={{ justifySelf: 'start', textDecoration: 'none' }} onClick={onBack}>‹ Back</button>
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Settings</div>
             <span />
           </div>
@@ -35,34 +76,41 @@ export function SettingsScreen({ openSwatches = false }) {
           <div className="set-group">
             <div className="set-row" style={{ display: 'block' }}>
               <span className="lbl">Display name</span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                style={{
-                  border: 0, background: 'transparent',
-                  font: 'inherit', fontSize: 16, fontWeight: 600,
-                  color: 'var(--ink)', width: '100%', padding: 0, outline: 'none',
-                }}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  value={name}
+                  onChange={e => { setName(e.target.value); setNameErr(''); }}
+                  onBlur={saveName}
+                  onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                  style={{
+                    border: 0, background: 'transparent',
+                    font: 'inherit', fontSize: 16, fontWeight: 600,
+                    color: 'var(--ink)', flex: 1, padding: 0, outline: 'none',
+                  }}
+                />
+                {saving && <span style={{ fontSize: 11, opacity: 0.4 }}>saving…</span>}
+              </div>
+              {nameErr && <div className="err-msg" style={{ marginTop: 4 }}>{nameErr}</div>}
             </div>
-            <div className="set-row" onClick={() => setShowSw(s => !s)} style={{ display: 'block' }}>
+
+            <div className="set-row" onClick={() => setShowSw(s => !s)} style={{ display: 'block', cursor: 'pointer' }}>
               <span className="lbl">Your color</span>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span className="dot xl" style={{ '--c': me.c }} />
+                  <span className="dot xl" style={{ '--c': me.hex }} />
                   <span className="val">{me.label}</span>
                 </div>
                 <span className="car">{showSw ? '▴' : '▾'}</span>
               </div>
               {showSw && (
-                <div className="swatches">
-                  {swatches.map(s => (
+                <div className="swatches" style={{ paddingTop: 10 }}>
+                  {COLORS.map(c => (
                     <span
-                      key={s.id}
-                      className={'swatch' + (s.id === color ? ' on' : '')}
-                      style={{ '--c': s.c }}
-                      onClick={(e) => { e.stopPropagation(); setColor(s.id); }}
-                      title={s.label}
+                      key={c.id}
+                      className={'swatch' + (c.id === color ? ' on' : '')}
+                      style={{ '--c': c.hex }}
+                      onClick={e => { e.stopPropagation(); saveColor(c.id); }}
+                      title={c.label}
                     />
                   ))}
                 </div>
@@ -72,49 +120,39 @@ export function SettingsScreen({ openSwatches = false }) {
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Group</div>
           <div className="set-group">
-            <div className="set-row" style={{ display: 'block' }}>
-              <span className="lbl">Current group</span>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <ColorDot user="maya" size="lg" />
-                  <span className="val">The Park Family</span>
+            {group ? (
+              <>
+                <div className="set-row" style={{ display: 'block' }}>
+                  <span className="lbl">Group name</span>
+                  <span className="val" style={{ fontWeight: 600 }}>{group.name}</span>
                 </div>
-                <span className="car">›</span>
+                <div className="set-row" style={{ cursor: 'pointer' }} onClick={copyCode}>
+                  <div style={{ display: 'block' }}>
+                    <span className="lbl">Invite code</span>
+                    <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 20, letterSpacing: '0.12em', fontWeight: 600, marginTop: 2 }}>
+                      {group.invite_code}
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2 }}>Share this code to invite family members</div>
+                  </div>
+                  <span className="car" style={{ fontSize: 13 }}>{copied ? '✓' : 'copy'}</span>
+                </div>
+              </>
+            ) : (
+              <div className="set-row">
+                <span className="val" style={{ opacity: 0.5 }}>Not in a group</span>
               </div>
-            </div>
-            <div className="set-row">
-              <span className="val" style={{ fontWeight: 500 }}>Switch group</span>
-              <span className="car">›</span>
-            </div>
-            <div className="set-row">
-              <span className="val" style={{ fontWeight: 500 }}>Invite someone</span>
-              <span className="car">›</span>
-            </div>
-            <div className="set-row danger">
-              <span className="val">Leave group</span>
-              <span className="car">›</span>
-            </div>
+            )}
           </div>
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Account</div>
           <div className="set-group">
-            <div className="set-row">
-              <span className="val" style={{ fontWeight: 500 }}>Notifications</span>
-              <span className="car">›</span>
-            </div>
-            <div className="set-row">
-              <span className="val" style={{ fontWeight: 500 }}>Privacy</span>
-              <span className="car">›</span>
-            </div>
-            <div className="set-row danger">
-              <span className="val">Log out</span>
+            <div className="set-row danger" style={{ cursor: 'pointer' }} onClick={signOut}>
+              <span className="val">Sign out</span>
               <span className="car">›</span>
             </div>
           </div>
 
-          <div className="auth-foot" style={{ marginTop: 22 }}>
-            FamilyBoard v 0.4.0 · build 26.05
-          </div>
+          <div className="auth-foot" style={{ marginTop: 22 }}>FamilyBoard v1.0</div>
         </div>
       </div>
     </div>
