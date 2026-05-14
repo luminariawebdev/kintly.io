@@ -12,28 +12,59 @@ const getInitial = n => (n || '?')[0].toUpperCase();
 
 // Synthesized bubble pop — short downward freq sweep with quick decay.
 let __audioCtx = null;
-function playPop() {
+async function ensureAudio() {
+  if (!__audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    __audioCtx = new AC();
+  }
+  if (__audioCtx.state === 'suspended') {
+    try { await __audioCtx.resume(); } catch { /* ignore */ }
+  }
+  return __audioCtx;
+}
+async function playPop() {
   try {
-    if (!__audioCtx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
-      __audioCtx = new AC();
-    }
-    const ctx = __audioCtx;
-    if (ctx.state === 'suspended') ctx.resume();
+    const ctx = await ensureAudio();
+    if (!ctx) return;
     const t0 = ctx.currentTime;
+    // body of the pop — sine sweep down
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(900, t0);
+    osc.frequency.setValueAtTime(950, t0);
     osc.frequency.exponentialRampToValueAtTime(180, t0 + 0.09);
     gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(0.35, t0 + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
+    gain.gain.exponentialRampToValueAtTime(0.55, t0 + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
     osc.connect(gain).connect(ctx.destination);
     osc.start(t0);
-    osc.stop(t0 + 0.14);
+    osc.stop(t0 + 0.15);
+    // little click on top to make it crisper
+    const click = ctx.createOscillator();
+    const cg = ctx.createGain();
+    click.type = 'triangle';
+    click.frequency.setValueAtTime(2400, t0);
+    cg.gain.setValueAtTime(0.0001, t0);
+    cg.gain.exponentialRampToValueAtTime(0.25, t0 + 0.003);
+    cg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.04);
+    click.connect(cg).connect(ctx.destination);
+    click.start(t0);
+    click.stop(t0 + 0.05);
   } catch { /* audio unavailable */ }
+}
+
+// Prime the audio context on the first user interaction so subsequent
+// plays don't get suppressed by autoplay policy.
+if (typeof window !== 'undefined' && !window.__popPrimed) {
+  window.__popPrimed = true;
+  const prime = () => {
+    ensureAudio();
+    window.removeEventListener('pointerdown', prime);
+    window.removeEventListener('keydown', prime);
+  };
+  window.addEventListener('pointerdown', prime, { once: true });
+  window.addEventListener('keydown', prime, { once: true });
 }
 
 function Dot({ profile, size = '' }) {
@@ -136,7 +167,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
     <section className="fb-sec" id="sec-tasks">
       <div className="fb-sec-hd">
         <div>
-          <div className="fb-sec-label">Section A</div>
+          <div className="fb-sec-label">Section B</div>
           <h2 className="fb-sec-title"><em>Tasks</em></h2>
         </div>
         <div className="fb-sec-meta">{openCount} open</div>
@@ -249,14 +280,14 @@ function CalendarSection({ events, members, getProfile, onAdd, onDelete }) {
     <section className="fb-sec" id="sec-calendar">
       <div className="fb-sec-hd">
         <div>
-          <div className="fb-sec-label">Section B</div>
+          <div className="fb-sec-label">Section C</div>
           <h2 className="fb-sec-title"><em>Calendar</em></h2>
         </div>
         <div className="fb-sec-meta">{events.length} events</div>
       </div>
 
       <div className="cal-bar">
-        <div className="mo">{MONTH_NAMES[calMonth]} <em style={{ fontStyle: 'italic', opacity: 0.6 }}>{calYear}</em></div>
+        <div className="mo">{MONTH_NAMES[calMonth]} <em style={{ fontWeight: 700, opacity: 0.6 }}>{calYear}</em></div>
         <div className="nav">
           <button aria-label="prev" onClick={prevMonth}>‹</button>
           <button aria-label="today" onClick={goToday}>●</button>
@@ -341,8 +372,8 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin }) {
     <section className="fb-sec" id="sec-notes">
       <div className="fb-sec-hd">
         <div>
-          <div className="fb-sec-label">Section C</div>
-          <h2 className="fb-sec-title"><em>Notes</em></h2>
+          <div className="fb-sec-label">Section A</div>
+          <h2 className="fb-sec-title">Bulletin <em>board</em></h2>
         </div>
         <div className="fb-sec-meta">{notes.length} notes</div>
       </div>
@@ -557,7 +588,7 @@ function AddNoteModal({ open, onClose, profile, onSave }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export function MainApp({ profile, onSettings }) {
-  const [tab, setTab] = React.useState('tasks');
+  const [tab, setTab] = React.useState('notes');
   const [modal, setModal] = React.useState(null);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
@@ -641,7 +672,7 @@ export function MainApp({ profile, onSettings }) {
     const onScroll = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        const ids = ['tasks', 'calendar', 'notes'];
+        const ids = ['notes', 'tasks', 'calendar'];
         const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
         let cur = ids[0];
         for (const id of ids) {
@@ -690,9 +721,9 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
+          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} />
           <CalendarSection events={events} members={members} getProfile={getProfile} onAdd={() => setModal('event')} onDelete={deleteEvent} />
-          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} />
         </div>
       </div>
 

@@ -33,7 +33,7 @@
 
 html, body {
   margin: 0;
-  font-family: 'Instrument Sans', 'Helvetica Neue', system-ui, sans-serif;
+  font-family: 'Space Grotesk', 'Helvetica Neue', system-ui, sans-serif;
   color: var(--ink);
   background: var(--paper);
   -webkit-font-smoothing: antialiased;
@@ -48,7 +48,7 @@ html, body {
   height: 100%;
   background: var(--sun);
   color: var(--ink);
-  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   display: flex; flex-direction: column;
   position: relative;
   overflow: hidden;
@@ -77,12 +77,12 @@ html, body {
   gap: 8px;
 }
 .fb-wordmark {
-  font-family: 'Instrument Serif', 'Times New Roman', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-size: 20px; font-weight: 400;
   letter-spacing: -0.01em;
   line-height: 1;
 }
-.fb-wordmark span { font-style: italic; }
+.fb-wordmark span { font-weight: 700; }
 .fb-grp-pill {
   justify-self: center;
   display: inline-flex; align-items: center; gap: 8px;
@@ -169,12 +169,12 @@ html, body {
   box-shadow: 2px 2px 0 var(--ink);
 }
 .fb-sec-title {
-  font-family: 'Instrument Serif', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-size: 30px; line-height: 1; letter-spacing: -0.02em;
   margin: 4px 0 0;
   font-weight: 400;
 }
-.fb-sec-title em { font-style: italic; }
+.fb-sec-title em { font-weight: 700; }
 .fb-sec-meta {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px; color: var(--mute);
@@ -207,7 +207,7 @@ html, body {
   color: var(--ink);
   border-radius: var(--r-card);
   padding: 12px 14px;
-  font-family: 'Instrument Sans', sans-serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 14px; font-weight: 600;
   cursor: pointer;
   width: 100%;
@@ -327,7 +327,7 @@ html, body {
   box-shadow: 3px 3px 0 var(--ink);
 }
 .cal-bar .mo {
-  font-family: 'Instrument Serif', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-size: 18px;
 }
 .cal-bar .nav {
@@ -429,7 +429,7 @@ html, body {
 }
 .upcoming-row .when .d {
   display: block; font-size: 18px; font-weight: 700; color: var(--ink);
-  font-family: 'Instrument Serif', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
 }
 .upcoming-row .ti {
   font-size: 14px; font-weight: 600;
@@ -535,11 +535,11 @@ html, body {
 .auth-mark .marklogo::before { width: 16px; height: 16px; top: 8px; left: 8px; background: var(--sun); }
 .auth-mark .marklogo::after  { width: 16px; height: 16px; bottom: 8px; right: 8px; background: var(--ink); }
 .auth-mark h1 {
-  font-family: 'Instrument Serif', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-size: 42px; line-height: 0.95; letter-spacing: -0.02em;
   font-weight: 400; margin: 0;
 }
-.auth-mark h1 em { font-style: italic; }
+.auth-mark h1 em { font-weight: 700; }
 .auth-mark p {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px; color: var(--ink-2);
@@ -570,7 +570,7 @@ html, body {
   color: var(--ink);
   border-radius: 0;
   outline: none;
-  font-family: 'Instrument Sans', sans-serif;
+  font-family: 'Space Grotesk', sans-serif;
 }
 .field input::placeholder { color: var(--mute-2); }
 .field.err input { border-bottom-color: var(--u-maya); }
@@ -619,11 +619,11 @@ html, body {
   margin-top: 6px; font-size: 13px;
 }
 .join-card h2 {
-  font-family: 'Instrument Serif', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-size: 32px; line-height: 1; letter-spacing: -0.02em;
   font-weight: 400; margin: 14px 0 4px;
 }
-.join-card h2 em { font-style: italic; }
+.join-card h2 em { font-weight: 700; }
 .join-card .gmeta {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px; color: var(--mute);
@@ -699,11 +699,11 @@ html, body {
 }
 .sheet-hd h3 {
   margin: 0;
-  font-family: 'Instrument Serif', serif;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-size: 24px; font-weight: 400;
   letter-spacing: -0.01em;
 }
-.sheet-hd h3 em { font-style: italic; }
+.sheet-hd h3 em { font-weight: 700; }
 .sheet-hd .close {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
