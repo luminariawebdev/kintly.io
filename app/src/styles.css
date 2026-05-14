@@ -116,23 +116,30 @@ html, body {
   flex: 1;
   text-align: center;
   padding: 12px 0 11px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: rgba(20, 20, 20, 0.55);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgba(20, 20, 20, 0.65);
   cursor: pointer;
   position: relative;
   user-select: none;
   background: transparent;
   border: 0;
   border-right: var(--b) solid var(--ink);
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out, color 120ms ease-out;
 }
 .fb-tab:last-child { border-right: 0; }
+.fb-tab:hover { color: var(--ink); }
+.fb-tab:active { transform: translateY(2px); }
 .fb-tab.active {
   background: var(--ink);
   color: var(--sun);
 }
+
+/* Clicky push effect on primary buttons */
+.fb-btn { transition: transform 80ms ease-out, box-shadow 80ms ease-out; }
+.fb-btn:active { transform: translateY(2px); box-shadow: 0 0 0 1.5px var(--ink); }
 
 /* ── Section ─────────────────────────────────────────────────── */
 .fb-sec-wrap {

@@ -326,9 +326,9 @@ function CalendarSection({ events, members, getProfile, onAdd, onDelete }) {
         ))}
       </div>
 
-      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 12 }}>
-        <span className="plus">+</span> Add event
-      </button>
+      <div style={{ marginTop: 12 }}>
+        <ShaderButton onClick={onAdd} label="Add event" />
+      </div>
 
       {upcoming.length > 0 && (
         <>
