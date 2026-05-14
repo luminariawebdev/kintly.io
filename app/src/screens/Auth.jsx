@@ -29,7 +29,7 @@ export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) 
         <div className="auth-wrap">
           <div className="auth-mark">
             <div className="marklogo" />
-            <h1>Family<em>board</em>.</h1>
+            <h1>kinnekt.</h1>
             <p>// Shared tasks, plans &amp; notes for your people</p>
           </div>
 
@@ -77,7 +77,7 @@ function LoginForm({ onComplete }) {
       <div className="auth-actions">
         <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
       </div>
-      <div className="auth-foot">FamilyBoard v1.0</div>
+      <div className="auth-foot">kinnekt v1.0</div>
     </>
   );
 }
@@ -305,7 +305,7 @@ function GroupSetupScreen({ onGroupReady }) {
             </>
           )}
 
-          <div className="auth-foot" style={{ marginTop: 24 }}>FamilyBoard v1.0</div>
+          <div className="auth-foot" style={{ marginTop: 24 }}>kinnekt v1.0</div>
         </div>
       </div>
     </div>

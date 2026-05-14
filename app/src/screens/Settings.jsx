@@ -158,7 +158,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
             </div>
           </div>
 
-          <div className="auth-foot" style={{ marginTop: 22 }}>FamilyBoard v1.0</div>
+          <div className="auth-foot" style={{ marginTop: 22 }}>kinnekt v1.0</div>
         </div>
       </div>
     </div>

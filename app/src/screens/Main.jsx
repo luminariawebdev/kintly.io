@@ -711,7 +711,7 @@ export function MainApp({ profile, onSettings }) {
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-row">
-            <div className="fb-wordmark">Family<span>board</span></div>
+            <div className="fb-wordmark">kinnekt</div>
             <button className="fb-grp-pill">
               <Dot profile={profile} />
               <span className="nm">{groupName}</span>

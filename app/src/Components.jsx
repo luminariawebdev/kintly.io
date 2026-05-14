@@ -31,7 +31,7 @@ export function StickyHeader({ group = 'Park-Family', onMenu, onProfile }) {
   return (
     <div className="fb-stickyhead">
       <div className="fb-stickyhead-row">
-        <div className="fb-wordmark">Family<span>board</span></div>
+        <div className="fb-wordmark">kinnekt</div>
         <button className="fb-grp-pill" onClick={onMenu}>
           <ColorDot user="maya" />
           <span className="nm">{group}</span>
