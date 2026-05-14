@@ -246,7 +246,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, onAdd, onDelete }) {
+function CalendarSection({ events, members, getProfile, onAdd, onAddOnDate, onDelete }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
@@ -303,8 +303,18 @@ function CalendarSection({ events, members, getProfile, onAdd, onDelete }) {
         {cells.map((c, i) => {
           const isToday = c.m === 'curr' && isCurrentMonth && c.d === todayD;
           const evs = c.m === 'curr' ? (eventsByDay[c.d] || []) : [];
+          let cellYear = calYear, cellMonth = calMonth;
+          if (c.m === 'prev') { cellMonth = calMonth - 1; if (cellMonth < 0) { cellMonth = 11; cellYear--; } }
+          else if (c.m === 'next') { cellMonth = calMonth + 1; if (cellMonth > 11) { cellMonth = 0; cellYear++; } }
+          const cellIso = `${cellYear}-${String(cellMonth + 1).padStart(2, '0')}-${String(c.d).padStart(2, '0')}`;
           return (
-            <div key={i} className={'cal-cell' + (c.m !== 'curr' ? ' dim' : '') + (isToday ? ' today' : '')}>
+            <div
+              key={i}
+              className={'cal-cell' + (c.m !== 'curr' ? ' dim' : '') + (isToday ? ' today' : '')}
+              onClick={() => onAddOnDate?.(cellIso)}
+              role="button"
+              tabIndex={0}
+            >
               <span className="num">{c.d}</span>
               {evs.slice(0, 2).map(e => {
                 const p = getProfile(e.created_by);
@@ -488,14 +498,20 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
 }
 
 // ─── Add Event Modal ──────────────────────────────────────────────────────────
-function AddEventModal({ open, onClose, members, onSave }) {
+function AddEventModal({ open, onClose, members, onSave, initialDate }) {
   const today = new Date().toISOString().slice(0, 10);
   const [title, setTitle] = React.useState('');
-  const [date, setDate] = React.useState(today);
+  const [date, setDate] = React.useState(initialDate || today);
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
   const [colorOwner, setColorOwner] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
+
+  // Each time the modal opens, reset date from initialDate (or today)
+  React.useEffect(() => {
+    if (open) setDate(initialDate || today);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialDate]);
 
   const save = async () => {
     if (!title.trim() || !date) return;
@@ -589,6 +605,7 @@ function AddNoteModal({ open, onClose, profile, onSave }) {
 export function MainApp({ profile, onSettings }) {
   const [tab, setTab] = React.useState('notes');
   const [modal, setModal] = React.useState(null);
+  const [eventInitDate, setEventInitDate] = React.useState(null);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
 
@@ -758,12 +775,19 @@ export function MainApp({ profile, onSettings }) {
         <div className="fb-sec-wrap">
           <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} />
-          <CalendarSection events={events} members={members} getProfile={getProfile} onAdd={() => setModal('event')} onDelete={deleteEvent} />
+          <CalendarSection
+            events={events}
+            members={members}
+            getProfile={getProfile}
+            onAdd={() => { setEventInitDate(null); setModal('event'); }}
+            onAddOnDate={(iso) => { setEventInitDate(iso); setModal('event'); }}
+            onDelete={deleteEvent}
+          />
         </div>
       </div>
 
       <AddTaskModal open={modal === 'task'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addTask} />
-      <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} onSave={addEvent} />
+      <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} onSave={addEvent} initialDate={eventInitDate} />
       <AddNoteModal open={modal === 'note'} onClose={() => setModal(null)} profile={profile} onSave={addNote} />
     </div>
   );

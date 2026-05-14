@@ -388,7 +388,11 @@ html, body {
   position: relative;
   background: var(--paper);
   overflow: hidden;
+  cursor: pointer;
+  transition: background-color 100ms ease-out;
 }
+.cal-cell:hover { background: #FFF8D1; }
+.cal-cell.dim:hover { background: #ECE9E0; }
 .cal-cell:nth-child(7n) { border-right: 0; }
 .cal-cell.dim { color: var(--mute-2); background: #F4F2EC; }
 .cal-cell.today {
