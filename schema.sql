@@ -63,11 +63,18 @@ create policy "groups_select" on public.groups
 create policy "groups_insert" on public.groups
   for insert to authenticated with check (true);
 
+-- Helper function to get current user's group_id without triggering RLS recursion
+create or replace function public.my_group_id()
+returns uuid language sql security definer stable
+as $$
+  select group_id from public.profiles where id = auth.uid()
+$$;
+
 -- Profiles policies
 create policy "profiles_select" on public.profiles
   for select using (
     id = auth.uid() or
-    group_id = (select group_id from public.profiles where id = auth.uid())
+    group_id = public.my_group_id()
   );
 
 create policy "profiles_insert" on public.profiles
