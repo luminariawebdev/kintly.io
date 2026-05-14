@@ -246,11 +246,10 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDelete }) {
+function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDelete, onShowMonth }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
-  const [monthOpen, setMonthOpen] = React.useState(false);
 
   const cells = buildCalendar(calYear, calMonth);
   const todayD = now.getDate();
@@ -284,7 +283,11 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
         <div>
           <h2 className="fb-sec-title">Calendar</h2>
         </div>
-        <button className="copy-btn" onClick={() => setMonthOpen(true)} title="View all events this month">
+        <button
+          className="copy-btn"
+          onClick={() => onShowMonth?.({ monthName: MONTH_NAMES[calMonth], year: calYear, events: monthEvents })}
+          title="View all events this month"
+        >
           {monthEvents.length} {monthEvents.length === 1 ? 'event' : 'events'}
         </button>
       </div>
@@ -370,16 +373,6 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
           </div>
         </div>
       )}
-
-      <MonthEventsModal
-        open={monthOpen}
-        onClose={() => setMonthOpen(false)}
-        monthName={MONTH_NAMES[calMonth]}
-        year={calYear}
-        events={monthEvents}
-        getProfile={getProfile}
-        onDelete={onDelete}
-      />
     </section>
   );
 }
@@ -733,6 +726,7 @@ export function MainApp({ profile, onSettings }) {
   const [modal, setModal] = React.useState(null);
   const [eventInitDate, setEventInitDate] = React.useState(null);
   const [dayDetailsDate, setDayDetailsDate] = React.useState(null);
+  const [monthModalData, setMonthModalData] = React.useState(null);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
 
@@ -909,6 +903,7 @@ export function MainApp({ profile, onSettings }) {
             onAdd={() => { setEventInitDate(null); setModal('event'); }}
             onDayClick={(iso) => setDayDetailsDate(iso)}
             onDelete={deleteEvent}
+            onShowMonth={(payload) => setMonthModalData(payload)}
           />
         </div>
       </div>
@@ -924,6 +919,15 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDayDetailsDate(null)}
         onAddEvent={() => { setEventInitDate(dayDetailsDate); setDayDetailsDate(null); setModal('event'); }}
         onDelete={(id) => deleteEvent(id)}
+      />
+      <MonthEventsModal
+        open={!!monthModalData}
+        onClose={() => setMonthModalData(null)}
+        monthName={monthModalData?.monthName}
+        year={monthModalData?.year}
+        events={monthModalData?.events || []}
+        getProfile={getProfile}
+        onDelete={(id) => { deleteEvent(id); setMonthModalData(d => d ? { ...d, events: d.events.filter(e => e.id !== id) } : d); }}
       />
     </div>
   );
