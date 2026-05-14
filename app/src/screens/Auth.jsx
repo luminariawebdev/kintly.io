@@ -151,20 +151,40 @@ function GroupSetupScreen({ onGroupReady }) {
   const [loading, setLoading] = React.useState(false);
   const [created, setCreated] = React.useState(null); // { name, code, fullProfile }
 
-  const finishSetup = async (group, user) => {
-    // Verify profile was actually updated, retry if needed
-    let prof = null;
-    for (let i = 0; i < 3; i++) {
-      await new Promise(r => setTimeout(r, 400 * (i + 1)));
-      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
-      if (data?.group_id) { prof = data; break; }
+  const assignGroup = async (user, groupId) => {
+    // Read current profile so we have display_name + color for the fallback upsert
+    const { data: current } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
+
+    // First try: standard update, asking the server to return the row
+    const { data: updated, error: upErr } = await supabase
+      .from('profiles')
+      .update({ group_id: groupId })
+      .eq('id', user.id)
+      .select();
+
+    if (!upErr && updated && updated.length > 0 && updated[0].group_id === groupId) {
+      return updated[0];
     }
-    if (!prof) {
-      setErr('Could not confirm group membership — try refreshing the page');
-      setLoading(false);
-      return null;
+
+    // Fallback: upsert with all required fields. The INSERT policy permits
+    // id = auth.uid(), the UPDATE policy permits the same — this combines both.
+    const { data: upserted, error: usErr } = await supabase
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        display_name: current?.display_name || user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
+        color: current?.color || user.user_metadata?.color || 'coral',
+        group_id: groupId,
+      }, { onConflict: 'id' })
+      .select();
+
+    if (usErr) {
+      throw new Error(`Could not save group membership: ${usErr.message}`);
     }
-    return { ...prof, group: { id: group.id, name: group.name, invite_code: group.invite_code } };
+    if (!upserted || upserted.length === 0 || upserted[0].group_id !== groupId) {
+      throw new Error('Profile update returned no rows — RLS may be blocking the update.');
+    }
+    return upserted[0];
   };
 
   const createGroup = async () => {
@@ -172,21 +192,23 @@ function GroupSetupScreen({ onGroupReady }) {
     setLoading(true);
     setErr('');
 
-    const { data: { user } } = await supabase.auth.getUser();
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not signed in');
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-    const { data: group, error: gErr } = await supabase
-      .from('groups').insert({ name: groupName.trim(), invite_code: code }).select().single();
-    if (gErr) { setErr(gErr.message); setLoading(false); return; }
+      const { data: group, error: gErr } = await supabase
+        .from('groups').insert({ name: groupName.trim(), invite_code: code }).select().single();
+      if (gErr) throw new Error(gErr.message);
 
-    const { error: pErr } = await supabase.from('profiles').update({ group_id: group.id }).eq('id', user.id);
-    if (pErr) { setErr(pErr.message); setLoading(false); return; }
+      await assignGroup(user, group.id);
 
-    const fullProfile = await finishSetup(group, user);
-    if (!fullProfile) return;
-
-    setCreated({ name: groupName.trim(), code, fullProfile });
-    setLoading(false);
+      setCreated({ name: groupName.trim(), code });
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const joinGroup = async () => {
@@ -194,18 +216,21 @@ function GroupSetupScreen({ onGroupReady }) {
     setLoading(true);
     setErr('');
 
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data: group, error: gErr } = await supabase
-      .from('groups').select('id, name, invite_code').eq('invite_code', inviteCode.trim().toUpperCase()).single();
-    if (gErr || !group) { setErr('Invalid invite code — check with your group admin'); setLoading(false); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not signed in');
 
-    const { error: pErr } = await supabase.from('profiles').update({ group_id: group.id }).eq('id', user.id);
-    if (pErr) { setErr(pErr.message); setLoading(false); return; }
+      const { data: group, error: gErr } = await supabase
+        .from('groups').select('id, name, invite_code').eq('invite_code', inviteCode.trim().toUpperCase()).single();
+      if (gErr || !group) throw new Error('Invalid invite code — check with your group admin');
 
-    const fullProfile = await finishSetup(group, user);
-    if (!fullProfile) return;
+      await assignGroup(user, group.id);
 
-    window.location.reload();
+      window.location.reload();
+    } catch (e) {
+      setErr(e.message);
+      setLoading(false);
+    }
   };
 
   if (created) {
