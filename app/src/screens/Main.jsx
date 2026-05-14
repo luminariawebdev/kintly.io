@@ -387,7 +387,7 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin }) {
         )}
         {sorted.map(n => {
           const author = getProfile(n.created_by);
-          const when = new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
           return (
             <div key={n.id} className={'note-card' + (n.pinned ? ' pinned' : '')} style={{ position: 'relative' }}>
               <div className="note-meta">

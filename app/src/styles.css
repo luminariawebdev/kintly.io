@@ -501,6 +501,25 @@ html, body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px; color: var(--mute);
 }
+
+/* Notes section row meta (author dot, name, timestamp) */
+.note-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.note-meta .nm { font-weight: 600; }
+.note-meta .when {
+  margin-left: auto;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 10px;
+  font-style: italic;
+  color: var(--mute);
+  white-space: nowrap;
+}
 .note .body {
   font-size: 13px; line-height: 1.4;
 }
