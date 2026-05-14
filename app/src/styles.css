@@ -136,45 +136,56 @@ html, body {
 
 /* ── Section ─────────────────────────────────────────────────── */
 .fb-sec-wrap {
+  position: relative;
+  isolation: isolate;
   background: linear-gradient(
     180deg,
     #FFCF03 0%,
-    #FFCF03 18%,
-    #FFB019 46%,
-    #FFC937 72%,
+    #FFCF03 14%,
+    #FFB019 38%,
+    #FFC937 62%,
     #FFDA47 100%
   );
 }
+/* Swirling animated layer behind sections — driven by scroll feel */
+.fb-sec-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    conic-gradient(from 0deg at 30% 25%, transparent 0deg, rgba(255, 176, 25, 0.35) 60deg, transparent 120deg, rgba(255, 218, 71, 0.30) 220deg, transparent 320deg),
+    radial-gradient(circle at 70% 60%, rgba(255, 207, 3, 0.45), transparent 55%),
+    radial-gradient(circle at 20% 80%, rgba(255, 176, 25, 0.40), transparent 50%);
+  background-blend-mode: screen, normal, normal;
+  filter: blur(40px);
+  animation: fb-swirl 24s linear infinite;
+  opacity: 0.85;
+}
+@keyframes fb-swirl {
+  0%   { transform: rotate(0deg)   scale(1.15); }
+  50%  { transform: rotate(180deg) scale(1.35); }
+  100% { transform: rotate(360deg) scale(1.15); }
+}
 .fb-sec {
-  padding: 22px 16px 28px;
+  padding: 70px 16px 90px;
   position: relative;
 }
-.fb-sec:last-child { padding-bottom: 60px; }
+.fb-sec:first-child { padding-top: 26px; }
+.fb-sec:last-child { padding-bottom: 100px; }
 .fb-sec-hd {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  margin-bottom: 14px;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  margin-bottom: 18px;
   gap: 12px;
-}
-.fb-sec-label {
-  display: inline-block;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--sun);
-  background: var(--ink);
-  border: var(--b) solid var(--ink);
-  padding: 3px 8px 2px;
-  border-radius: 4px;
-  box-shadow: 2px 2px 0 var(--ink);
 }
 .fb-sec-title {
   font-family: 'Space Grotesk', system-ui, sans-serif;
-  font-size: 30px; line-height: 1; letter-spacing: -0.02em;
-  margin: 4px 0 0;
-  font-weight: 400;
+  font-size: 38px; line-height: 1; letter-spacing: -0.02em;
+  margin: 0;
+  font-weight: 600;
 }
-.fb-sec-title em { font-weight: 700; }
+.fb-sec-title em { font-weight: 600; font-style: normal; }
 .fb-sec-meta {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px; color: var(--mute);

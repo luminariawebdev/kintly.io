@@ -167,8 +167,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
     <section className="fb-sec" id="sec-tasks">
       <div className="fb-sec-hd">
         <div>
-          <div className="fb-sec-label">Section B</div>
-          <h2 className="fb-sec-title"><em>Tasks</em></h2>
+          <h2 className="fb-sec-title">Tasks</h2>
         </div>
         <div className="fb-sec-meta">{openCount} open</div>
       </div>
@@ -280,8 +279,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onDelete }) {
     <section className="fb-sec" id="sec-calendar">
       <div className="fb-sec-hd">
         <div>
-          <div className="fb-sec-label">Section C</div>
-          <h2 className="fb-sec-title"><em>Calendar</em></h2>
+          <h2 className="fb-sec-title">Calendar</h2>
         </div>
         <div className="fb-sec-meta">{events.length} events</div>
       </div>
@@ -372,8 +370,7 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin }) {
     <section className="fb-sec" id="sec-notes">
       <div className="fb-sec-hd">
         <div>
-          <div className="fb-sec-label">Section A</div>
-          <h2 className="fb-sec-title">Bulletin <em>board</em></h2>
+          <h2 className="fb-sec-title">Bulletin Board</h2>
         </div>
         <div className="fb-sec-meta">{notes.length} notes</div>
       </div>
