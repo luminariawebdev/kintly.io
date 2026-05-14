@@ -887,9 +887,9 @@ html, body {
 .copy-btn {
   flex-shrink: 0;
   margin-left: 12px;
-  padding: 8px 14px;
+  padding: 9px 16px;
   font-family: 'Space Grotesk', system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--ink);

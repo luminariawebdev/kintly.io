@@ -250,6 +250,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
+  const [monthOpen, setMonthOpen] = React.useState(false);
 
   const cells = buildCalendar(calYear, calMonth);
   const todayD = now.getDate();
@@ -283,7 +284,9 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
         <div>
           <h2 className="fb-sec-title">Calendar</h2>
         </div>
-        <div className="fb-sec-meta">{events.length} events</div>
+        <button className="copy-btn" onClick={() => setMonthOpen(true)} title="View all events this month">
+          {monthEvents.length} {monthEvents.length === 1 ? 'event' : 'events'}
+        </button>
       </div>
 
       <div className="cal-bar">
@@ -367,6 +370,16 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
           </div>
         </div>
       )}
+
+      <MonthEventsModal
+        open={monthOpen}
+        onClose={() => setMonthOpen(false)}
+        monthName={MONTH_NAMES[calMonth]}
+        year={calYear}
+        events={monthEvents}
+        getProfile={getProfile}
+        onDelete={onDelete}
+      />
     </section>
   );
 }
@@ -557,6 +570,49 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
 }
 
 // ─── Day Details Modal ────────────────────────────────────────────────────────
+function fmtTime(t) {
+  if (!t) return '';
+  const [hh, mm] = t.split(':').map(Number);
+  const period = hh >= 12 ? 'PM' : 'AM';
+  const h12 = ((hh + 11) % 12) + 1;
+  return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
+}
+
+function EventCard({ event, getProfile, onDelete }) {
+  const p = getProfile(event.created_by);
+  const color = getColor(event.color || p?.color);
+  const timeStr = event.start_time
+    ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
+    : 'All day';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      padding: '10px 12px', background: 'var(--paper)',
+      border: '1.5px solid var(--ink)', borderRadius: 10,
+      borderLeft: `6px solid ${color}`,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{event.title}</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--mute)', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{timeStr}</span>
+          {p && (
+            <>
+              <span>·</span>
+              <Dot profile={p} />
+              <span>{p.display_name}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={() => onDelete(event.id)}
+        style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+        title="Delete event"
+      >×</button>
+    </div>
+  );
+}
+
 function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, onDelete }) {
   if (!open || !date) return null;
   const [y, m, d] = date.split('-').map(Number);
@@ -566,14 +622,6 @@ function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, 
     .filter(e => e.date === date)
     .slice()
     .sort((a, b) => (a.start_time || '99').localeCompare(b.start_time || '99'));
-
-  const fmtTime = (t) => {
-    if (!t) return '';
-    const [hh, mm] = t.split(':').map(Number);
-    const period = hh >= 12 ? 'PM' : 'AM';
-    const h12 = ((hh + 11) % 12) + 1;
-    return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
-  };
 
   return (
     <Modal open={open} onClose={onClose} title={dayLabel}
@@ -588,37 +636,46 @@ function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, 
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {dayEvents.map(e => {
-            const p = getProfile(e.created_by);
-            const color = getColor(e.color || p?.color);
-            const timeStr = e.start_time
-              ? `${fmtTime(e.start_time)}${e.end_time ? ` – ${fmtTime(e.end_time)}` : ''}`
-              : 'All day';
+          {dayEvents.map(e => (
+            <EventCard key={e.id} event={e} getProfile={getProfile} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── Month Events Modal ───────────────────────────────────────────────────────
+function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, onDelete }) {
+  if (!open) return null;
+
+  // Group events by ISO date and sort dates ascending
+  const grouped = {};
+  events.forEach(e => { (grouped[e.date] ||= []).push(e); });
+  const sortedDates = Object.keys(grouped).sort();
+
+  return (
+    <Modal open={open} onClose={onClose} title={`${monthName} ${year}`}>
+      {events.length === 0 ? (
+        <div style={{ padding: '8px 0 4px', fontSize: 14, color: 'var(--mute)', fontStyle: 'italic' }}>
+          No events this month.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {sortedDates.map(date => {
+            const [y, m, d] = date.split('-').map(Number);
+            const label = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            const dayEvents = grouped[date].slice().sort((a, b) => (a.start_time || '99').localeCompare(b.start_time || '99'));
             return (
-              <div key={e.id} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10,
-                padding: '10px 12px', background: 'var(--paper)',
-                border: '1.5px solid var(--ink)', borderRadius: 10,
-                borderLeft: `6px solid ${color}`,
-              }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{e.title}</div>
-                  <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--mute)', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span>{timeStr}</span>
-                    {p && (
-                      <>
-                        <span>·</span>
-                        <Dot profile={p} />
-                        <span>{p.display_name}</span>
-                      </>
-                    )}
-                  </div>
+              <div key={date}>
+                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--mute)', marginBottom: 8 }}>
+                  {label}
                 </div>
-                <button
-                  onClick={() => onDelete(e.id)}
-                  style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                  title="Delete event"
-                >×</button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {dayEvents.map(e => (
+                    <EventCard key={e.id} event={e} getProfile={getProfile} onDelete={onDelete} />
+                  ))}
+                </div>
               </div>
             );
           })}
