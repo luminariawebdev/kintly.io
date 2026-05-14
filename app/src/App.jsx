@@ -71,6 +71,11 @@ export function App() {
     if (session) loadProfile(session.user.id);
   }, [loadProfile]);
 
+  const onGroupReady = React.useCallback((fullProfile) => {
+    setProfile(fullProfile);
+    setScreen('app');
+  }, []);
+
   return (
     <div style={{
       minHeight: '100vh',
@@ -86,7 +91,7 @@ export function App() {
           <AuthScreen
             initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
             onComplete={refreshProfile}
-            profileErr={profileErr}
+            onGroupReady={onGroupReady}
           />
         )}
         {screen === 'app' && (

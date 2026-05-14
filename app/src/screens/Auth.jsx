@@ -12,11 +12,11 @@ const COLORS = [
   { id: 'moss',  hex: '#5C7A37', label: 'Moss'  },
 ];
 
-export function AuthScreen({ initialStep = 'login', onComplete, profileErr }) {
+export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) {
   const [step, setStep] = React.useState(initialStep);
 
   if (step === 'group-setup') {
-    return <GroupSetupScreen onComplete={onComplete} profileErr={profileErr} />;
+    return <GroupSetupScreen onGroupReady={onGroupReady} />;
   }
 
   return (
@@ -143,14 +143,29 @@ function SignupForm({ onComplete }) {
   );
 }
 
-function GroupSetupScreen({ onComplete, profileErr }) {
+function GroupSetupScreen({ onGroupReady }) {
   const [mode, setMode] = React.useState(null);
   const [groupName, setGroupName] = React.useState('');
   const [inviteCode, setInviteCode] = React.useState('');
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
-  const [continuing, setContinuing] = React.useState(false);
-  const [created, setCreated] = React.useState(null);
+  const [created, setCreated] = React.useState(null); // { name, code, fullProfile }
+
+  const finishSetup = async (group, user) => {
+    // Verify profile was actually updated, retry if needed
+    let prof = null;
+    for (let i = 0; i < 3; i++) {
+      await new Promise(r => setTimeout(r, 400 * (i + 1)));
+      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
+      if (data?.group_id) { prof = data; break; }
+    }
+    if (!prof) {
+      setErr('Could not confirm group membership — try refreshing the page');
+      setLoading(false);
+      return null;
+    }
+    return { ...prof, group: { id: group.id, name: group.name, invite_code: group.invite_code } };
+  };
 
   const createGroup = async () => {
     if (!groupName.trim()) { setErr('Enter a group name'); return; }
@@ -162,13 +177,15 @@ function GroupSetupScreen({ onComplete, profileErr }) {
 
     const { data: group, error: gErr } = await supabase
       .from('groups').insert({ name: groupName.trim(), invite_code: code }).select().single();
-
     if (gErr) { setErr(gErr.message); setLoading(false); return; }
 
     const { error: pErr } = await supabase.from('profiles').update({ group_id: group.id }).eq('id', user.id);
     if (pErr) { setErr(pErr.message); setLoading(false); return; }
 
-    setCreated({ name: groupName.trim(), code });
+    const fullProfile = await finishSetup(group, user);
+    if (!fullProfile) return;
+
+    setCreated({ name: groupName.trim(), code, fullProfile });
     setLoading(false);
   };
 
@@ -179,15 +196,16 @@ function GroupSetupScreen({ onComplete, profileErr }) {
 
     const { data: { user } } = await supabase.auth.getUser();
     const { data: group, error: gErr } = await supabase
-      .from('groups').select('id, name').eq('invite_code', inviteCode.trim().toUpperCase()).single();
-
+      .from('groups').select('id, name, invite_code').eq('invite_code', inviteCode.trim().toUpperCase()).single();
     if (gErr || !group) { setErr('Invalid invite code — check with your group admin'); setLoading(false); return; }
 
     const { error: pErr } = await supabase.from('profiles').update({ group_id: group.id }).eq('id', user.id);
     if (pErr) { setErr(pErr.message); setLoading(false); return; }
 
-    setLoading(false);
-    onComplete();
+    const fullProfile = await finishSetup(group, user);
+    if (!fullProfile) return;
+
+    onGroupReady(fullProfile);
   };
 
   if (created) {
@@ -204,10 +222,9 @@ function GroupSetupScreen({ onComplete, profileErr }) {
               </div>
             </div>
             <div className="auth-actions">
-              <button className="fb-btn solid" disabled={continuing} onClick={async () => { setContinuing(true); await onComplete(); setContinuing(false); }}>
-                {continuing ? 'Loading…' : 'Continue to app →'}
+              <button className="fb-btn solid" onClick={() => onGroupReady(created.fullProfile)}>
+                Continue to app →
               </button>
-              {profileErr && <div className="err-msg" style={{ marginTop: 8 }}>{profileErr}</div>}
             </div>
           </div>
         </div>
