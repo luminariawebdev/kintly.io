@@ -205,7 +205,7 @@ function GroupSetupScreen({ onGroupReady }) {
     const fullProfile = await finishSetup(group, user);
     if (!fullProfile) return;
 
-    onGroupReady(fullProfile);
+    window.location.reload();
   };
 
   if (created) {
@@ -222,7 +222,7 @@ function GroupSetupScreen({ onGroupReady }) {
               </div>
             </div>
             <div className="auth-actions">
-              <button className="fb-btn solid" onClick={() => onGroupReady(created.fullProfile)}>
+              <button className="fb-btn solid" onClick={() => window.location.reload()}>
                 Continue to app →
               </button>
             </div>
