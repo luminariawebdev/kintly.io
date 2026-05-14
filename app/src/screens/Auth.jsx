@@ -2,14 +2,18 @@ import React from 'react';
 import { supabase } from '../lib/supabase';
 
 const COLORS = [
-  { id: 'coral', hex: '#E27457', label: 'Coral' },
-  { id: 'blue',  hex: '#4A78B5', label: 'Blue'  },
-  { id: 'green', hex: '#5C9B6F', label: 'Green' },
-  { id: 'amber', hex: '#B8862E', label: 'Amber' },
-  { id: 'plum',  hex: '#8861A8', label: 'Plum'  },
-  { id: 'teal',  hex: '#3E8E8A', label: 'Teal'  },
-  { id: 'rose',  hex: '#C6577E', label: 'Rose'  },
-  { id: 'moss',  hex: '#5C7A37', label: 'Moss'  },
+  { id: 'coral',       hex: '#FFB5A7', label: 'Coral' },
+  { id: 'peach',       hex: '#FFCBA4', label: 'Peach' },
+  { id: 'amber',       hex: '#FFE5B4', label: 'Butter' },
+  { id: 'lemon',       hex: '#FFF1A6', label: 'Lemon' },
+  { id: 'moss',        hex: '#C2D2A4', label: 'Sage' },
+  { id: 'green',       hex: '#B5EAD7', label: 'Mint' },
+  { id: 'teal',        hex: '#B5E4DD', label: 'Aqua' },
+  { id: 'blue',        hex: '#A7C7E7', label: 'Sky' },
+  { id: 'periwinkle',  hex: '#B7C6F4', label: 'Periwinkle' },
+  { id: 'plum',        hex: '#C7B8EA', label: 'Lavender' },
+  { id: 'lilac',       hex: '#DCC4E5', label: 'Lilac' },
+  { id: 'rose',        hex: '#FFC4D6', label: 'Pink' },
 ];
 
 export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) {

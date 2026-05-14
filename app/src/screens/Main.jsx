@@ -3,8 +3,9 @@ import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal } from '../Components';
 
 const COLOR_MAP = {
-  coral: '#E27457', blue: '#4A78B5', green: '#5C9B6F', amber: '#B8862E',
-  plum: '#8861A8',  teal: '#3E8E8A', rose: '#C6577E',  moss:  '#5C7A37',
+  coral: '#FFB5A7', peach: '#FFCBA4', amber: '#FFE5B4', lemon: '#FFF1A6',
+  moss:  '#C2D2A4', green: '#B5EAD7', teal:  '#B5E4DD', blue:  '#A7C7E7',
+  periwinkle: '#B7C6F4', plum: '#C7B8EA', lilac: '#DCC4E5', rose: '#FFC4D6',
 };
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
