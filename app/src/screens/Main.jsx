@@ -343,8 +343,8 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
       </button>
 
       {upcoming.length > 0 && (
-        <>
-          <div className="divider-label">Upcoming</div>
+        <div className="upcoming-box">
+          <div className="upcoming-legend">Upcoming</div>
           <div className="upcoming">
             {upcoming.map(e => {
               const p = getProfile(e.created_by);
@@ -368,7 +368,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
               );
             })}
           </div>
-        </>
+        </div>
       )}
     </section>
   );

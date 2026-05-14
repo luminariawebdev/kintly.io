@@ -940,3 +940,29 @@ html, body {
   border-top: 1px solid rgba(20, 20, 20, 0.08);
   margin-top: 4px;
 }
+
+/* Upcoming events box with legend-style label on the top border */
+.upcoming-box {
+  position: relative;
+  margin-top: 32px;
+  padding: 22px 14px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #FFF1A8 0%, #FFE26B 100%);
+}
+.upcoming-box .upcoming { margin-top: 0; }
+.upcoming-legend {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 2px 12px;
+  background: #FFEC8C;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--mute);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  line-height: 1.4;
+  border-radius: 4px;
+}
