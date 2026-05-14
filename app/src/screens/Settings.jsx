@@ -2,18 +2,18 @@ import React from 'react';
 import { supabase } from '../lib/supabase';
 
 const COLORS = [
-  { id: 'coral',       hex: '#FFB5A7', label: 'Coral' },
-  { id: 'peach',       hex: '#FFCBA4', label: 'Peach' },
-  { id: 'amber',       hex: '#FFE5B4', label: 'Butter' },
-  { id: 'lemon',       hex: '#FFF1A6', label: 'Lemon' },
-  { id: 'moss',        hex: '#C2D2A4', label: 'Sage' },
-  { id: 'green',       hex: '#B5EAD7', label: 'Mint' },
-  { id: 'teal',        hex: '#B5E4DD', label: 'Aqua' },
-  { id: 'blue',        hex: '#A7C7E7', label: 'Sky' },
-  { id: 'periwinkle',  hex: '#B7C6F4', label: 'Periwinkle' },
-  { id: 'plum',        hex: '#C7B8EA', label: 'Lavender' },
-  { id: 'lilac',       hex: '#DCC4E5', label: 'Lilac' },
-  { id: 'rose',        hex: '#FFC4D6', label: 'Pink' },
+  { id: 'coral',       hex: '#FF9F8A', label: 'Coral' },
+  { id: 'peach',       hex: '#FFC18C', label: 'Peach' },
+  { id: 'amber',       hex: '#FFD787', label: 'Apricot' },
+  { id: 'lemon',       hex: '#F0E68C', label: 'Lemon' },
+  { id: 'moss',        hex: '#C8D685', label: 'Chartreuse' },
+  { id: 'green',       hex: '#98D4A8', label: 'Mint' },
+  { id: 'teal',        hex: '#7FCDC1', label: 'Turquoise' },
+  { id: 'blue',        hex: '#87BDE8', label: 'Sky' },
+  { id: 'periwinkle',  hex: '#A8AEE5', label: 'Periwinkle' },
+  { id: 'plum',        hex: '#BFA0E5', label: 'Lavender' },
+  { id: 'lilac',       hex: '#DAAEDA', label: 'Lilac' },
+  { id: 'rose',        hex: '#F2A4C2', label: 'Rose' },
 ];
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
@@ -130,15 +130,17 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                   <span className="lbl">Group name</span>
                   <span className="val" style={{ fontWeight: 600 }}>{group.name}</span>
                 </div>
-                <div className="set-row" style={{ cursor: 'pointer' }} onClick={copyCode}>
-                  <div style={{ display: 'block' }}>
+                <div className="set-row" style={{ alignItems: 'center' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <span className="lbl">Invite code</span>
                     <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 20, letterSpacing: '0.12em', fontWeight: 600, marginTop: 2 }}>
                       {group.invite_code}
                     </div>
                     <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2 }}>Share this code to invite family members</div>
                   </div>
-                  <span className="car" style={{ fontSize: 13 }}>{copied ? '✓' : 'copy'}</span>
+                  <button className="copy-btn" onClick={copyCode}>
+                    {copied ? '✓ copied' : 'copy'}
+                  </button>
                 </div>
               </>
             ) : (

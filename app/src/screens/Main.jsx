@@ -3,9 +3,9 @@ import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal } from '../Components';
 
 const COLOR_MAP = {
-  coral: '#FFB5A7', peach: '#FFCBA4', amber: '#FFE5B4', lemon: '#FFF1A6',
-  moss:  '#C2D2A4', green: '#B5EAD7', teal:  '#B5E4DD', blue:  '#A7C7E7',
-  periwinkle: '#B7C6F4', plum: '#C7B8EA', lilac: '#DCC4E5', rose: '#FFC4D6',
+  coral: '#FF9F8A', peach: '#FFC18C', amber: '#FFD787', lemon: '#F0E68C',
+  moss:  '#C8D685', green: '#98D4A8', teal:  '#7FCDC1', blue:  '#87BDE8',
+  periwinkle: '#A8AEE5', plum: '#BFA0E5', lilac: '#DAAEDA', rose: '#F2A4C2',
 };
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
@@ -654,6 +654,7 @@ export function MainApp({ profile, onSettings }) {
   };
 
   // Scroll sync
+  const suppressScrollSync = React.useRef(0);
   const scrollToSec = (id, smooth = true) => {
     const wrap = scrollRef.current;
     if (!wrap) return;
@@ -661,6 +662,8 @@ export function MainApp({ profile, onSettings }) {
     if (!el) return;
     const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
     const top = wrap.scrollTop + (el.getBoundingClientRect().top - wrap.getBoundingClientRect().top) - headH + 1;
+    // Suppress scroll-driven setTab while the smooth scroll is animating
+    suppressScrollSync.current = Date.now() + 700;
     wrap.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
   };
 
@@ -670,6 +673,7 @@ export function MainApp({ profile, onSettings }) {
     if (!wrap) return;
     let raf;
     const compute = () => {
+      if (Date.now() < suppressScrollSync.current) return;
       const ids = ['notes', 'tasks', 'calendar'];
       const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
       let cur = ids[0];

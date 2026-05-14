@@ -2,18 +2,18 @@ import React from 'react';
 import { supabase } from '../lib/supabase';
 
 const COLORS = [
-  { id: 'coral',       hex: '#FFB5A7', label: 'Coral' },
-  { id: 'peach',       hex: '#FFCBA4', label: 'Peach' },
-  { id: 'amber',       hex: '#FFE5B4', label: 'Butter' },
-  { id: 'lemon',       hex: '#FFF1A6', label: 'Lemon' },
-  { id: 'moss',        hex: '#C2D2A4', label: 'Sage' },
-  { id: 'green',       hex: '#B5EAD7', label: 'Mint' },
-  { id: 'teal',        hex: '#B5E4DD', label: 'Aqua' },
-  { id: 'blue',        hex: '#A7C7E7', label: 'Sky' },
-  { id: 'periwinkle',  hex: '#B7C6F4', label: 'Periwinkle' },
-  { id: 'plum',        hex: '#C7B8EA', label: 'Lavender' },
-  { id: 'lilac',       hex: '#DCC4E5', label: 'Lilac' },
-  { id: 'rose',        hex: '#FFC4D6', label: 'Pink' },
+  { id: 'coral',       hex: '#FF9F8A', label: 'Coral' },
+  { id: 'peach',       hex: '#FFC18C', label: 'Peach' },
+  { id: 'amber',       hex: '#FFD787', label: 'Apricot' },
+  { id: 'lemon',       hex: '#F0E68C', label: 'Lemon' },
+  { id: 'moss',        hex: '#C8D685', label: 'Chartreuse' },
+  { id: 'green',       hex: '#98D4A8', label: 'Mint' },
+  { id: 'teal',        hex: '#7FCDC1', label: 'Turquoise' },
+  { id: 'blue',        hex: '#87BDE8', label: 'Sky' },
+  { id: 'periwinkle',  hex: '#A8AEE5', label: 'Periwinkle' },
+  { id: 'plum',        hex: '#BFA0E5', label: 'Lavender' },
+  { id: 'lilac',       hex: '#DAAEDA', label: 'Lilac' },
+  { id: 'rose',        hex: '#F2A4C2', label: 'Rose' },
 ];
 
 export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) {

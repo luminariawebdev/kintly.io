@@ -131,12 +131,13 @@ html, body {
 }
 .fb-tab:last-child { border-right: 0; }
 .fb-tab:hover { color: var(--ink); background: rgba(20, 20, 20, 0.06); }
-.fb-tab.active:hover { background: var(--ink); color: var(--sun); }
-.fb-tab:active { transform: translateY(2px); }
+.fb-tab:active { transform: translateY(1px); }
 .fb-tab.active {
-  background: var(--ink);
-  color: var(--sun);
+  background: rgba(20, 20, 20, 0.12);
+  color: var(--ink);
+  font-weight: 700;
 }
+.fb-tab.active:hover { background: rgba(20, 20, 20, 0.16); }
 
 /* Clicky push effect + subtle hover shade on primary buttons */
 .fb-btn { transition: transform 80ms ease-out, background-color 120ms ease-out, box-shadow 80ms ease-out; }
@@ -852,3 +853,22 @@ html, body {
   font-size: 11px;
   color: rgba(60,50,40,0.7);
 }
+
+/* Copy invite-code button */
+.copy-btn {
+  flex-shrink: 0;
+  margin-left: 12px;
+  padding: 8px 14px;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  background: rgba(20, 20, 20, 0.06);
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, transform 80ms ease-out, box-shadow 80ms ease-out;
+}
+.copy-btn:hover { background: rgba(20, 20, 20, 0.12); }
+.copy-btn:active { transform: translateY(1px); box-shadow: 0 0 0 1.5px var(--ink); }
