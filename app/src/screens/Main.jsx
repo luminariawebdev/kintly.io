@@ -10,6 +10,32 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
+// Synthesized bubble pop — short downward freq sweep with quick decay.
+let __audioCtx = null;
+function playPop() {
+  try {
+    if (!__audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      __audioCtx = new AC();
+    }
+    const ctx = __audioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(900, t0);
+    osc.frequency.exponentialRampToValueAtTime(180, t0 + 0.09);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.35, t0 + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.14);
+  } catch { /* audio unavailable */ }
+}
+
 function Dot({ profile, size = '' }) {
   return (
     <span
@@ -78,6 +104,7 @@ function TaskRow({ task, assignee, onToggle, onDelete }) {
 // ─── Tasks Section ────────────────────────────────────────────────────────────
 function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete }) {
   const [filter, setFilter] = React.useState('today');
+  const [showDone, setShowDone] = React.useState(false);
 
   const filtered = tasks.filter(t => {
     if (filter === 'all') return true;
@@ -94,12 +121,15 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
     return true;
   });
 
+  const openItems = filtered.filter(t => !t.completed);
+  const doneItems = filtered.filter(t => t.completed);
+
   const grouped = members.map(m => ({
     member: m,
-    items: filtered.filter(t => t.assigned_to === m.id),
+    items: openItems.filter(t => t.assigned_to === m.id),
   })).filter(g => g.items.length > 0);
 
-  const unassigned = filtered.filter(t => !t.assigned_to);
+  const unassigned = openItems.filter(t => !t.assigned_to);
   const openCount = tasks.filter(t => !t.completed).length;
 
   return (
@@ -121,8 +151,11 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
       <ShaderButton onClick={onAdd} label="Add task" />
 
       <div style={{ marginTop: 10 }}>
-        {grouped.length === 0 && unassigned.length === 0 && (
+        {grouped.length === 0 && unassigned.length === 0 && doneItems.length === 0 && (
           <div className="kbd-hint" style={{ padding: '20px 0' }}>NO TASKS — ADD ONE ABOVE</div>
+        )}
+        {grouped.length === 0 && unassigned.length === 0 && doneItems.length > 0 && (
+          <div className="kbd-hint" style={{ padding: '20px 0' }}>ALL DONE — NICE WORK</div>
         )}
         {grouped.map(g => (
           <div key={g.member.id}>
@@ -132,7 +165,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{g.member.display_name}</span>
                 {g.member.id === myId && <span className="userbadge"><span className="you">you</span></span>}
               </div>
-              <span className="count">{g.items.filter(t => !t.completed).length}/{g.items.length}</span>
+              <span className="count">{g.items.length}</span>
             </div>
             <div className="tasklist">
               {g.items.map(t => (
@@ -145,13 +178,34 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
           <div>
             <div className="assignee-hd">
               <div className="left"><span style={{ fontWeight: 600, fontSize: 14, opacity: 0.5 }}>Unassigned</span></div>
-              <span className="count">{unassigned.filter(t => !t.completed).length}/{unassigned.length}</span>
+              <span className="count">{unassigned.length}</span>
             </div>
             <div className="tasklist">
               {unassigned.map(t => (
                 <TaskRow key={t.id} task={t} assignee={null} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
               ))}
             </div>
+          </div>
+        )}
+
+        {doneItems.length > 0 && (
+          <div style={{ marginTop: 18 }}>
+            <button
+              onClick={() => setShowDone(s => !s)}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 0, borderTop: '1px solid var(--rule)', cursor: 'pointer', font: 'inherit' }}
+            >
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.55 }}>
+                Completed · {doneItems.length}
+              </span>
+              <span style={{ opacity: 0.5, fontSize: 12 }}>{showDone ? '▴ hide' : '▾ show'}</span>
+            </button>
+            {showDone && (
+              <div className="tasklist">
+                {doneItems.map(t => (
+                  <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -532,6 +586,7 @@ export function MainApp({ profile, onSettings }) {
 
   // Task CRUD
   const toggleTask = async (id, completed) => {
+    if (!completed) playPop(); // play only when checking ON
     setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !completed } : t));
     await supabase.from('tasks').update({ completed: !completed }).eq('id', id);
   };
