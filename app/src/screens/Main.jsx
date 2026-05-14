@@ -246,7 +246,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, onAdd, onAddOnDate, onDelete }) {
+function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDelete }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
@@ -311,7 +311,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onAddOnDate, onDe
             <div
               key={i}
               className={'cal-cell' + (c.m !== 'curr' ? ' dim' : '') + (isToday ? ' today' : '')}
-              onClick={() => onAddOnDate?.(cellIso)}
+              onClick={() => onDayClick?.(cellIso)}
               role="button"
               tabIndex={0}
             >
@@ -559,6 +559,78 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
   );
 }
 
+// ─── Day Details Modal ────────────────────────────────────────────────────────
+function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, onDelete }) {
+  if (!open || !date) return null;
+  const [y, m, d] = date.split('-').map(Number);
+  const jsDate = new Date(y, m - 1, d);
+  const dayLabel = jsDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const dayEvents = events
+    .filter(e => e.date === date)
+    .slice()
+    .sort((a, b) => (a.start_time || '99').localeCompare(b.start_time || '99'));
+
+  const fmtTime = (t) => {
+    if (!t) return '';
+    const [hh, mm] = t.split(':').map(Number);
+    const period = hh >= 12 ? 'PM' : 'AM';
+    const h12 = ((hh + 11) % 12) + 1;
+    return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={dayLabel}
+      footer={
+        <button className="fb-btn solid" onClick={onAddEvent}>
+          <span className="plus">+</span> Add event on this day
+        </button>
+      }>
+      {dayEvents.length === 0 ? (
+        <div style={{ padding: '8px 0 4px', fontSize: 14, color: 'var(--mute)', fontStyle: 'italic' }}>
+          No events on this day.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {dayEvents.map(e => {
+            const p = getProfile(e.created_by);
+            const color = getColor(e.color || p?.color);
+            const timeStr = e.start_time
+              ? `${fmtTime(e.start_time)}${e.end_time ? ` – ${fmtTime(e.end_time)}` : ''}`
+              : 'All day';
+            return (
+              <div key={e.id} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                padding: '10px 12px', background: 'var(--paper)',
+                border: '1.5px solid var(--ink)', borderRadius: 10,
+                borderLeft: `6px solid ${color}`,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{e.title}</div>
+                  <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--mute)', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>{timeStr}</span>
+                    {p && (
+                      <>
+                        <span>·</span>
+                        <Dot profile={p} />
+                        <span>{p.display_name}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => onDelete(e.id)}
+                  style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+                  title="Delete event"
+                >×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // ─── Add Note Modal ───────────────────────────────────────────────────────────
 function AddNoteModal({ open, onClose, profile, onSave }) {
   const [body, setBody] = React.useState('');
@@ -606,6 +678,7 @@ export function MainApp({ profile, onSettings }) {
   const [tab, setTab] = React.useState('notes');
   const [modal, setModal] = React.useState(null);
   const [eventInitDate, setEventInitDate] = React.useState(null);
+  const [dayDetailsDate, setDayDetailsDate] = React.useState(null);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
 
@@ -780,7 +853,7 @@ export function MainApp({ profile, onSettings }) {
             members={members}
             getProfile={getProfile}
             onAdd={() => { setEventInitDate(null); setModal('event'); }}
-            onAddOnDate={(iso) => { setEventInitDate(iso); setModal('event'); }}
+            onDayClick={(iso) => setDayDetailsDate(iso)}
             onDelete={deleteEvent}
           />
         </div>
@@ -789,6 +862,15 @@ export function MainApp({ profile, onSettings }) {
       <AddTaskModal open={modal === 'task'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addTask} />
       <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} onSave={addEvent} initialDate={eventInitDate} />
       <AddNoteModal open={modal === 'note'} onClose={() => setModal(null)} profile={profile} onSave={addNote} />
+      <DayDetailsModal
+        open={!!dayDetailsDate}
+        date={dayDetailsDate}
+        events={events}
+        getProfile={getProfile}
+        onClose={() => setDayDetailsDate(null)}
+        onAddEvent={() => { setEventInitDate(dayDetailsDate); setDayDetailsDate(null); setModal('event'); }}
+        onDelete={(id) => deleteEvent(id)}
+      />
     </div>
   );
 }
