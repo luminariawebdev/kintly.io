@@ -287,12 +287,9 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
       </div>
 
       <div className="cal-bar">
-        <div className="mo">{MONTH_NAMES[calMonth]} <em style={{ fontWeight: 700, opacity: 0.6 }}>{calYear}</em></div>
-        <div className="nav">
-          <button aria-label="prev" onClick={prevMonth}>‹</button>
-          <button aria-label="today" onClick={goToday}>●</button>
-          <button aria-label="next" onClick={nextMonth}>›</button>
-        </div>
+        <button className="cal-nav" aria-label="Previous month" onClick={prevMonth}>‹</button>
+        <div className="mo">{MONTH_NAMES[calMonth]} {calYear}</div>
+        <button className="cal-nav" aria-label="Next month" onClick={nextMonth}>›</button>
       </div>
 
       <div className="cal-dows">
