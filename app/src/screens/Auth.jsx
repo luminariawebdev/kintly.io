@@ -12,11 +12,11 @@ const COLORS = [
   { id: 'moss',  hex: '#5C7A37', label: 'Moss'  },
 ];
 
-export function AuthScreen({ initialStep = 'login', onComplete }) {
+export function AuthScreen({ initialStep = 'login', onComplete, profileErr }) {
   const [step, setStep] = React.useState(initialStep);
 
   if (step === 'group-setup') {
-    return <GroupSetupScreen onComplete={onComplete} />;
+    return <GroupSetupScreen onComplete={onComplete} profileErr={profileErr} />;
   }
 
   return (
@@ -143,12 +143,13 @@ function SignupForm({ onComplete }) {
   );
 }
 
-function GroupSetupScreen({ onComplete }) {
+function GroupSetupScreen({ onComplete, profileErr }) {
   const [mode, setMode] = React.useState(null);
   const [groupName, setGroupName] = React.useState('');
   const [inviteCode, setInviteCode] = React.useState('');
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [continuing, setContinuing] = React.useState(false);
   const [created, setCreated] = React.useState(null);
 
   const createGroup = async () => {
@@ -203,7 +204,10 @@ function GroupSetupScreen({ onComplete }) {
               </div>
             </div>
             <div className="auth-actions">
-              <button className="fb-btn solid" onClick={onComplete}>Continue to app →</button>
+              <button className="fb-btn solid" disabled={continuing} onClick={async () => { setContinuing(true); await onComplete(); setContinuing(false); }}>
+                {continuing ? 'Loading…' : 'Continue to app →'}
+              </button>
+              {profileErr && <div className="err-msg" style={{ marginTop: 8 }}>{profileErr}</div>}
             </div>
           </div>
         </div>

@@ -11,20 +11,38 @@ const FRAME_H = 874;
 export function App() {
   const [screen, setScreen] = React.useState('loading');
   const [profile, setProfile] = React.useState(null);
+  const [profileErr, setProfileErr] = React.useState('');
 
   const loadProfile = React.useCallback(async (userId) => {
-    const { data } = await supabase
+    setProfileErr('');
+    const { data: prof, error: profErr } = await supabase
       .from('profiles')
-      .select('*, group:groups(id, name, invite_code)')
+      .select('*')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
-    if (data) {
-      setProfile(data);
-      setScreen(data.group_id ? 'app' : 'group-setup');
-    } else {
+    if (profErr) {
+      setProfileErr(profErr.message);
       setScreen('group-setup');
+      return;
     }
+
+    if (!prof) {
+      // Profile doesn't exist yet — retry once after a short delay
+      await new Promise(r => setTimeout(r, 1000));
+      const { data: prof2 } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+      if (!prof2) { setScreen('group-setup'); return; }
+      return loadProfile(userId);
+    }
+
+    let fullProfile = prof;
+    if (prof.group_id) {
+      const { data: grp } = await supabase.from('groups').select('id, name, invite_code').eq('id', prof.group_id).maybeSingle();
+      fullProfile = { ...prof, group: grp || null };
+    }
+
+    setProfile(fullProfile);
+    setScreen(fullProfile.group_id ? 'app' : 'group-setup');
   }, []);
 
   React.useEffect(() => {
@@ -68,6 +86,7 @@ export function App() {
           <AuthScreen
             initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
             onComplete={refreshProfile}
+            profileErr={profileErr}
           />
         )}
         {screen === 'app' && (
