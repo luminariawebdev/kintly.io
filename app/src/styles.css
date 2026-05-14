@@ -130,15 +130,18 @@ html, body {
   transition: transform 80ms ease-out, box-shadow 80ms ease-out, color 120ms ease-out;
 }
 .fb-tab:last-child { border-right: 0; }
-.fb-tab:hover { color: var(--ink); }
+.fb-tab:hover { color: var(--ink); background: rgba(20, 20, 20, 0.06); }
+.fb-tab.active:hover { background: var(--ink); color: var(--sun); }
 .fb-tab:active { transform: translateY(2px); }
 .fb-tab.active {
   background: var(--ink);
   color: var(--sun);
 }
 
-/* Clicky push effect on primary buttons */
-.fb-btn { transition: transform 80ms ease-out, box-shadow 80ms ease-out; }
+/* Clicky push effect + subtle hover shade on primary buttons */
+.fb-btn { transition: transform 80ms ease-out, background-color 120ms ease-out, box-shadow 80ms ease-out; }
+.fb-btn:hover { background: #F4EFDF; }
+.fb-btn.solid:hover { background: #2A2A2A; }
 .fb-btn:active { transform: translateY(2px); box-shadow: 0 0 0 1.5px var(--ink); }
 
 /* ── Section ─────────────────────────────────────────────────── */

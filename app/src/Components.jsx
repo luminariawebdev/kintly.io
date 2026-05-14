@@ -1,5 +1,4 @@
 import React from 'react';
-import { ShaderButton } from './ShaderButton';
 
 export const USERS = {
   maya: { id: 'maya', name: 'Maya', color: 'var(--u-maya)', initial: 'M', role: 'Mom' },
@@ -53,11 +52,13 @@ export function AnchorTabs({ active, onChange }) {
   return (
     <div className="fb-tabs" role="tablist">
       {tabs.map(t => (
-        <ShaderButton
+        <button
           key={t.id}
+          role="tab"
+          aria-selected={active === t.id}
           className={'fb-tab' + (active === t.id ? ' active' : '')}
           onClick={() => onChange(t.id)}
-        >{t.label}</ShaderButton>
+        >{t.label}</button>
       ))}
     </div>
   );

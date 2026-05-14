@@ -1,7 +1,6 @@
 import React from 'react';
 import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal } from '../Components';
-import { ShaderButton } from '../ShaderButton';
 
 const COLOR_MAP = {
   coral: '#E27457', blue: '#4A78B5', green: '#5C9B6F', amber: '#B8862E',
@@ -178,7 +177,9 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
         ))}
       </div>
 
-      <ShaderButton onClick={onAdd} label="Add task" />
+      <button className="fb-btn" onClick={onAdd}>
+        <span className="plus">+</span> Add task
+      </button>
 
       <div style={{ marginTop: 10 }}>
         {grouped.length === 0 && unassigned.length === 0 && doneItems.length === 0 && (
@@ -326,9 +327,9 @@ function CalendarSection({ events, members, getProfile, onAdd, onDelete }) {
         ))}
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <ShaderButton onClick={onAdd} label="Add event" />
-      </div>
+      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 12 }}>
+        <span className="plus">+</span> Add event
+      </button>
 
       {upcoming.length > 0 && (
         <>
