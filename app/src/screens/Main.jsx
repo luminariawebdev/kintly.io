@@ -386,7 +386,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
 }
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
-function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onCreateTask }) {
+function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenNote }) {
   const sorted = [...notes].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || new Date(b.created_at) - new Date(a.created_at));
 
   return (
@@ -411,38 +411,28 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onCreat
           const author = getProfile(n.created_by);
           const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
           return (
-            <div key={n.id} className={'note-card' + (n.pinned ? ' pinned' : '')} style={{ position: 'relative' }}>
+            <div
+              key={n.id}
+              className={'note-card' + (n.pinned ? ' pinned' : '')}
+              style={{ position: 'relative', cursor: 'pointer' }}
+              onClick={() => onOpenNote?.(n)}
+            >
               <div className="note-meta">
                 <Dot profile={author} />
                 <span className="nm">{author?.display_name}</span>
                 <span className="when">{when}</span>
               </div>
               <div className="note-body">{n.content}</div>
-              <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed rgba(20, 20, 20, 0.18)', display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => onCreateTask?.(n)}
-                  style={{
-                    fontSize: 12, fontWeight: 600, fontFamily: 'Space Grotesk, sans-serif',
-                    background: 'rgba(20, 20, 20, 0.06)', border: '1.5px solid var(--ink)',
-                    color: 'var(--ink)', borderRadius: 6, padding: '5px 10px',
-                    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
-                    transition: 'background-color 100ms ease-out, transform 60ms ease-out',
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(20, 20, 20, 0.12)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(20, 20, 20, 0.06)'}
-                  onMouseDown={e => e.currentTarget.style.transform = 'translateY(1px)'}
-                  onMouseUp={e => e.currentTarget.style.transform = 'translateY(0)'}
-                >
-                  ✓ Create task?
-                </button>
-              </div>
               <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4 }}>
                 <button
-                  onClick={() => onTogglePin(n.id, n.pinned)}
+                  onClick={(e) => { e.stopPropagation(); onTogglePin(n.id, n.pinned); }}
                   style={{ fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', opacity: n.pinned ? 0.8 : 0.25 }}
                   title={n.pinned ? 'Unpin' : 'Pin'}
                 >📌</button>
-                <button onClick={() => onDelete(n.id)} style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}>×</button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete(n.id); }}
+                  style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
+                >×</button>
               </div>
             </div>
           );
@@ -836,15 +826,53 @@ function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, 
 }
 
 // ─── Add Note Modal ───────────────────────────────────────────────────────────
-function AddNoteModal({ open, onClose, profile, onSave }) {
+function AddNoteModal({ open, onClose, profile, members, onSave }) {
   const [body, setBody] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  const [makeTask, setMakeTask] = React.useState(false);
+  const [taskTitle, setTaskTitle] = React.useState('');
+  const [taskAssignee, setTaskAssignee] = React.useState(profile?.id || null);
+  const [taskDueOpt, setTaskDueOpt] = React.useState('today');
+  const [taskDueDate, setTaskDueDate] = React.useState('');
+
+  // Reset everything each time the modal opens
+  React.useEffect(() => {
+    if (open) {
+      setBody('');
+      setMakeTask(false);
+      setTaskTitle('');
+      setTaskAssignee(profile?.id || null);
+      setTaskDueOpt('today');
+      setTaskDueDate('');
+    }
+  }, [open, profile?.id]);
+
+  // Keep task title auto-suggesting from the note's first line if the user hasn't typed their own
+  const [titleEdited, setTitleEdited] = React.useState(false);
+  React.useEffect(() => {
+    if (!titleEdited) {
+      const firstLine = body.split('\n')[0].trim().slice(0, 100);
+      setTaskTitle(firstLine);
+    }
+  }, [body, titleEdited]);
+
+  const getDueDate = () => {
+    const d = new Date();
+    if (taskDueOpt === 'today') return d.toISOString().slice(0, 10);
+    if (taskDueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
+    if (taskDueOpt === 'week') { d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
+    if (taskDueOpt === 'pick') return taskDueDate || null;
+    return null;
+  };
 
   const save = async () => {
     if (!body.trim()) return;
+    if (makeTask && !taskTitle.trim()) return;
     setSaving(true);
-    await onSave(body.trim());
-    setBody('');
+    const taskPayload = makeTask
+      ? { title: taskTitle.trim(), assigned_to: taskAssignee, due_date: getDueDate() }
+      : null;
+    await onSave(body.trim(), taskPayload);
     setSaving(false);
     onClose();
   };
@@ -873,92 +901,160 @@ function AddNoteModal({ open, onClose, profile, onSave }) {
           style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule)', borderRadius: 8, background: 'var(--cream)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box' }}
         />
       </div>
+
+      <div className="field" style={{ marginTop: 4 }}>
+        <button
+          type="button"
+          onClick={() => setMakeTask(v => !v)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px', width: '100%',
+            background: makeTask ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
+            border: '1.5px solid var(--ink)', borderRadius: 8,
+            cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
+            color: 'var(--ink)', textAlign: 'left',
+          }}
+        >
+          <span style={{
+            width: 18, height: 18, borderRadius: 4, border: '1.5px solid var(--ink)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            background: makeTask ? 'var(--ink)' : 'transparent',
+            color: '#FFCF03', fontSize: 12, fontWeight: 700, lineHeight: 1,
+          }}>{makeTask ? '✓' : ''}</span>
+          Create task from note?
+        </button>
+      </div>
+
+      {makeTask && (
+        <div style={{ background: 'rgba(20, 20, 20, 0.03)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
+          <div className="field">
+            <label>Task title</label>
+            <input
+              value={taskTitle}
+              onChange={e => { setTaskTitle(e.target.value); setTitleEdited(true); }}
+              placeholder="What needs doing?"
+            />
+          </div>
+          <div className="field">
+            <label>Assign to</label>
+            <div className="assignee-picker">
+              {(members || []).map(m => (
+                <button key={m.id} className={'pick' + (taskAssignee === m.id ? ' on' : '')} onClick={() => setTaskAssignee(m.id)} style={taskAssignee === m.id ? { '--pick-c': getColor(m.color) } : {}}>
+                  <Dot profile={m} />
+                  <span>{m.display_name}</span>
+                  {m.id === profile?.id && <span className="userbadge"><span className="you">you</span></span>}
+                </button>
+              ))}
+              <button className={'pick unassign' + (taskAssignee === null ? ' on' : '')} onClick={() => setTaskAssignee(null)}>Unassigned</button>
+            </div>
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>Due</label>
+            <div className="date-row">
+              {[['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'This week'], ['none', 'No date'], ['pick', 'Pick…']].map(([k, lbl]) => (
+                <button key={k} className={'pick' + (taskDueOpt === k ? ' on' : '')} onClick={() => setTaskDueOpt(k)}>{lbl}</button>
+              ))}
+            </div>
+            {taskDueOpt === 'pick' && (
+              <input type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} style={{ marginTop: 8, width: '100%' }} />
+            )}
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
 
-// ─── Note → Task Modal ────────────────────────────────────────────────────────
-function NoteToTaskModal({ open, note, members, myId, onClose, onSave }) {
-  const firstLine = (note?.content || '').split('\n')[0].trim().slice(0, 100);
-  const [title, setTitle] = React.useState(firstLine);
-  const [assignee, setAssignee] = React.useState(myId || null);
-  const [dueOpt, setDueOpt] = React.useState('today');
-  const [dueDate, setDueDate] = React.useState('');
-  const [saving, setSaving] = React.useState(false);
+// ─── Note Details Modal ───────────────────────────────────────────────────────
+function NoteDetailsModal({ open, note, tasks, getProfile, onClose, onDelete, onToggleTask }) {
+  if (!open || !note) return null;
+  const author = getProfile(note.created_by);
+  const when = new Date(note.created_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const linked = (tasks || []).filter(t => t.note_id === note.id);
 
-  React.useEffect(() => {
-    if (open && note) {
-      setTitle((note.content || '').split('\n')[0].trim().slice(0, 100));
-      setAssignee(myId || null);
-      setDueOpt('today');
-      setDueDate('');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, note?.id]);
-
-  const getDueDate = () => {
-    const d = new Date();
-    if (dueOpt === 'today') return d.toISOString().slice(0, 10);
-    if (dueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
-    if (dueOpt === 'week') { d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
-    if (dueOpt === 'pick') return dueDate || null;
-    return null;
-  };
-
-  const save = async () => {
-    if (!title.trim()) return;
-    setSaving(true);
-    await onSave({ title: title.trim(), assigned_to: assignee, due_date: getDueDate() });
-    setSaving(false);
-    onClose();
-  };
-
-  if (!open) return null;
   return (
-    <Modal open={open} onClose={onClose} title="Create task from note"
-      footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Create task'}</button>}>
-      {note && (
-        <div style={{
-          padding: '10px 12px', marginBottom: 14,
-          background: 'rgba(20, 20, 20, 0.04)',
-          border: '1px solid rgba(20, 20, 20, 0.12)',
-          borderRadius: 8,
-          fontSize: 13, lineHeight: 1.4, whiteSpace: 'pre-wrap',
-          maxHeight: 100, overflow: 'auto',
-        }}>
-          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--mute)', marginBottom: 4 }}>
-            From note
+    <Modal open={open} onClose={onClose} title="Note">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Dot profile={author} />
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, fontStyle: 'italic', color: 'var(--mute)' }}>{when}</span>
+      </div>
+
+      <div style={{
+        padding: '12px 14px',
+        background: 'var(--paper)',
+        border: '1.5px solid var(--ink)', borderRadius: 10,
+        fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+        marginBottom: 14,
+      }}>
+        {note.content}
+      </div>
+
+      <div style={{ borderTop: '1px dashed rgba(20, 20, 20, 0.2)', paddingTop: 14 }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--mute)', marginBottom: 8 }}>
+          Linked task{linked.length === 1 ? '' : 's'}
+        </div>
+        {linked.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--mute)', fontStyle: 'italic' }}>
+            No task linked to this note.
           </div>
-          {note.content}
-        </div>
-      )}
-      <div className="field">
-        <label>Task title</label>
-        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?" onKeyDown={e => e.key === 'Enter' && save()} />
-      </div>
-      <div className="field">
-        <label>Assign to</label>
-        <div className="assignee-picker">
-          {members.map(m => (
-            <button key={m.id} className={'pick' + (assignee === m.id ? ' on' : '')} onClick={() => setAssignee(m.id)} style={assignee === m.id ? { '--pick-c': getColor(m.color) } : {}}>
-              <Dot profile={m} />
-              <span>{m.display_name}</span>
-              {m.id === myId && <span className="userbadge"><span className="you">you</span></span>}
-            </button>
-          ))}
-          <button className={'pick unassign' + (assignee === null ? ' on' : '')} onClick={() => setAssignee(null)}>Unassigned</button>
-        </div>
-      </div>
-      <div className="field">
-        <label>Due</label>
-        <div className="date-row">
-          {[['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'This week'], ['none', 'No date'], ['pick', 'Pick…']].map(([k, lbl]) => (
-            <button key={k} className={'pick' + (dueOpt === k ? ' on' : '')} onClick={() => setDueOpt(k)}>{lbl}</button>
-          ))}
-        </div>
-        {dueOpt === 'pick' && (
-          <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={{ marginTop: 8, width: '100%' }} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {linked.map(t => {
+              const assn = getProfile(t.assigned_to);
+              const dueLabel = formatDue(t.due_date);
+              const dueColor = dueDateOverdue(t.due_date) && !t.completed ? '#E27457' : 'var(--mute)';
+              return (
+                <div key={t.id} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '10px 12px',
+                  background: 'var(--paper)',
+                  border: '1.5px solid var(--ink)', borderRadius: 10,
+                  borderLeft: `6px solid ${getColor(assn?.color)}`,
+                }}>
+                  <button
+                    onClick={() => onToggleTask(t.id, t.completed)}
+                    style={{
+                      width: 22, height: 22, borderRadius: '50%',
+                      border: `2.5px solid ${getColor(assn?.color)}`,
+                      background: t.completed ? getColor(assn?.color) : 'transparent',
+                      cursor: 'pointer', flexShrink: 0, marginTop: 1,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+                    }}
+                  >
+                    {t.completed && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800 }}>✓</span>}
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, textDecoration: t.completed ? 'line-through' : 'none', opacity: t.completed ? 0.5 : 1, wordBreak: 'break-word' }}>
+                      {t.title}
+                    </div>
+                    <div style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', color: 'var(--mute)', display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                      {assn ? (
+                        <><Dot profile={assn} /><span>{assn.display_name}</span></>
+                      ) : (
+                        <span style={{ opacity: 0.6 }}>Unassigned</span>
+                      )}
+                      {dueLabel && (
+                        <>
+                          <span>·</span>
+                          <span style={{ color: dueColor }}>{dueLabel}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
+      </div>
+
+      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={() => { onDelete(note.id); onClose(); }}
+          className="copy-btn"
+          style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+        >Delete note</button>
       </div>
     </Modal>
   );
@@ -972,7 +1068,7 @@ export function MainApp({ profile, onSettings }) {
   const [dayDetailsDate, setDayDetailsDate] = React.useState(null);
   const [monthModalData, setMonthModalData] = React.useState(null);
   const [detailEventId, setDetailEventId] = React.useState(null);
-  const [noteForTask, setNoteForTask] = React.useState(null);
+  const [detailNoteId, setDetailNoteId] = React.useState(null);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
 
@@ -1037,9 +1133,25 @@ export function MainApp({ profile, onSettings }) {
   };
 
   // Note CRUD
-  const addNote = async (content) => {
-    const { data: row } = await supabase.from('notes').insert({ group_id: profile.group_id, created_by: profile.id, content }).select().single();
-    if (row) setNotes(prev => [row, ...prev]);
+  const addNote = async (content, taskPayload) => {
+    const { data: noteRow } = await supabase.from('notes').insert({ group_id: profile.group_id, created_by: profile.id, content }).select().single();
+    if (!noteRow) return;
+    setNotes(prev => [noteRow, ...prev]);
+    if (taskPayload && taskPayload.title) {
+      const { data: taskRow } = await supabase
+        .from('tasks')
+        .insert({
+          group_id: profile.group_id,
+          created_by: profile.id,
+          assigned_to: taskPayload.assigned_to,
+          due_date: taskPayload.due_date,
+          title: taskPayload.title,
+          note_id: noteRow.id,
+        })
+        .select()
+        .single();
+      if (taskRow) setTasks(prev => [taskRow, ...prev]);
+    }
   };
   const deleteNote = async (id) => {
     setNotes(prev => prev.filter(n => n.id !== id));
@@ -1140,7 +1252,7 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onCreateTask={(n) => setNoteForTask(n)} />
+          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} />
           <CalendarSection
             events={events}
@@ -1157,7 +1269,7 @@ export function MainApp({ profile, onSettings }) {
 
       <AddTaskModal open={modal === 'task'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addTask} />
       <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} onSave={addEvent} initialDate={eventInitDate} />
-      <AddNoteModal open={modal === 'note'} onClose={() => setModal(null)} profile={profile} onSave={addNote} />
+      <AddNoteModal open={modal === 'note'} onClose={() => setModal(null)} profile={profile} members={members} onSave={addNote} />
       <DayDetailsModal
         open={!!dayDetailsDate}
         date={dayDetailsDate}
@@ -1185,13 +1297,14 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDetailEventId(null)}
         onDelete={(id) => deleteEvent(id)}
       />
-      <NoteToTaskModal
-        open={!!noteForTask}
-        note={noteForTask}
-        members={members}
-        myId={profile?.id}
-        onClose={() => setNoteForTask(null)}
-        onSave={async (data) => { await addTask(data); }}
+      <NoteDetailsModal
+        open={!!detailNoteId}
+        note={notes.find(n => n.id === detailNoteId) || null}
+        tasks={tasks}
+        getProfile={getProfile}
+        onClose={() => setDetailNoteId(null)}
+        onDelete={(id) => deleteNote(id)}
+        onToggleTask={toggleTask}
       />
     </div>
   );

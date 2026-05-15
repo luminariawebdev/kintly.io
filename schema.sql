@@ -22,6 +22,7 @@ create table if not exists public.tasks (
   group_id    uuid references public.groups not null,
   created_by  uuid references public.profiles not null,
   assigned_to uuid references public.profiles,
+  note_id     uuid references public.notes on delete set null,
   title       text not null,
   completed   boolean default false,
   due_date    date,
