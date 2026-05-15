@@ -129,6 +129,58 @@ html, body {
 .fb-stickyhead-corner .fb-grp-wrap,
 .fb-stickyhead-corner .fb-grp-pill { justify-self: auto; }
 
+/* Brand-on-left + stacked controls-on-right header */
+.fb-stickyhead-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px 14px;
+}
+.fb-stickyhead-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.fb-stickyhead-right .fb-prof,
+.fb-stickyhead-right .fb-grp-wrap,
+.fb-stickyhead-right .fb-grp-pill { justify-self: auto; }
+
+.fb-brand-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.fb-brand-block svg { flex-shrink: 0; display: block; }
+.fb-brand-text-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.fb-brand-text-stack .fb-brand-text {
+  font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.fb-brand-slogan {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 7.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  line-height: 1;
+}
+
 .fb-wordmark {
   font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
   font-size: 22px; font-weight: 700;
@@ -955,9 +1007,12 @@ html, body {
 .fb-grp-menu {
   position: absolute;
   top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 240px;
+  right: 0;
+  left: auto;
+  transform: none;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(280px, calc(100vw - 32px));
   background: var(--surface-glass-strong);
   backdrop-filter: blur(22px);
   -webkit-backdrop-filter: blur(22px);

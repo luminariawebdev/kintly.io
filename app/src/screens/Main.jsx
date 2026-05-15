@@ -10,32 +10,32 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
-function KinnektLogo({ size = 36 }) {
+function KinnektLogo({ size = 40 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="kinnekt logo">
+    <svg width={size} height={size} viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="Kinnekt">
       <defs>
-        <linearGradient id="kk-g1" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#FFE49B" />
-          <stop offset="100%" stopColor="#FFB019" />
+        <linearGradient id="kk-v" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#6A4DFF" />
+          <stop offset="100%" stopColor="#2D9CFF" />
         </linearGradient>
-        <linearGradient id="kk-g2" x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0%" stopColor="#FFC03C" />
-          <stop offset="100%" stopColor="#FF7A2C" />
+        <linearGradient id="kk-u" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0%" stopColor="#4A6CFF" />
+          <stop offset="100%" stopColor="#6A4DFF" />
         </linearGradient>
-        <linearGradient id="kk-g3" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#FF9A3C" />
-          <stop offset="60%" stopColor="#FF7A4A" />
-          <stop offset="100%" stopColor="#FF5A55" />
+        <linearGradient id="kk-d" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#3DD9C5" />
+          <stop offset="60%" stopColor="#FF9A78" />
+          <stop offset="100%" stopColor="#FF7A7A" />
         </linearGradient>
       </defs>
       {/* Dot (head of the i) */}
-      <circle cx="22" cy="12" r="6.5" fill="url(#kk-g1)" />
+      <circle cx="22" cy="12" r="6.5" fill="url(#kk-v)" />
       {/* Vertical pill (body) */}
-      <rect x="16" y="22" width="12" height="44" rx="6" fill="url(#kk-g1)" />
-      {/* Upper-right diagonal of the K */}
-      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-g2)" transform="rotate(-45 22 44)" />
-      {/* Lower-right diagonal of the K */}
-      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-g3)" transform="rotate(45 22 44)" />
+      <rect x="16" y="22" width="12" height="44" rx="6" fill="url(#kk-v)" />
+      {/* Upper-right diagonal of the K — blue/purple */}
+      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-u)" transform="rotate(-45 22 44)" />
+      {/* Lower-right diagonal of the K — cyan to coral */}
+      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-d)" transform="rotate(45 22 44)" />
     </svg>
   );
 }
@@ -1410,32 +1410,41 @@ export function MainApp({ profile, onSettings }) {
     <div className="fb-screen">
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
-          <div className="fb-stickyhead-corner">
-            <button
-              className="fb-prof"
-              style={{ background: getColor(profile?.color) }}
-              onClick={onSettings}
-              title="Settings"
-            >
-              {getInitial(profile?.display_name)}
-            </button>
-            <div className="fb-grp-wrap" ref={groupMenuRef}>
-              <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
-                <Dot profile={profile} />
-                <span className="nm">{groupName}</span>
-                <span className="car">▾</span>
+          <div className="fb-stickyhead-head">
+            <div className="fb-brand-block">
+              <KinnektLogo size={42} />
+              <div className="fb-brand-text-stack">
+                <span className="fb-brand-text">Kinnekt</span>
+                <span className="fb-brand-slogan">Connect. Coordinate. Together.</span>
+              </div>
+            </div>
+            <div className="fb-stickyhead-right">
+              <button
+                className="fb-prof"
+                style={{ background: getColor(profile?.color) }}
+                onClick={onSettings}
+                title="Settings"
+              >
+                {getInitial(profile?.display_name)}
               </button>
-              {groupMenuOpen && (
-                <div className="fb-grp-menu" role="menu">
-                  <div className="fb-grp-menu-hd">Your groups</div>
-                  <div className="fb-grp-menu-item current">
-                    <Dot profile={profile} />
-                    <span style={{ flex: 1, fontWeight: 600 }}>{groupName}</span>
-                    <span style={{ fontSize: 11, opacity: 0.55 }}>current</span>
+              <div className="fb-grp-wrap" ref={groupMenuRef}>
+                <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
+                  <Dot profile={profile} />
+                  <span className="nm">{groupName}</span>
+                  <span className="car">▾</span>
+                </button>
+                {groupMenuOpen && (
+                  <div className="fb-grp-menu" role="menu">
+                    <div className="fb-grp-menu-hd">Your groups</div>
+                    <div className="fb-grp-menu-item current">
+                      <Dot profile={profile} />
+                      <span style={{ flex: 1, fontWeight: 600 }}>{groupName}</span>
+                      <span style={{ fontSize: 11, opacity: 0.55 }}>current</span>
+                    </div>
+                    <div className="fb-grp-menu-empty">No other groups available</div>
                   </div>
-                  <div className="fb-grp-menu-empty">No other groups available</div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
           <AnchorTabs active={tab} onChange={id => { setTab(id); scrollToSec(id); }} />
