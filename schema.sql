@@ -34,6 +34,7 @@ create table if not exists public.events (
   created_by uuid references public.profiles not null,
   title      text not null,
   description text,
+  location   text,
   date       date not null,
   start_time text,
   end_time   text,

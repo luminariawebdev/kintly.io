@@ -246,7 +246,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDelete, onShowMonth }) {
+function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDelete, onShowMonth, onShowEvent }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
@@ -353,7 +353,12 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
               const p = getProfile(e.created_by);
               const d = new Date(e.date + 'T00:00:00');
               return (
-                <div key={e.id} className="upcoming-row" style={{ borderLeft: `5px solid ${getColor(e.color || p?.color)}` }}>
+                <div
+                  key={e.id}
+                  className="upcoming-row"
+                  style={{ borderLeft: `5px solid ${getColor(e.color || p?.color)}`, cursor: 'pointer' }}
+                  onClick={() => onShowEvent?.(e)}
+                >
                   <div className="when">
                     {MONTH_NAMES[d.getMonth()].slice(0, 3).toUpperCase()}
                     <span className="d">{d.getDate()}</span>
@@ -361,12 +366,15 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
                   <div style={{ flex: 1 }}>
                     <div className="ti">{e.title}</div>
                     <div className="sub">
-                      {e.start_time && <span>{e.start_time}{e.end_time ? `–${e.end_time}` : ''}</span>}
+                      {e.start_time && <span>{fmtTime(e.start_time)}{e.end_time ? `–${fmtTime(e.end_time)}` : ''}</span>}
                       {e.start_time && <span>·</span>}
                       {p && <><Dot profile={p} /><span>{p.display_name}</span></>}
                     </div>
                   </div>
-                  <button onClick={() => onDelete(e.id)} style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}>×</button>
+                  <button
+                    onClick={(ev) => { ev.stopPropagation(); onDelete(e.id); }}
+                    style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+                  >×</button>
                 </div>
               );
             })}
@@ -505,6 +513,7 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
   const today = new Date().toISOString().slice(0, 10);
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
+  const [location, setLocation] = React.useState('');
   const [date, setDate] = React.useState(initialDate || today);
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
@@ -524,12 +533,13 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
     await onSave({
       title: title.trim(),
       description: description.trim() || null,
+      location: location.trim() || null,
       date,
       start_time: startTime || null,
       end_time: endTime || null,
       color: owner?.color || 'coral',
     });
-    setTitle(''); setDescription(''); setDate(today); setStartTime(''); setEndTime(''); setColorOwner(null);
+    setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setColorOwner(null);
     setSaving(false);
     onClose();
   };
@@ -546,7 +556,7 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
         <textarea
           value={description}
           onChange={e => setDescription(e.target.value.slice(0, 500))}
-          placeholder="Address, things to bring, notes…"
+          placeholder="Things to bring, notes…"
           rows={3}
           maxLength={500}
           style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule, #141414)', borderRadius: 8, background: 'var(--cream, #FFFEF7)', color: 'var(--ink, #141414)', outline: 'none', boxSizing: 'border-box' }}
@@ -554,6 +564,15 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
         <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--mute)', textAlign: 'right', marginTop: 4 }}>
           {description.length} / 500
         </div>
+      </div>
+      <div className="field">
+        <label>Location <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <input
+          value={location}
+          onChange={e => setLocation(e.target.value.slice(0, 200))}
+          placeholder="Address or place name"
+          maxLength={200}
+        />
       </div>
       <div className="field">
         <label>Date</label>
@@ -593,22 +612,25 @@ function fmtTime(t) {
   return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
 }
 
-function EventCard({ event, getProfile, onDelete }) {
+function EventCard({ event, getProfile, onDelete, onClick }) {
   const p = getProfile(event.created_by);
   const color = getColor(event.color || p?.color);
   const timeStr = event.start_time
     ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
     : 'All day';
   return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 10,
-      padding: '10px 12px', background: 'var(--paper)',
-      border: '1.5px solid var(--ink)', borderRadius: 10,
-      borderLeft: `6px solid ${color}`,
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 10,
+        padding: '10px 12px', background: 'var(--paper)',
+        border: '1.5px solid var(--ink)', borderRadius: 10,
+        borderLeft: `6px solid ${color}`,
+        cursor: onClick ? 'pointer' : 'default',
+      }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{event.title}</div>
-        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--mute)', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--mute)', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span>{timeStr}</span>
           {p && (
             <>
@@ -618,6 +640,12 @@ function EventCard({ event, getProfile, onDelete }) {
             </>
           )}
         </div>
+        {event.location && (
+          <div style={{ fontSize: 12, color: 'var(--mute)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span aria-hidden="true">📍</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.location}</span>
+          </div>
+        )}
         {event.description && (
           <div style={{ fontSize: 13, color: 'var(--ink)', marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
             {event.description}
@@ -625,7 +653,7 @@ function EventCard({ event, getProfile, onDelete }) {
         )}
       </div>
       <button
-        onClick={() => onDelete(event.id)}
+        onClick={(e) => { e.stopPropagation(); onDelete(event.id); }}
         style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
         title="Delete event"
       >×</button>
@@ -633,7 +661,79 @@ function EventCard({ event, getProfile, onDelete }) {
   );
 }
 
-function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, onDelete }) {
+// ─── Event Details Modal (single event) ───────────────────────────────────────
+function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
+  if (!open || !event) return null;
+  const p = getProfile(event.created_by);
+  const color = getColor(event.color || p?.color);
+  const [y, m, d] = event.date.split('-').map(Number);
+  const jsDate = new Date(y, m - 1, d);
+  const longDate = jsDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const timeStr = event.start_time
+    ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
+    : 'All day';
+  const mapsUrl = event.location ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}` : null;
+
+  return (
+    <Modal open={open} onClose={onClose} title="Event">
+      <div style={{
+        borderLeft: `6px solid ${color}`,
+        padding: '4px 0 4px 14px',
+        marginBottom: 14,
+      }}>
+        <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15, marginBottom: 8 }}>{event.title}</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--mute)', letterSpacing: '0.04em' }}>
+          {longDate}
+        </div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--mute)', letterSpacing: '0.04em', marginTop: 2 }}>
+          {timeStr}
+        </div>
+      </div>
+
+      {event.location && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Location</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span aria-hidden="true">📍</span>
+            <span style={{ flex: 1, fontSize: 14 }}>{event.location}</span>
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="copy-btn"
+              style={{ textDecoration: 'none' }}
+            >open in maps ↗</a>
+          </div>
+        </div>
+      )}
+
+      {event.description && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Description</label>
+          <div style={{ fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{event.description}</div>
+        </div>
+      )}
+
+      <div className="field" style={{ marginBottom: 0 }}>
+        <label>Created by</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          {p && <Dot profile={p} />}
+          <span>{p?.display_name || 'Unknown'}</span>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={() => { onDelete(event.id); onClose(); }}
+          className="copy-btn"
+          style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+        >Delete event</button>
+      </div>
+    </Modal>
+  );
+}
+
+function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, onDelete, onShowEvent }) {
   if (!open || !date) return null;
   const [y, m, d] = date.split('-').map(Number);
   const jsDate = new Date(y, m - 1, d);
@@ -657,7 +757,13 @@ function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, 
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {dayEvents.map(e => (
-            <EventCard key={e.id} event={e} getProfile={getProfile} onDelete={onDelete} />
+            <EventCard
+              key={e.id}
+              event={e}
+              getProfile={getProfile}
+              onDelete={onDelete}
+              onClick={onShowEvent ? () => onShowEvent(e) : undefined}
+            />
           ))}
         </div>
       )}
@@ -666,7 +772,7 @@ function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, 
 }
 
 // ─── Month Events Modal ───────────────────────────────────────────────────────
-function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, onDelete }) {
+function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, onDelete, onShowEvent }) {
   if (!open) return null;
 
   // Group events by ISO date and sort dates ascending
@@ -693,7 +799,13 @@ function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, 
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {dayEvents.map(e => (
-                    <EventCard key={e.id} event={e} getProfile={getProfile} onDelete={onDelete} />
+                    <EventCard
+                      key={e.id}
+                      event={e}
+                      getProfile={getProfile}
+                      onDelete={onDelete}
+                      onClick={onShowEvent ? () => onShowEvent(e) : undefined}
+                    />
                   ))}
                 </div>
               </div>
@@ -754,6 +866,7 @@ export function MainApp({ profile, onSettings }) {
   const [eventInitDate, setEventInitDate] = React.useState(null);
   const [dayDetailsDate, setDayDetailsDate] = React.useState(null);
   const [monthModalData, setMonthModalData] = React.useState(null);
+  const [detailEventId, setDetailEventId] = React.useState(null);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
 
@@ -931,6 +1044,7 @@ export function MainApp({ profile, onSettings }) {
             onDayClick={(iso) => setDayDetailsDate(iso)}
             onDelete={deleteEvent}
             onShowMonth={(payload) => setMonthModalData(payload)}
+            onShowEvent={(ev) => setDetailEventId(ev.id)}
           />
         </div>
       </div>
@@ -946,6 +1060,7 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDayDetailsDate(null)}
         onAddEvent={() => { setEventInitDate(dayDetailsDate); setDayDetailsDate(null); setModal('event'); }}
         onDelete={(id) => deleteEvent(id)}
+        onShowEvent={(e) => setDetailEventId(e.id)}
       />
       <MonthEventsModal
         open={!!monthModalData}
@@ -955,6 +1070,14 @@ export function MainApp({ profile, onSettings }) {
         events={monthModalData?.events || []}
         getProfile={getProfile}
         onDelete={(id) => { deleteEvent(id); setMonthModalData(d => d ? { ...d, events: d.events.filter(e => e.id !== id) } : d); }}
+        onShowEvent={(e) => setDetailEventId(e.id)}
+      />
+      <EventDetailsModal
+        open={!!detailEventId}
+        event={events.find(e => e.id === detailEventId) || null}
+        getProfile={getProfile}
+        onClose={() => setDetailEventId(null)}
+        onDelete={(id) => deleteEvent(id)}
       />
     </div>
   );
