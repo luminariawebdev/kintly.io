@@ -1412,8 +1412,8 @@ export function MainApp({ profile, onSettings }) {
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-row">
             <div className="fb-brand">
-              <KinnektLogo size={36} />
-              <div className="fb-slogan">Connect. Coordinate. Together.</div>
+              <KinnektLogo size={48} />
+              <span className="fb-brand-text">Kinnekt</span>
             </div>
             <div className="fb-grp-wrap" ref={groupMenuRef}>
               <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
