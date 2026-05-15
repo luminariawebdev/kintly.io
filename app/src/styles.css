@@ -76,6 +76,17 @@ html, body {
   padding: 10px 16px 10px;
   gap: 8px;
 }
+.fb-stickyhead-corner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 16px 12px;
+}
+/* Reset the grid-driven justify-self when these live inside the corner stack */
+.fb-stickyhead-corner .fb-prof,
+.fb-stickyhead-corner .fb-grp-wrap,
+.fb-stickyhead-corner .fb-grp-pill { justify-self: auto; }
 .fb-wordmark {
   font-family: 'Aileron', 'Inter', 'Space Grotesk', system-ui, sans-serif;
   font-size: 22px; font-weight: 700;

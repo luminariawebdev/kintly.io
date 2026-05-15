@@ -1410,8 +1410,15 @@ export function MainApp({ profile, onSettings }) {
     <div className="fb-screen">
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
-          <div className="fb-stickyhead-row">
-            <span />
+          <div className="fb-stickyhead-corner">
+            <button
+              className="fb-prof"
+              style={{ background: getColor(profile?.color) }}
+              onClick={onSettings}
+              title="Settings"
+            >
+              {getInitial(profile?.display_name)}
+            </button>
             <div className="fb-grp-wrap" ref={groupMenuRef}>
               <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
                 <Dot profile={profile} />
@@ -1430,14 +1437,6 @@ export function MainApp({ profile, onSettings }) {
                 </div>
               )}
             </div>
-            <button
-              className="fb-prof"
-              style={{ background: getColor(profile?.color) }}
-              onClick={onSettings}
-              title="Settings"
-            >
-              {getInitial(profile?.display_name)}
-            </button>
           </div>
           <AnchorTabs active={tab} onChange={id => { setTab(id); scrollToSec(id); }} />
         </div>
