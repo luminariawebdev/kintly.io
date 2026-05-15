@@ -768,35 +768,52 @@ html { overscroll-behavior-x: none; }
   margin-top: 4px;
 }
 
-/* ── Assignee/Member picker chips ────────────────────────────── */
+/* ── Assignee/Date/Member picker chips (oval pills) ─────────── */
 .assignee-picker { display: flex; flex-wrap: wrap; gap: 8px; }
-.assignee-picker .pick {
+.date-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pick {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface-glass);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
-  padding: 7px 12px;
+  padding: 9px 16px;
   border-radius: var(--r-pill);
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 13px;
   font-weight: 500;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
   cursor: pointer;
+  box-shadow: var(--shadow-soft);
   transition: all 0.25s var(--ease);
+  white-space: nowrap;
 }
-.assignee-picker .pick:hover { background: var(--surface-glass-strong); }
-.assignee-picker .pick.on {
+.pick:hover {
+  background: linear-gradient(135deg, rgba(106, 77, 255, 0.10), rgba(45, 156, 255, 0.10) 50%, rgba(61, 217, 197, 0.10));
+  border-color: rgba(106, 77, 255, 0.20);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-medium);
+}
+.pick:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-soft);
+}
+.pick.on {
   background: var(--brand-grad);
   color: #FFFFFF;
   border-color: transparent;
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.25);
+  box-shadow: 0 6px 18px rgba(106, 77, 255, 0.30);
 }
-.assignee-picker .pick.on .userbadge .you { -webkit-text-fill-color: #FFFFFF; color: #FFFFFF; background: none; }
-.assignee-picker .pick.unassign { font-style: italic; color: var(--text-muted); }
-.assignee-picker .pick.unassign.on { color: #FFFFFF; font-style: normal; }
-.date-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.date-row .pick { display: inline-flex; align-items: center; }
+.pick.on:hover {
+  background: var(--brand-grad);
+  box-shadow: 0 10px 24px rgba(106, 77, 255, 0.38);
+}
+.pick.on .userbadge .you { -webkit-text-fill-color: #FFFFFF; color: #FFFFFF; background: none; }
+.pick.unassign { font-style: italic; color: var(--text-muted); }
+.pick.unassign.on { color: #FFFFFF; font-style: normal; }
 
 /* ── Auth screen ─────────────────────────────────────────────── */
 .auth-wrap {
