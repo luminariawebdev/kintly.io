@@ -398,10 +398,9 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenN
         <div className="fb-sec-meta">{notes.length} notes</div>
       </div>
 
-      <div className="note-quick" onClick={onAdd}>
-        <span className="plus">+</span>
-        <span>Add a note for the family…</span>
-      </div>
+      <button className="fb-btn" onClick={onAdd}>
+        <span className="plus">+</span> Add note
+      </button>
 
       <div className="notes">
         {sorted.length === 0 && (
