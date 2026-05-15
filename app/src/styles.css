@@ -80,7 +80,11 @@ html, body {
   background: linear-gradient(180deg, #F7F9FF 0%, #EEF4FF 100%);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Lock horizontal scroll + disable browser back/forward swipe */
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
 }
+html { overscroll-behavior-x: none; }
 
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; letter-spacing: 0.02em; }
 .up   { text-transform: uppercase; letter-spacing: 0.08em; }
@@ -96,7 +100,10 @@ html, body {
   overflow: hidden;
 }
 .fb-scroll {
-  flex: 1; overflow: auto;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   scrollbar-width: none;
 }
 .fb-scroll::-webkit-scrollbar { display: none; }
