@@ -776,6 +776,36 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
         </div>
       )}
 
+      {Array.isArray(event.attendees) && event.attendees.length > 0 && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Attendees</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {event.attendees.map(uid => {
+              const ap = getProfile(uid);
+              return (
+                <span
+                  key={uid}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '6px 12px',
+                    background: 'var(--surface-glass)',
+                    backdropFilter: 'blur(14px)',
+                    WebkitBackdropFilter: 'blur(14px)',
+                    border: '1px solid var(--border-glass)',
+                    borderRadius: '999px',
+                    fontSize: 13,
+                    fontWeight: 500,
+                  }}
+                >
+                  <Dot profile={ap} />
+                  <span>{ap?.display_name || 'Unknown'}</span>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="field" style={{ marginBottom: 0 }}>
         <label>Created by</label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
@@ -1426,8 +1456,15 @@ export function MainApp({ profile, onSettings }) {
       type,
       payload,
     }));
-    // Silently ignore if notifications table doesn't exist yet
-    try { await supabase.from('notifications').insert(rows); } catch { /* migration not run */ }
+    const { error } = await supabase.from('notifications').insert(rows);
+    if (error) {
+      // Most likely the notifications table or RLS policies are missing.
+      // Don't crash the calling save — but flag it once for the user.
+      if (!window.__kinnektNotifWarned) {
+        window.__kinnektNotifWarned = true;
+        console.warn('Notification insert failed (run the notifications SQL migration):', error.message);
+      }
+    }
   };
 
   const addTask = async (data) => {
