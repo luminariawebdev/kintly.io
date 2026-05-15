@@ -1452,21 +1452,36 @@ export function MainApp({ profile, onSettings }) {
 
   // Event CRUD
   const addEvent = async (data) => {
-    const payload = {
+    const { attendees = [], ...rest } = data;
+    const basePayload = {
       group_id: profile.group_id,
       created_by: profile.id,
       color: profile.color || 'coral',
-      ...data,
+      ...rest,
     };
-    // Try insert with attendees, fall back without if column missing
-    let { data: row, error } = await supabase.from('events').insert(payload).select().single();
-    if (error && /attendees/.test(error.message || '')) {
-      const { attendees, ...rest } = payload;
-      ({ data: row, error } = await supabase.from('events').insert(rest).select().single());
+
+    // Try insert with attendees first; on ANY error, retry without.
+    let { data: row, error } = await supabase
+      .from('events')
+      .insert({ ...basePayload, attendees })
+      .select()
+      .single();
+
+    if (error) {
+      ({ data: row, error } = await supabase
+        .from('events')
+        .insert(basePayload)
+        .select()
+        .single());
     }
-    if (error || !row) return;
+
+    if (error || !row) {
+      alert('Could not save event: ' + (error?.message || 'no row returned'));
+      return;
+    }
+
     setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
-    const attendeeIds = (data.attendees || []).filter(id => id !== profile.id);
+    const attendeeIds = attendees.filter(id => id !== profile.id);
     if (attendeeIds.length > 0) {
       notify(attendeeIds, 'event_invited', {
         event_id: row.id,
