@@ -10,6 +10,36 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
+function KinnektLogo({ size = 36 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="kinnekt logo">
+      <defs>
+        <linearGradient id="kk-g1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#FFE49B" />
+          <stop offset="100%" stopColor="#FFB019" />
+        </linearGradient>
+        <linearGradient id="kk-g2" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0%" stopColor="#FFC03C" />
+          <stop offset="100%" stopColor="#FF7A2C" />
+        </linearGradient>
+        <linearGradient id="kk-g3" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#FF9A3C" />
+          <stop offset="60%" stopColor="#FF7A4A" />
+          <stop offset="100%" stopColor="#FF5A55" />
+        </linearGradient>
+      </defs>
+      {/* Dot (head of the i) */}
+      <circle cx="22" cy="12" r="6.5" fill="url(#kk-g1)" />
+      {/* Vertical pill (body) */}
+      <rect x="16" y="22" width="12" height="44" rx="6" fill="url(#kk-g1)" />
+      {/* Upper-right diagonal of the K */}
+      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-g2)" transform="rotate(-45 22 44)" />
+      {/* Lower-right diagonal of the K */}
+      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-g3)" transform="rotate(45 22 44)" />
+    </svg>
+  );
+}
+
 // Synthesized bubble pop — short downward freq sweep with quick decay.
 let __audioCtx = null;
 async function ensureAudio() {
@@ -1225,7 +1255,10 @@ export function MainApp({ profile, onSettings }) {
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-row">
-            <div className="fb-wordmark">kinnekt</div>
+            <div className="fb-brand">
+              <KinnektLogo size={36} />
+              <div className="fb-slogan">Connect. Coordinate. Together.</div>
+            </div>
             <div className="fb-grp-wrap" ref={groupMenuRef}>
               <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
                 <Dot profile={profile} />
