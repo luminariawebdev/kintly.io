@@ -108,7 +108,10 @@ html { overscroll-behavior-x: none; }
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  /* none disables the rubberband bounce in both directions — fixes the
+     empty negative space below the last section AND keeps the sticky
+     header from being pushed out of view when scrolling up past 0 */
+  overscroll-behavior: none;
   scrollbar-width: none;
 }
 .fb-scroll::-webkit-scrollbar { display: none; }
@@ -302,7 +305,7 @@ html { overscroll-behavior-x: none; }
   position: relative;
 }
 .fb-sec:first-child { padding-top: 64px; }
-.fb-sec:last-child { padding-bottom: 100px; }
+.fb-sec:last-child { padding-bottom: 56px; }
 .fb-sec-hd {
   display: flex; align-items: flex-end; justify-content: space-between;
   margin-bottom: 22px;
