@@ -524,21 +524,37 @@ html, body {
 }
 .note-quick .plus { font-size: 18px; color: var(--ink); }
 .notes {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
 }
-.note {
+.note-card {
+  width: 100%;
+  max-width: 320px;
   border: var(--b) solid var(--ink);
   border-radius: var(--r-card);
-  padding: 12px;
+  padding: 14px 14px 12px;
   background: var(--paper);
-  display: flex; flex-direction: column;
-  gap: 8px;
-  break-inside: avoid;
-  position: relative;
   box-shadow: 3px 3px 0 var(--ink);
+  text-align: center;
 }
-.note:nth-child(3n+2) { background: var(--butter-2); }
-.note.tall { grid-row: span 2; }
+.note-card.pinned {
+  background: var(--butter-2);
+}
+.note-card .note-meta {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.note-card .note-meta .when {
+  margin-left: 0;
+}
+.note-body {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.5;
+  font-size: 14px;
+}
 .note-hd {
   display: flex; align-items: center; gap: 6px;
   font-size: 11px;
