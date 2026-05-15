@@ -901,13 +901,17 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   };
 
   const save = async () => {
-    if (!body.trim()) return;
-    if (makeTask && !taskTitle.trim()) return;
+    if (!body.trim()) { alert('Please enter a note before posting.'); return; }
+    if (makeTask && !taskTitle.trim()) { alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return; }
     setSaving(true);
     const taskPayload = makeTask
       ? { title: taskTitle.trim(), assigned_to: taskAssignee, due_date: getDueDate() }
       : null;
-    await onSave(body.trim(), taskPayload);
+    try {
+      await onSave(body.trim(), taskPayload);
+    } catch (e) {
+      alert('Error: ' + (e?.message || String(e)));
+    }
     setSaving(false);
     onClose();
   };
@@ -938,9 +942,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       </div>
 
       <div className="field" style={{ marginTop: 4 }}>
-        <button
-          type="button"
-          onClick={() => setMakeTask(v => !v)}
+        <label
           style={{
             display: 'flex', alignItems: 'center', gap: 10,
             padding: '10px 12px', width: '100%',
@@ -948,16 +950,17 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
             border: '1.5px solid var(--ink)', borderRadius: 8,
             cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
             color: 'var(--ink)', textAlign: 'left',
+            userSelect: 'none',
           }}
         >
-          <span style={{
-            width: 18, height: 18, borderRadius: 4, border: '1.5px solid var(--ink)',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            background: makeTask ? 'var(--ink)' : 'transparent',
-            color: '#FFCF03', fontSize: 12, fontWeight: 700, lineHeight: 1,
-          }}>{makeTask ? '✓' : ''}</span>
+          <input
+            type="checkbox"
+            checked={makeTask}
+            onChange={e => setMakeTask(e.target.checked)}
+            style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
+          />
           Create task from note?
-        </button>
+        </label>
       </div>
 
       {makeTask && (
@@ -1180,38 +1183,37 @@ export function MainApp({ profile, onSettings }) {
     }
     setNotes(prev => [noteRow, ...prev]);
 
-    if (taskPayload && taskPayload.title) {
-      const basePayload = {
-        group_id: profile.group_id,
-        created_by: profile.id,
-        assigned_to: taskPayload.assigned_to,
-        due_date: taskPayload.due_date,
-        title: taskPayload.title,
-      };
+    if (!taskPayload || !taskPayload.title) return;
 
-      // Try with note_id (proper linkage). If the column doesn't exist
-      // yet (migration not run), retry without it so the task still
-      // gets created.
-      let { data: taskRow, error: tErr } = await supabase
+    const basePayload = {
+      group_id: profile.group_id,
+      created_by: profile.id,
+      assigned_to: taskPayload.assigned_to,
+      due_date: taskPayload.due_date,
+      title: taskPayload.title,
+    };
+
+    // Try with note_id first; fall back to a plain insert if the
+    // note_id column doesn't exist or any other note_id-related issue.
+    let { data: taskRow, error: tErr } = await supabase
+      .from('tasks')
+      .insert({ ...basePayload, note_id: noteRow.id })
+      .select()
+      .single();
+
+    if (tErr) {
+      ({ data: taskRow, error: tErr } = await supabase
         .from('tasks')
-        .insert({ ...basePayload, note_id: noteRow.id })
+        .insert(basePayload)
         .select()
-        .single();
-
-      if (tErr && /note_id/.test(tErr.message || '')) {
-        ({ data: taskRow, error: tErr } = await supabase
-          .from('tasks')
-          .insert(basePayload)
-          .select()
-          .single());
-      }
-
-      if (tErr) {
-        alert('Note saved but task could not be created: ' + tErr.message);
-        return;
-      }
-      if (taskRow) setTasks(prev => [taskRow, ...prev]);
+        .single());
     }
+
+    if (tErr || !taskRow) {
+      alert('Note saved but task could not be created: ' + (tErr?.message || 'no row returned'));
+      return;
+    }
+    setTasks(prev => [taskRow, ...prev]);
   };
   const deleteNote = async (id) => {
     setNotes(prev => prev.filter(n => n.id !== id));
