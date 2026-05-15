@@ -445,7 +445,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
 }
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
-function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenNote }) {
+function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember }) {
   const sorted = [...notes].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || new Date(b.created_at) - new Date(a.created_at));
 
   return (
@@ -478,8 +478,14 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenN
               onClick={() => onOpenNote?.(n)}
             >
               <div className="note-meta">
-                <Dot profile={author} />
-                <span className="nm">{author?.display_name}</span>
+                <span
+                  className="member-link"
+                  onClick={(e) => { e.stopPropagation(); if (author && onShowMember) onShowMember(author); }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: author ? 'pointer' : 'default' }}
+                >
+                  <Dot profile={author} />
+                  <span className="nm">{author?.display_name}</span>
+                </span>
                 <span className="when">{when}</span>
               </div>
               <div className="note-body">{n.content}</div>
@@ -744,7 +750,7 @@ function EventCard({ event, getProfile, onDelete, onClick }) {
 }
 
 // ─── Event Details Modal (single event) ───────────────────────────────────────
-function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
+function EventDetailsModal({ open, event, getProfile, onClose, onDelete, onShowMember }) {
   if (!open || !event) return null;
   const p = getProfile(event.created_by);
   const color = getColor(event.color || p?.color);
@@ -799,8 +805,18 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
       <div className="field" style={{ marginBottom: 14 }}>
         <label>Created by</label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          {p && <Dot profile={p} />}
-          <span>{p?.display_name || 'Unknown'}</span>
+          {p ? (
+            <span
+              className="member-link"
+              onClick={() => onShowMember && onShowMember(p)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
+              <Dot profile={p} />
+              <span>{p.display_name}</span>
+            </span>
+          ) : (
+            <span>Unknown</span>
+          )}
         </div>
       </div>
 
@@ -813,6 +829,8 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
               return (
                 <span
                   key={uid}
+                  className="member-link"
+                  onClick={() => ap && onShowMember && onShowMember(ap)}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
                     padding: '6px 12px',
@@ -823,6 +841,7 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
                     borderRadius: '999px',
                     fontSize: 13,
                     fontWeight: 500,
+                    cursor: ap ? 'pointer' : 'default',
                   }}
                 >
                   <Dot profile={ap} />
@@ -1075,9 +1094,162 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   );
 }
 
+// ─── Member Details Modal ────────────────────────────────────────────────────
+function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onShowNote, onShowTask, onShowEvent }) {
+  if (!open || !member) return null;
+
+  const memberNotes = (notes || []).filter(n => n.created_by === member.id);
+  const openTasks = (tasks || []).filter(t => t.assigned_to === member.id && !t.completed);
+  const doneTasks = (tasks || []).filter(t => t.assigned_to === member.id && t.completed);
+  const memberEvents = (events || [])
+    .filter(e => e.created_by === member.id || (Array.isArray(e.attendees) && e.attendees.includes(member.id)))
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const itemStyle = {
+    padding: '10px 12px',
+    background: 'var(--surface-glass-strong)',
+    border: '1px solid var(--border-glass)',
+    borderRadius: 12,
+    cursor: 'pointer',
+    fontSize: 13,
+    lineHeight: 1.4,
+    transition: 'all 0.2s var(--ease)',
+  };
+  const sectionLabelStyle = {
+    fontFamily: 'Inter, system-ui, sans-serif',
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.14em',
+    color: 'var(--text-muted)',
+    marginBottom: 10,
+  };
+  const emptyStyle = { fontSize: 13, fontStyle: 'italic', color: 'var(--text-muted)' };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Profile">
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 14,
+        padding: '4px 0 18px',
+        marginBottom: 20,
+        borderBottom: '1px solid var(--border-soft)',
+      }}>
+        <span
+          className="dot xl"
+          style={{ '--c': getColor(member.color), background: getColor(member.color), width: 44, height: 44 }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontFamily: 'Satoshi, Inter, system-ui, sans-serif',
+            fontSize: 22, fontWeight: 700, lineHeight: 1.15,
+            letterSpacing: '-0.02em',
+            color: 'var(--text-primary)',
+          }}>{member.display_name}</div>
+          <div style={{
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 10, color: 'var(--text-muted)',
+            letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+            marginTop: 4,
+          }}>
+            {memberNotes.length} {memberNotes.length === 1 ? 'post' : 'posts'} ·{' '}
+            {openTasks.length + doneTasks.length} {openTasks.length + doneTasks.length === 1 ? 'task' : 'tasks'} ·{' '}
+            {memberEvents.length} {memberEvents.length === 1 ? 'event' : 'events'}
+          </div>
+        </div>
+      </div>
+
+      {/* Bulletin posts */}
+      <div style={{ marginBottom: 22 }}>
+        <div style={sectionLabelStyle}>Bulletin posts</div>
+        {memberNotes.length === 0 ? (
+          <div style={emptyStyle}>No posts yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {memberNotes.map(n => (
+              <div key={n.id} style={itemStyle} onClick={() => onShowNote && onShowNote(n)}>
+                <div style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap', textOverflow: 'ellipsis' }}>
+                  {n.content}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                  {new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Tasks */}
+      <div style={{ marginBottom: 22 }}>
+        <div style={sectionLabelStyle}>
+          Tasks {openTasks.length > 0 && <span style={{ color: 'var(--kinnekt-purple)' }}>· {openTasks.length} open</span>}
+        </div>
+        {openTasks.length === 0 && doneTasks.length === 0 ? (
+          <div style={emptyStyle}>No tasks assigned.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {openTasks.map(t => {
+              const overdue = dueDateOverdue(t.due_date);
+              return (
+                <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${getColor(member.color)}` }} onClick={() => onShowTask && onShowTask(t)}>
+                  <div style={{ fontWeight: 600 }}>{t.title}</div>
+                  {t.due_date && (
+                    <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: overdue ? '#E27457' : 'var(--text-muted)' }}>
+                      {formatDue(t.due_date)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {doneTasks.length > 0 && (
+              <>
+                <div style={{ ...sectionLabelStyle, fontSize: 9, marginTop: 8, marginBottom: 6, opacity: 0.7 }}>
+                  Completed · {doneTasks.length}
+                </div>
+                {doneTasks.map(t => (
+                  <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${getColor(member.color)}`, opacity: 0.55 }} onClick={() => onShowTask && onShowTask(t)}>
+                    <div style={{ fontWeight: 500, textDecoration: 'line-through' }}>{t.title}</div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Events */}
+      <div>
+        <div style={sectionLabelStyle}>Events</div>
+        {memberEvents.length === 0 ? (
+          <div style={emptyStyle}>No events.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {memberEvents.map(e => {
+              const role = e.created_by === member.id ? 'creator' : 'attending';
+              const evColor = getColor(e.color || member.color);
+              const [y, mo, da] = e.date.split('-').map(Number);
+              const dateLabel = new Date(y, mo - 1, da).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+              return (
+                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}` }} onClick={() => onShowEvent && onShowEvent(e)}>
+                  <div style={{ fontWeight: 600 }}>{e.title}</div>
+                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    {dateLabel}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''} · {role}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember }) {
   if (!open || !task) return null;
   const assignee = getProfile(task.assigned_to);
   const creator = getProfile(task.created_by);
@@ -1137,10 +1309,14 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         <label>Assigned to</label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
           {assignee ? (
-            <>
+            <span
+              className="member-link"
+              onClick={() => onShowMember && onShowMember(assignee)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
               <Dot profile={assignee} />
               <span style={{ fontWeight: 600 }}>{assignee.display_name}</span>
-            </>
+            </span>
           ) : (
             <span style={{ opacity: 0.55, fontStyle: 'italic' }}>Unassigned</span>
           )}
@@ -1185,8 +1361,18 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
       <div className="field" style={{ marginBottom: 0 }}>
         <label>Created by</label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          {creator && <Dot profile={creator} />}
-          <span>{creator?.display_name || 'Unknown'}</span>
+          {creator ? (
+            <span
+              className="member-link"
+              onClick={() => onShowMember && onShowMember(creator)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
+              <Dot profile={creator} />
+              <span>{creator.display_name}</span>
+            </span>
+          ) : (
+            <span>Unknown</span>
+          )}
           {createdAt && <span style={{ marginLeft: 'auto', fontSize: 11, fontStyle: 'italic', color: 'var(--mute)' }}>{createdAt}</span>}
         </div>
       </div>
@@ -1203,7 +1389,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   );
 }
 
-function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDelete, onToggleTask }) {
+function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDelete, onToggleTask, onShowMember }) {
   if (!open || !note) return null;
   const author = getProfile(note.created_by);
   const when = new Date(note.created_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -1212,8 +1398,14 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
   return (
     <Modal open={open} onClose={onClose} title="Note">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <Dot profile={author} />
-        <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name}</span>
+        <span
+          className="member-link"
+          onClick={() => author && onShowMember && onShowMember(author)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: author ? 'pointer' : 'default' }}
+        >
+          <Dot profile={author} />
+          <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name}</span>
+        </span>
         <span style={{ marginLeft: 'auto', fontSize: 11, fontStyle: 'italic', color: 'var(--mute)' }}>{when}</span>
       </div>
 
@@ -1389,6 +1581,7 @@ export function MainApp({ profile, onSettings }) {
   const [detailEventId, setDetailEventId] = React.useState(null);
   const [detailNoteId, setDetailNoteId] = React.useState(null);
   const [detailTaskId, setDetailTaskId] = React.useState(null);
+  const [detailMemberId, setDetailMemberId] = React.useState(null);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
   const [events, setEvents] = React.useState([]);
@@ -1729,7 +1922,7 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} />
+          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} />
           <CalendarSection
             events={events}
@@ -1773,6 +1966,7 @@ export function MainApp({ profile, onSettings }) {
         getProfile={getProfile}
         onClose={() => setDetailEventId(null)}
         onDelete={(id) => deleteEvent(id)}
+        onShowMember={(p) => { setDetailEventId(null); setDetailMemberId(p.id); }}
       />
       <NoteDetailsModal
         open={!!detailNoteId}
@@ -1783,6 +1977,7 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDetailNoteId(null)}
         onDelete={(id) => deleteNote(id)}
         onToggleTask={toggleTask}
+        onShowMember={(p) => { setDetailNoteId(null); setDetailMemberId(p.id); }}
       />
       <TaskDetailsModal
         open={!!detailTaskId}
@@ -1794,6 +1989,18 @@ export function MainApp({ profile, onSettings }) {
         onToggle={toggleTask}
         onDelete={deleteTask}
         onOpenNote={(n) => { setDetailTaskId(null); setDetailNoteId(n.id); }}
+        onShowMember={(p) => { setDetailTaskId(null); setDetailMemberId(p.id); }}
+      />
+      <MemberDetailsModal
+        open={!!detailMemberId}
+        member={members.find(m => m.id === detailMemberId) || null}
+        notes={notes}
+        tasks={tasks}
+        events={events}
+        onClose={() => setDetailMemberId(null)}
+        onShowNote={(n) => { setDetailMemberId(null); setDetailNoteId(n.id); }}
+        onShowTask={(t) => { setDetailMemberId(null); setDetailTaskId(t.id); }}
+        onShowEvent={(e) => { setDetailMemberId(null); setDetailEventId(e.id); }}
       />
     </div>
   );

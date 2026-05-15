@@ -1249,3 +1249,15 @@ html { overscroll-behavior-x: none; }
   margin-left: 4px;
   margin-top: 2px;
 }
+
+/* Clickable member name (avatar + name) — turns purple on hover */
+.member-link {
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: color 0.2s var(--ease), background-color 0.2s var(--ease);
+}
+.member-link:hover {
+  color: var(--kinnekt-purple);
+  background: var(--hover-tint);
+}
