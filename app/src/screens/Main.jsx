@@ -1392,19 +1392,6 @@ export function MainApp({ profile, onSettings }) {
   const [detailEventId, setDetailEventId] = React.useState(null);
   const [detailNoteId, setDetailNoteId] = React.useState(null);
   const [detailTaskId, setDetailTaskId] = React.useState(null);
-  const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
-  const groupMenuRef = React.useRef(null);
-
-  // Close group menu on outside click
-  React.useEffect(() => {
-    if (!groupMenuOpen) return;
-    const onDocClick = (e) => {
-      if (!groupMenuRef.current) return;
-      if (!groupMenuRef.current.contains(e.target)) setGroupMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [groupMenuOpen]);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
   const [events, setEvents] = React.useState([]);
@@ -1697,8 +1684,6 @@ export function MainApp({ profile, onSettings }) {
     );
   }
 
-  const groupName = profile?.group?.name || 'My Family';
-
   return (
     <div className="fb-screen">
       <div className="fb-scroll" ref={scrollRef}>
@@ -1740,24 +1725,6 @@ export function MainApp({ profile, onSettings }) {
                 >
                   {getInitial(profile?.display_name)}
                 </button>
-              </div>
-              <div className="fb-grp-wrap" ref={groupMenuRef}>
-                <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
-                  <Dot profile={profile} />
-                  <span className="nm">{groupName}</span>
-                  <span className="car">▾</span>
-                </button>
-                {groupMenuOpen && (
-                  <div className="fb-grp-menu" role="menu">
-                    <div className="fb-grp-menu-hd">Your groups</div>
-                    <div className="fb-grp-menu-item current">
-                      <Dot profile={profile} />
-                      <span style={{ flex: 1, fontWeight: 600 }}>{groupName}</span>
-                      <span style={{ fontSize: 11, opacity: 0.55 }}>current</span>
-                    </div>
-                    <div className="fb-grp-menu-empty">No other groups available</div>
-                  </div>
-                )}
               </div>
             </div>
           </div>

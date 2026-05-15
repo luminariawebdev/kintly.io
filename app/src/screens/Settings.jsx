@@ -23,6 +23,18 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const [saving, setSaving] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [nameErr, setNameErr] = React.useState('');
+  const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
+  const groupMenuRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!groupMenuOpen) return;
+    const onDocClick = (e) => {
+      if (!groupMenuRef.current) return;
+      if (!groupMenuRef.current.contains(e.target)) setGroupMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [groupMenuOpen]);
 
   const me = COLORS.find(c => c.id === color) ?? COLORS[0];
   const group = profile?.group;
@@ -126,9 +138,66 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
           <div className="set-group">
             {group ? (
               <>
-                <div className="set-row" style={{ display: 'block' }}>
-                  <span className="lbl">Group name</span>
-                  <span className="val" style={{ fontWeight: 600 }}>{group.name}</span>
+                <div
+                  className="set-row"
+                  ref={groupMenuRef}
+                  style={{ display: 'block', cursor: 'pointer', position: 'relative' }}
+                  onClick={() => setGroupMenuOpen(o => !o)}
+                >
+                  <span className="lbl">Group</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <span className="val" style={{ fontWeight: 600 }}>{group.name}</span>
+                    <span className="car">{groupMenuOpen ? '▴' : '▾'}</span>
+                  </div>
+                  {groupMenuOpen && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: 'absolute',
+                        top: 'calc(100% - 4px)',
+                        left: 14, right: 14,
+                        background: 'var(--surface-glass-strong)',
+                        backdropFilter: 'blur(22px)',
+                        WebkitBackdropFilter: 'blur(22px)',
+                        border: '1px solid var(--border-glass)',
+                        borderRadius: 'var(--r-lg)',
+                        boxShadow: 'var(--shadow-large)',
+                        padding: '8px 0',
+                        zIndex: 50,
+                      }}
+                    >
+                      <div style={{
+                        padding: '8px 14px 6px',
+                        fontFamily: 'Inter, system-ui, sans-serif',
+                        fontSize: 10,
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.14em',
+                        color: 'var(--text-muted)',
+                      }}>Your groups</div>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '12px 14px',
+                        fontSize: 14,
+                      }}>
+                        <span className="dot" style={{ '--c': me.hex, width: 12, height: 12 }} />
+                        <span style={{ flex: 1, fontWeight: 600 }}>{group.name}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>current</span>
+                      </div>
+                      <div style={{
+                        padding: '12px 14px 14px',
+                        fontSize: 12,
+                        color: 'var(--text-muted)',
+                        fontStyle: 'italic',
+                        borderTop: '1px solid var(--border-soft)',
+                        marginTop: 4,
+                      }}>
+                        No other groups available
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="set-row" style={{ alignItems: 'center' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
