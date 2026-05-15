@@ -1453,26 +1453,34 @@ export function MainApp({ profile, onSettings }) {
   // Event CRUD
   const addEvent = async (data) => {
     const { attendees = [], ...rest } = data;
-    const basePayload = {
+    let payload = {
       group_id: profile.group_id,
       created_by: profile.id,
       color: profile.color || 'coral',
       ...rest,
+      attendees,
     };
 
-    // Try insert with attendees first; on ANY error, retry without.
-    let { data: row, error } = await supabase
-      .from('events')
-      .insert({ ...basePayload, attendees })
-      .select()
-      .single();
+    // Optional columns that may not exist in older schemas — strip them on error.
+    const optionalCols = ['description', 'location', 'attendees'];
 
-    if (error) {
-      ({ data: row, error } = await supabase
-        .from('events')
-        .insert(basePayload)
-        .select()
-        .single());
+    let row = null;
+    let error = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      ({ data: row, error } = await supabase.from('events').insert(payload).select().single());
+      if (!error) break;
+      // Parse missing-column name from PostgREST error and strip it.
+      const msg = error.message || '';
+      let stripped = null;
+      for (const col of optionalCols) {
+        if (payload[col] !== undefined && msg.toLowerCase().includes(col)) {
+          const { [col]: _, ...next } = payload;
+          payload = next;
+          stripped = col;
+          break;
+        }
+      }
+      if (!stripped) break;
     }
 
     if (error || !row) {
