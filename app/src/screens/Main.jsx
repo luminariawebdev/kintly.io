@@ -182,65 +182,67 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
         <span className="plus">+</span> Add task
       </button>
 
-      <div style={{ marginTop: 10 }}>
-        {grouped.length === 0 && unassigned.length === 0 && doneItems.length === 0 && (
-          <div className="kbd-hint" style={{ padding: '20px 0' }}>NO TASKS — ADD ONE ABOVE</div>
-        )}
-        {grouped.length === 0 && unassigned.length === 0 && doneItems.length > 0 && (
-          <div className="kbd-hint" style={{ padding: '20px 0' }}>ALL DONE — NICE WORK</div>
-        )}
-        {grouped.map(g => (
-          <div key={g.member.id}>
-            <div className="assignee-hd">
-              <div className="left">
-                <Dot profile={g.member} size="lg" />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{g.member.display_name}</span>
-                {g.member.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+      {grouped.length === 0 && unassigned.length === 0 && doneItems.length === 0 ? (
+        <div className="kbd-hint" style={{ padding: '20px 0' }}>NO TASKS — ADD ONE ABOVE</div>
+      ) : (
+        <div className="fb-listbox">
+          <div className="fb-listbox-legend">To-do</div>
+          {grouped.length === 0 && unassigned.length === 0 && doneItems.length > 0 && (
+            <div className="kbd-hint" style={{ padding: '14px 0 6px' }}>ALL DONE — NICE WORK</div>
+          )}
+          {grouped.map(g => (
+            <div key={g.member.id}>
+              <div className="assignee-hd">
+                <div className="left">
+                  <Dot profile={g.member} size="lg" />
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{g.member.display_name}</span>
+                  {g.member.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+                </div>
+                <span className="count">{g.items.length}</span>
               </div>
-              <span className="count">{g.items.length}</span>
-            </div>
-            <div className="tasklist">
-              {g.items.map(t => (
-                <TaskRow key={t.id} task={t} assignee={g.member} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
-              ))}
-            </div>
-          </div>
-        ))}
-        {unassigned.length > 0 && (
-          <div>
-            <div className="assignee-hd">
-              <div className="left"><span style={{ fontWeight: 600, fontSize: 14, opacity: 0.5 }}>Unassigned</span></div>
-              <span className="count">{unassigned.length}</span>
-            </div>
-            <div className="tasklist">
-              {unassigned.map(t => (
-                <TaskRow key={t.id} task={t} assignee={null} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {doneItems.length > 0 && (
-          <div style={{ marginTop: 18 }}>
-            <button
-              onClick={() => setShowDone(s => !s)}
-              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 0, borderTop: '1px solid var(--rule)', cursor: 'pointer', font: 'inherit' }}
-            >
-              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.55 }}>
-                Completed · {doneItems.length}
-              </span>
-              <span style={{ opacity: 0.5, fontSize: 12 }}>{showDone ? '▴ hide' : '▾ show'}</span>
-            </button>
-            {showDone && (
               <div className="tasklist">
-                {doneItems.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                {g.items.map(t => (
+                  <TaskRow key={t.id} task={t} assignee={g.member} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
                 ))}
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            </div>
+          ))}
+          {unassigned.length > 0 && (
+            <div>
+              <div className="assignee-hd">
+                <div className="left"><span style={{ fontWeight: 600, fontSize: 14, opacity: 0.5 }}>Unassigned</span></div>
+                <span className="count">{unassigned.length}</span>
+              </div>
+              <div className="tasklist">
+                {unassigned.map(t => (
+                  <TaskRow key={t.id} task={t} assignee={null} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {doneItems.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <button
+                onClick={() => setShowDone(s => !s)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 0, borderTop: '1px solid var(--rule)', cursor: 'pointer', font: 'inherit' }}
+              >
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.55 }}>
+                  Completed · {doneItems.length}
+                </span>
+                <span style={{ opacity: 0.5, fontSize: 12 }}>{showDone ? '▴ hide' : '▾ show'}</span>
+              </button>
+              {showDone && (
+                <div className="tasklist">
+                  {doneItems.map(t => (
+                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -402,10 +404,12 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenN
         <span className="plus">+</span> Add note
       </button>
 
-      <div className="notes">
-        {sorted.length === 0 && (
-          <div className="kbd-hint" style={{ padding: '20px 0' }}>NO NOTES YET — ADD ONE ABOVE</div>
-        )}
+      {sorted.length === 0 ? (
+        <div className="kbd-hint" style={{ padding: '20px 0' }}>NO NOTES YET — ADD ONE ABOVE</div>
+      ) : (
+        <div className="fb-listbox">
+          <div className="fb-listbox-legend">Posts</div>
+          <div className="notes" style={{ margin: 0 }}>
         {sorted.map(n => {
           const author = getProfile(n.created_by);
           const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -436,7 +440,9 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenN
             </div>
           );
         })}
-      </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -951,8 +951,8 @@ html, body {
   margin-top: 4px;
 }
 
-/* Upcoming events box with legend-style label on the top border */
-.upcoming-box {
+/* Generic list box with a legend-style label sitting on the top border */
+.fb-listbox, .upcoming-box {
   position: relative;
   margin-top: 32px;
   padding: 22px 14px 14px;
@@ -961,7 +961,7 @@ html, body {
   background: linear-gradient(135deg, #FFF1A8 0%, #FFE26B 100%);
 }
 .upcoming-box .upcoming { margin-top: 0; }
-.upcoming-legend {
+.fb-listbox-legend, .upcoming-legend {
   position: absolute;
   top: 0;
   left: 50%;
