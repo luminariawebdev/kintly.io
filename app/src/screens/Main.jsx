@@ -102,11 +102,70 @@ if (typeof window !== 'undefined' && !window.__popPrimed) {
 }
 
 function Dot({ profile, size = '' }) {
+  const avatar = profile?.avatar;
+  const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
+  const color = getColor(profile?.color);
+  const base = `dot ${size}`.trim();
+
+  if (isImage) {
+    return (
+      <span
+        className={base + ' avatar-img'}
+        style={{
+          '--c': color,
+          backgroundImage: `url(${avatar})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+      />
+    );
+  }
+  if (avatar) {
+    return (
+      <span
+        className={base + ' avatar-emoji'}
+        style={{ '--c': color, background: color }}
+      >{avatar}</span>
+    );
+  }
   return (
     <span
-      className={`dot ${size}`}
-      style={{ '--c': getColor(profile?.color), background: getColor(profile?.color) }}
+      className={base}
+      style={{ '--c': color, background: color }}
     />
+  );
+}
+
+function ProfileButton({ profile, onClick }) {
+  const avatar = profile?.avatar;
+  const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
+  const color = getColor(profile?.color);
+  const baseStyle = { background: color };
+  if (isImage) {
+    return (
+      <button
+        className="fb-prof has-avatar"
+        style={{
+          ...baseStyle,
+          backgroundImage: `url(${avatar})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+        onClick={onClick}
+        title="Settings"
+        aria-label="Settings"
+      />
+    );
+  }
+  return (
+    <button
+      className="fb-prof"
+      style={baseStyle}
+      onClick={onClick}
+      title="Settings"
+    >
+      {avatar || getInitial(profile?.display_name)}
+    </button>
   );
 }
 
@@ -1317,24 +1376,6 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         </div>
       </div>
 
-      <div className="field" style={{ marginBottom: 14 }}>
-        <label>Assigned to</label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          {assignee ? (
-            <span
-              className="member-link"
-              onClick={() => onShowMember && onShowMember(assignee)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-            >
-              <Dot profile={assignee} />
-              <span style={{ fontWeight: 600 }}>{assignee.display_name}</span>
-            </span>
-          ) : (
-            <span style={{ opacity: 0.55, fontStyle: 'italic' }}>Unassigned</span>
-          )}
-        </div>
-      </div>
-
       {dueLabel && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>Due</label>
@@ -1370,33 +1411,59 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         </div>
       )}
 
-      <div className="field" style={{ marginBottom: 0 }}>
-        <label>Created by</label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          {creator ? (
-            <span
-              className="member-link"
-              onClick={() => onShowMember && onShowMember(creator)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-            >
-              <Dot profile={creator} />
-              <span>{creator.display_name}</span>
-            </span>
-          ) : (
-            <span>Unknown</span>
-          )}
-          {createdAt && <span style={{ marginLeft: 'auto', fontSize: 11, fontStyle: 'italic', color: 'var(--mute)' }}>{createdAt}</span>}
+      <div style={{
+        marginTop: 22,
+        paddingTop: 14,
+        borderTop: '1px solid var(--border-soft)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+        gap: 12,
+      }}>
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              Assigned to
+            </div>
+            {assignee ? (
+              <span
+                className="member-link"
+                onClick={() => onShowMember && onShowMember(assignee)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+              >
+                <Dot profile={assignee} />
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{assignee.display_name}</span>
+              </span>
+            ) : (
+              <span style={{ fontSize: 14, color: 'var(--text-muted)', fontStyle: 'italic' }}>Unassigned</span>
+            )}
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              Created by
+            </div>
+            {creator ? (
+              <span
+                className="member-link"
+                onClick={() => onShowMember && onShowMember(creator)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+              >
+                <Dot profile={creator} />
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{creator.display_name}</span>
+              </span>
+            ) : (
+              <span style={{ fontSize: 14 }}>Unknown</span>
+            )}
+            {createdAt && <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginTop: 4 }}>{createdAt}</div>}
+          </div>
         </div>
-      </div>
-
-      {(!task.assigned_to || task.assigned_to === myId) && (
-        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+        {(!task.assigned_to || task.assigned_to === myId) && (
           <button
             onClick={() => { onDelete(task.id); onClose(); }}
             className="danger-btn"
           >Delete task</button>
-        </div>
-      )}
+        )}
+      </div>
     </Modal>
   );
 }
@@ -1409,22 +1476,11 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
 
   return (
     <Modal open={open} onClose={onClose} title="Note">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <span
-          className="member-link"
-          onClick={() => author && onShowMember && onShowMember(author)}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: author ? 'pointer' : 'default' }}
-        >
-          <Dot profile={author} />
-          <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name}</span>
-        </span>
-        <span style={{ marginLeft: 'auto', fontSize: 11, fontStyle: 'italic', color: 'var(--mute)' }}>{when}</span>
-      </div>
-
       <div style={{
-        padding: '12px 14px',
-        background: 'var(--paper)',
-        border: '1.5px solid var(--ink)', borderRadius: 10,
+        padding: '14px 16px',
+        background: 'var(--surface-glass-strong)',
+        border: '1px solid var(--border-glass)',
+        borderRadius: 'var(--r-md)',
         fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
         marginBottom: 14,
       }}>
@@ -1495,14 +1551,36 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
         )}
       </div>
 
-      {note.created_by === myId && (
-        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{
+        marginTop: 22,
+        paddingTop: 14,
+        borderTop: '1px solid var(--border-soft)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+        gap: 12,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)', marginBottom: 6 }}>
+            Posted by
+          </div>
+          <span
+            className="member-link"
+            onClick={() => author && onShowMember && onShowMember(author)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: author ? 'pointer' : 'default' }}
+          >
+            <Dot profile={author} />
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name || 'Unknown'}</span>
+          </span>
+          <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginTop: 4 }}>{when}</div>
+        </div>
+        {note.created_by === myId && (
           <button
             onClick={() => { onDelete(note.id); onClose(); }}
             className="danger-btn"
           >Delete note</button>
-        </div>
-      )}
+        )}
+      </div>
     </Modal>
   );
 }
@@ -1932,14 +2010,7 @@ export function MainApp({ profile, onSettings }) {
                     />
                   )}
                 </div>
-                <button
-                  className="fb-prof"
-                  style={{ background: getColor(profile?.color) }}
-                  onClick={onSettings}
-                  title="Settings"
-                >
-                  {getInitial(profile?.display_name)}
-                </button>
+                <ProfileButton profile={profile} onClick={onSettings} />
               </div>
             </div>
           </div>

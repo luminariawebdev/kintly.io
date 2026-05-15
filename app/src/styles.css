@@ -1264,3 +1264,16 @@ html { overscroll-behavior-x: none; }
   color: var(--kinnekt-purple);
   background: var(--hover-tint);
 }
+
+/* Avatar variants on the standard .dot */
+.dot.avatar-img { background-color: transparent; background-repeat: no-repeat; }
+.dot.avatar-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 9px;
+}
+.dot.lg.avatar-emoji  { font-size: 13px; }
+.dot.xl.avatar-emoji  { font-size: 20px; }
+.fb-prof.has-avatar { background-color: transparent; background-repeat: no-repeat; }

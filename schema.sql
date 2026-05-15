@@ -13,6 +13,7 @@ create table if not exists public.profiles (
   id           uuid references auth.users on delete cascade primary key,
   display_name text not null,
   color        text not null default 'coral',
+  avatar       text,
   group_id     uuid references public.groups,
   created_at   timestamptz default now()
 );

@@ -23,8 +23,12 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const [saving, setSaving] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [nameErr, setNameErr] = React.useState('');
+  const [avatar, setAvatar] = React.useState(profile?.avatar ?? '');
+  const [emojiInput, setEmojiInput] = React.useState('');
+  const [confirmSignOut, setConfirmSignOut] = React.useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
+  const fileInputRef = React.useRef(null);
 
   React.useEffect(() => {
     if (!groupMenuOpen) return;
@@ -70,6 +74,53 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const saveAvatar = async (next) => {
+    setAvatar(next);
+    const { error } = await supabase.from('profiles').update({ avatar: next || null }).eq('id', profile.id);
+    if (error && /avatar/i.test(error.message || '')) {
+      alert('Avatar column missing — run:\n\nalter table public.profiles add column if not exists avatar text;');
+      return;
+    }
+    onProfileUpdate();
+  };
+
+  const onEmojiSubmit = (val) => {
+    const trimmed = (val || '').trim();
+    if (!trimmed) return;
+    // Take just the first grapheme so multi-char text doesn't fit awkwardly
+    const first = [...trimmed][0];
+    saveAvatar(first);
+    setEmojiInput('');
+  };
+
+  const onPickPhoto = async (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const min = Math.min(img.naturalWidth, img.naturalHeight);
+        const sx = (img.naturalWidth - min) / 2;
+        const sy = (img.naturalHeight - min) / 2;
+        ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        saveAvatar(dataUrl);
+      };
+      img.onerror = () => alert('Could not load that image — try another file.');
+      img.src = reader.result;
+    };
+    reader.onerror = () => alert('Could not read the file.');
+    reader.readAsDataURL(file);
+  };
+
+  const removeAvatar = () => saveAvatar('');
+
+  const avatarIsImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
+
   const signOut = async () => {
     await supabase.auth.signOut();
     onSignOut();
@@ -107,6 +158,67 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                 {saving && <span style={{ fontSize: 11, opacity: 0.4 }}>saving…</span>}
               </div>
               {nameErr && <div className="err-msg" style={{ marginTop: 4 }}>{nameErr}</div>}
+            </div>
+
+            <div className="set-row" style={{ display: 'block' }}>
+              <span className="lbl">Avatar</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 6 }}>
+                <span
+                  style={{
+                    width: 56, height: 56, borderRadius: '50%',
+                    background: avatarIsImage ? `center / cover no-repeat url(${avatar})` : (me.hex),
+                    border: '2px solid rgba(255, 255, 255, 0.85)',
+                    boxShadow: '0 4px 14px rgba(15, 30, 60, 0.14)',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 28,
+                    color: 'var(--ink)',
+                    flexShrink: 0,
+                  }}
+                >
+                  {!avatarIsImage && (avatar || '')}
+                </span>
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <input
+                    type="text"
+                    inputMode="text"
+                    value={emojiInput}
+                    onChange={e => setEmojiInput(e.target.value)}
+                    onBlur={e => onEmojiSubmit(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { onEmojiSubmit(e.target.value); e.target.blur(); } }}
+                    placeholder="Type an emoji…"
+                    style={{
+                      background: 'var(--surface-glass)',
+                      border: '1px solid var(--border-glass)',
+                      borderRadius: 10,
+                      padding: '8px 12px',
+                      fontSize: 16,
+                      outline: 'none',
+                      width: '100%',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      className="copy-btn"
+                      onClick={() => fileInputRef.current?.click()}
+                      style={{ marginLeft: 0, fontSize: 12, padding: '7px 12px' }}
+                    >Upload photo…</button>
+                    {avatar && (
+                      <button
+                        className="copy-btn"
+                        onClick={removeAvatar}
+                        style={{ marginLeft: 0, fontSize: 12, padding: '7px 12px' }}
+                      >Remove</button>
+                    )}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={e => { onPickPhoto(e.target.files?.[0]); e.target.value = ''; }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="set-row" onClick={() => setShowSw(s => !s)} style={{ display: 'block', cursor: 'pointer' }}>
@@ -221,7 +333,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Account</div>
           <div className="set-group">
-            <div className="set-row danger" style={{ cursor: 'pointer' }} onClick={signOut}>
+            <div className="set-row danger" style={{ cursor: 'pointer' }} onClick={() => setConfirmSignOut(true)}>
               <span className="val">Sign out</span>
               <span className="car">›</span>
             </div>
@@ -229,6 +341,31 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
           <div className="auth-foot" style={{ marginTop: 22 }}>kinnekt v1.0</div>
         </div>
+
+        {confirmSignOut && (
+          <div className="sheet-overlay" onClick={() => setConfirmSignOut(false)}>
+            <div
+              className="sheet"
+              onClick={e => e.stopPropagation()}
+              style={{ maxWidth: 380, alignSelf: 'center', margin: 'auto 0', maxHeight: 'none' }}
+            >
+              <div className="sheet-hd">
+                <h3>Sign out?</h3>
+                <button className="close" onClick={() => setConfirmSignOut(false)}>Cancel</button>
+              </div>
+              <div className="sheet-body">
+                <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  You'll be signed out of <strong>Kinnekt</strong> on this device.
+                  You can sign back in any time with your email and password.
+                </div>
+              </div>
+              <div className="sheet-foot">
+                <button className="danger-btn" style={{ width: '100%' }} onClick={signOut}>Sign out</button>
+                <button className="fb-btn" onClick={() => setConfirmSignOut(false)}>Stay signed in</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
