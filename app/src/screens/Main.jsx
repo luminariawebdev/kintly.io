@@ -10,31 +10,35 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
-function KinnektLogo({ size = 40 }) {
+function KinnektLogo({ size = 54 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="Kinnekt">
       <defs>
+        <linearGradient id="kk-dot" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#4A6CFF" />
+          <stop offset="100%" stopColor="#5683FF" />
+        </linearGradient>
         <linearGradient id="kk-v" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#6A4DFF" />
-          <stop offset="100%" stopColor="#2D9CFF" />
+          <stop offset="0%" stopColor="#4A6CFF" />
+          <stop offset="100%" stopColor="#6FA9FF" />
         </linearGradient>
         <linearGradient id="kk-u" x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0%" stopColor="#4A6CFF" />
-          <stop offset="100%" stopColor="#6A4DFF" />
+          <stop offset="0%" stopColor="#5683FF" />
+          <stop offset="100%" stopColor="#85C0FF" />
         </linearGradient>
         <linearGradient id="kk-d" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="#3DD9C5" />
-          <stop offset="60%" stopColor="#FF9A78" />
-          <stop offset="100%" stopColor="#FF7A7A" />
+          <stop offset="45%" stopColor="#FFA88A" />
+          <stop offset="100%" stopColor="#FF7878" />
         </linearGradient>
       </defs>
-      {/* Dot (head of the i) */}
-      <circle cx="22" cy="12" r="6.5" fill="url(#kk-v)" />
-      {/* Vertical pill (body) */}
+      {/* Dot — the head of the i */}
+      <circle cx="22" cy="12" r="6.8" fill="url(#kk-dot)" />
+      {/* Vertical pill — body of the i, left stroke of the K */}
       <rect x="16" y="22" width="12" height="44" rx="6" fill="url(#kk-v)" />
-      {/* Upper-right diagonal of the K — blue/purple */}
+      {/* Upper-right diagonal — blue gradient */}
       <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-u)" transform="rotate(-45 22 44)" />
-      {/* Lower-right diagonal of the K — cyan to coral */}
+      {/* Lower-right diagonal — cyan → coral */}
       <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-d)" transform="rotate(45 22 44)" />
     </svg>
   );
@@ -1701,11 +1705,8 @@ export function MainApp({ profile, onSettings }) {
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-head">
             <div className="fb-brand-block">
-              <KinnektLogo size={42} />
-              <div className="fb-brand-text-stack">
-                <span className="fb-brand-text">Kinnekt</span>
-                <span className="fb-brand-slogan">Connect. Coordinate. Together.</span>
-              </div>
+              <KinnektLogo size={54} />
+              <span className="fb-brand-text">Kinnekt</span>
             </div>
             <div className="fb-stickyhead-right">
               <div className="fb-head-top">
