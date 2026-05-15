@@ -40,8 +40,34 @@ create table if not exists public.events (
   start_time text,
   end_time   text,
   color      text default 'coral',
+  attendees  uuid[] default '{}',
   created_at timestamptz default now()
 );
+
+create table if not exists public.notifications (
+  id         uuid default gen_random_uuid() primary key,
+  user_id    uuid references public.profiles on delete cascade not null,
+  group_id   uuid references public.groups on delete cascade not null,
+  type       text not null,
+  payload    jsonb default '{}',
+  read       boolean default false,
+  created_at timestamptz default now()
+);
+create index if not exists notifications_user_idx on public.notifications(user_id, created_at desc);
+
+alter table public.notifications enable row level security;
+
+create policy "notifications_select" on public.notifications
+  for select using (user_id = auth.uid());
+
+create policy "notifications_insert" on public.notifications
+  for insert with check (group_id = public.my_group_id());
+
+create policy "notifications_update" on public.notifications
+  for update using (user_id = auth.uid());
+
+create policy "notifications_delete" on public.notifications
+  for delete using (user_id = auth.uid());
 
 create table if not exists public.notes (
   id         uuid default gen_random_uuid() primary key,

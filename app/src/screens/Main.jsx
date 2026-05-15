@@ -559,7 +559,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
 }
 
 // ─── Add Event Modal ──────────────────────────────────────────────────────────
-function AddEventModal({ open, onClose, members, onSave, initialDate }) {
+function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
   const today = new Date().toISOString().slice(0, 10);
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -567,19 +567,25 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
   const [date, setDate] = React.useState(initialDate || today);
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
-  const [colorOwner, setColorOwner] = React.useState(null);
+  const [attendees, setAttendees] = React.useState([]);
   const [saving, setSaving] = React.useState(false);
 
-  // Each time the modal opens, reset date from initialDate (or today)
+  // Each time the modal opens, reset state
   React.useEffect(() => {
-    if (open) setDate(initialDate || today);
+    if (open) {
+      setDate(initialDate || today);
+      setAttendees([]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialDate]);
+
+  const toggleAttendee = (id) => {
+    setAttendees(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
 
   const save = async () => {
     if (!title.trim() || !date) return;
     setSaving(true);
-    const owner = members.find(m => m.id === colorOwner);
     await onSave({
       title: title.trim(),
       description: description.trim() || null,
@@ -587,9 +593,9 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
       date,
       start_time: startTime || null,
       end_time: endTime || null,
-      color: owner?.color || 'coral',
+      attendees,
     });
-    setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setColorOwner(null);
+    setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
     setSaving(false);
     onClose();
   };
@@ -639,14 +645,20 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
         </div>
       </div>
       <div className="field">
-        <label>Color from</label>
+        <label>Attendees <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <div className="assignee-picker">
           {members.map(m => (
-            <button key={m.id} className={'pick' + (colorOwner === m.id ? ' on' : '')} onClick={() => setColorOwner(m.id)}>
-              <Dot profile={m} /><span>{m.display_name}</span>
+            <button
+              key={m.id}
+              className={'pick' + (attendees.includes(m.id) ? ' on' : '')}
+              onClick={() => toggleAttendee(m.id)}
+              style={attendees.includes(m.id) ? { '--pick-c': getColor(m.color) } : {}}
+            >
+              <Dot profile={m} />
+              <span>{m.display_name}</span>
+              {m.id === myId && <span className="userbadge"><span className="you">you</span></span>}
             </button>
           ))}
-          <button className={'pick unassign' + (colorOwner === null ? ' on' : '')} onClick={() => setColorOwner(null)}>Default</button>
         </div>
       </div>
     </Modal>
@@ -1226,6 +1238,84 @@ function NoteDetailsModal({ open, note, tasks, getProfile, onClose, onDelete, on
   );
 }
 
+// ─── Notifications Menu ──────────────────────────────────────────────────────
+function NotificationsMenu({ notifications, onMarkOne, onMarkAll }) {
+  const unread = notifications.filter(n => !n.read).length;
+
+  const formatRelative = (iso) => {
+    const d = new Date(iso);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 172800) return 'yesterday';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const renderItem = (n) => {
+    const p = n.payload || {};
+    if (n.type === 'task_assigned') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color) }}>✓</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> assigned a task to you
+            </div>
+            <div className="fb-bell-sub">{p.task_title}{p.due_date ? ` · due ${formatDue(p.due_date)}` : ''}</div>
+          </div>
+        </>
+      );
+    }
+    if (n.type === 'event_invited') {
+      const d = p.event_date ? new Date(p.event_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color) }}>★</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> added you to an event
+            </div>
+            <div className="fb-bell-sub">{p.event_title}{d ? ` · ${d}` : ''}{p.start_time ? ` ${fmtTime(p.start_time)}` : ''}</div>
+          </div>
+        </>
+      );
+    }
+    return (
+      <div style={{ flex: 1 }}>
+        <div className="fb-bell-text">{p.text || 'Notification'}</div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="fb-bell-menu" role="menu">
+      <div className="fb-bell-hd">
+        <span>Notifications</span>
+        {unread > 0 && (
+          <button className="fb-link" onClick={onMarkAll} style={{ fontSize: 11 }}>Mark all read</button>
+        )}
+      </div>
+      <div className="fb-bell-list">
+        {notifications.length === 0 ? (
+          <div className="fb-bell-empty">No notifications yet</div>
+        ) : (
+          notifications.slice(0, 20).map(n => (
+            <div
+              key={n.id}
+              className={'fb-bell-item' + (n.read ? '' : ' unread')}
+              onClick={() => !n.read && onMarkOne(n.id)}
+            >
+              {renderItem(n)}
+              <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export function MainApp({ profile, onSettings }) {
   const [tab, setTab] = React.useState('notes');
@@ -1253,6 +1343,9 @@ export function MainApp({ profile, onSettings }) {
   const [tasks, setTasks] = React.useState([]);
   const [events, setEvents] = React.useState([]);
   const [notes, setNotes] = React.useState([]);
+  const [notifications, setNotifications] = React.useState([]);
+  const [bellOpen, setBellOpen] = React.useState(false);
+  const bellMenuRef = React.useRef(null);
   const [loading, setLoading] = React.useState(true);
   const scrollRef = React.useRef(null);
 
@@ -1270,7 +1363,52 @@ export function MainApp({ profile, onSettings }) {
       setNotes(n.data || []);
       setLoading(false);
     });
-  }, [profile?.group_id]);
+
+    // Load notifications (silently no-op if table missing)
+    supabase.from('notifications')
+      .select('*')
+      .eq('user_id', profile.id)
+      .order('created_at', { ascending: false })
+      .limit(50)
+      .then(({ data }) => { if (data) setNotifications(data); });
+
+    // Realtime subscription to new notifications for this user
+    const channel = supabase
+      .channel('kinnekt-notifications-' + profile.id)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${profile.id}`,
+      }, ({ new: row }) => {
+        setNotifications(prev => [row, ...prev.filter(n => n.id !== row.id)]);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.group_id, profile?.id]);
+
+  // Close bell menu on outside click
+  React.useEffect(() => {
+    if (!bellOpen) return;
+    const onDocClick = (e) => {
+      if (!bellMenuRef.current) return;
+      if (!bellMenuRef.current.contains(e.target)) setBellOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [bellOpen]);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+  const markAllRead = async () => {
+    const unread = notifications.filter(n => !n.read).map(n => n.id);
+    if (unread.length === 0) return;
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    await supabase.from('notifications').update({ read: true }).in('id', unread);
+  };
+  const markOneRead = async (id) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    await supabase.from('notifications').update({ read: true }).eq('id', id);
+  };
 
   const getProfile = id => members.find(m => m.id === id);
 
@@ -1280,9 +1418,32 @@ export function MainApp({ profile, onSettings }) {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !completed } : t));
     await supabase.from('tasks').update({ completed: !completed }).eq('id', id);
   };
+  const notify = async (targetIds, type, payload) => {
+    if (!targetIds || targetIds.length === 0) return;
+    const rows = targetIds.map(uid => ({
+      user_id: uid,
+      group_id: profile.group_id,
+      type,
+      payload,
+    }));
+    // Silently ignore if notifications table doesn't exist yet
+    try { await supabase.from('notifications').insert(rows); } catch { /* migration not run */ }
+  };
+
   const addTask = async (data) => {
     const { data: row } = await supabase.from('tasks').insert({ group_id: profile.group_id, created_by: profile.id, ...data }).select().single();
-    if (row) setTasks(prev => [row, ...prev]);
+    if (row) {
+      setTasks(prev => [row, ...prev]);
+      if (row.assigned_to && row.assigned_to !== profile.id) {
+        notify([row.assigned_to], 'task_assigned', {
+          task_id: row.id,
+          task_title: row.title,
+          due_date: row.due_date,
+          by_name: profile.display_name,
+          by_color: profile.color,
+        });
+      }
+    }
   };
   const deleteTask = async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
@@ -1291,8 +1452,31 @@ export function MainApp({ profile, onSettings }) {
 
   // Event CRUD
   const addEvent = async (data) => {
-    const { data: row } = await supabase.from('events').insert({ group_id: profile.group_id, created_by: profile.id, ...data }).select().single();
-    if (row) setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
+    const payload = {
+      group_id: profile.group_id,
+      created_by: profile.id,
+      color: profile.color || 'coral',
+      ...data,
+    };
+    // Try insert with attendees, fall back without if column missing
+    let { data: row, error } = await supabase.from('events').insert(payload).select().single();
+    if (error && /attendees/.test(error.message || '')) {
+      const { attendees, ...rest } = payload;
+      ({ data: row, error } = await supabase.from('events').insert(rest).select().single());
+    }
+    if (error || !row) return;
+    setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
+    const attendeeIds = (data.attendees || []).filter(id => id !== profile.id);
+    if (attendeeIds.length > 0) {
+      notify(attendeeIds, 'event_invited', {
+        event_id: row.id,
+        event_title: row.title,
+        event_date: row.date,
+        start_time: row.start_time,
+        by_name: profile.display_name,
+        by_color: profile.color,
+      });
+    }
   };
   const deleteEvent = async (id) => {
     setEvents(prev => prev.filter(e => e.id !== id));
@@ -1419,14 +1603,38 @@ export function MainApp({ profile, onSettings }) {
               </div>
             </div>
             <div className="fb-stickyhead-right">
-              <button
-                className="fb-prof"
-                style={{ background: getColor(profile?.color) }}
-                onClick={onSettings}
-                title="Settings"
-              >
-                {getInitial(profile?.display_name)}
-              </button>
+              <div className="fb-head-top">
+                <div className="fb-bell-wrap" ref={bellMenuRef}>
+                  <button
+                    className={'fb-bell' + (unreadCount > 0 ? ' has-unread' : '')}
+                    onClick={() => setBellOpen(o => !o)}
+                    title="Notifications"
+                    aria-label="Notifications"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                    </svg>
+                    {unreadCount > 0 && <span className="fb-bell-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+                  </button>
+                  {bellOpen && (
+                    <NotificationsMenu
+                      notifications={notifications}
+                      onClose={() => setBellOpen(false)}
+                      onMarkOne={markOneRead}
+                      onMarkAll={markAllRead}
+                    />
+                  )}
+                </div>
+                <button
+                  className="fb-prof"
+                  style={{ background: getColor(profile?.color) }}
+                  onClick={onSettings}
+                  title="Settings"
+                >
+                  {getInitial(profile?.display_name)}
+                </button>
+              </div>
               <div className="fb-grp-wrap" ref={groupMenuRef}>
                 <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
                   <Dot profile={profile} />
@@ -1467,7 +1675,7 @@ export function MainApp({ profile, onSettings }) {
       </div>
 
       <AddTaskModal open={modal === 'task'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addTask} />
-      <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} onSave={addEvent} initialDate={eventInitDate} />
+      <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addEvent} initialDate={eventInitDate} />
       <AddNoteModal open={modal === 'note'} onClose={() => setModal(null)} profile={profile} members={members} onSave={addNote} />
       <DayDetailsModal
         open={!!dayDetailsDate}
