@@ -82,7 +82,7 @@ export function App() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: '#FFCF03',
+      background: 'linear-gradient(135deg, #E0E8FF 0%, #ECE5FF 50%, #DDEEFF 100%)',
       padding: 24,
     }}>
       <IOSDevice width={FRAME_W} height={FRAME_H}>
