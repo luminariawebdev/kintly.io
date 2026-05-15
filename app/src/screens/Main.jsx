@@ -1169,22 +1169,47 @@ export function MainApp({ profile, onSettings }) {
 
   // Note CRUD
   const addNote = async (content, taskPayload) => {
-    const { data: noteRow } = await supabase.from('notes').insert({ group_id: profile.group_id, created_by: profile.id, content }).select().single();
-    if (!noteRow) return;
+    const { data: noteRow, error: nErr } = await supabase
+      .from('notes')
+      .insert({ group_id: profile.group_id, created_by: profile.id, content })
+      .select()
+      .single();
+    if (nErr || !noteRow) {
+      alert('Could not save note: ' + (nErr?.message || 'unknown error'));
+      return;
+    }
     setNotes(prev => [noteRow, ...prev]);
+
     if (taskPayload && taskPayload.title) {
-      const { data: taskRow } = await supabase
+      const basePayload = {
+        group_id: profile.group_id,
+        created_by: profile.id,
+        assigned_to: taskPayload.assigned_to,
+        due_date: taskPayload.due_date,
+        title: taskPayload.title,
+      };
+
+      // Try with note_id (proper linkage). If the column doesn't exist
+      // yet (migration not run), retry without it so the task still
+      // gets created.
+      let { data: taskRow, error: tErr } = await supabase
         .from('tasks')
-        .insert({
-          group_id: profile.group_id,
-          created_by: profile.id,
-          assigned_to: taskPayload.assigned_to,
-          due_date: taskPayload.due_date,
-          title: taskPayload.title,
-          note_id: noteRow.id,
-        })
+        .insert({ ...basePayload, note_id: noteRow.id })
         .select()
         .single();
+
+      if (tErr && /note_id/.test(tErr.message || '')) {
+        ({ data: taskRow, error: tErr } = await supabase
+          .from('tasks')
+          .insert(basePayload)
+          .select()
+          .single());
+      }
+
+      if (tErr) {
+        alert('Note saved but task could not be created: ' + tErr.message);
+        return;
+      }
       if (taskRow) setTasks(prev => [taskRow, ...prev]);
     }
   };
