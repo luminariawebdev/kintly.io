@@ -1494,7 +1494,7 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
 }
 
 // ─── Notifications Menu ──────────────────────────────────────────────────────
-function NotificationsMenu({ notifications, onMarkOne, onMarkAll }) {
+function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent }) {
   const unread = notifications.filter(n => !n.read).length;
 
   const formatRelative = (iso) => {
@@ -1555,16 +1555,25 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll }) {
         {notifications.length === 0 ? (
           <div className="fb-bell-empty">No notifications yet</div>
         ) : (
-          notifications.slice(0, 20).map(n => (
-            <div
-              key={n.id}
-              className={'fb-bell-item' + (n.read ? '' : ' unread')}
-              onClick={() => !n.read && onMarkOne(n.id)}
-            >
-              {renderItem(n)}
-              <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
-            </div>
-          ))
+          notifications.slice(0, 20).map(n => {
+            const handleClick = () => {
+              if (!n.read) onMarkOne(n.id);
+              const id = n.payload?.task_id || n.payload?.event_id;
+              if (!id) return;
+              if (n.type === 'task_assigned' && onOpenTask) onOpenTask(id);
+              else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
+            };
+            return (
+              <div
+                key={n.id}
+                className={'fb-bell-item' + (n.read ? '' : ' unread')}
+                onClick={handleClick}
+              >
+                {renderItem(n)}
+                <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
+              </div>
+            );
+          })
         )}
       </div>
     </div>
@@ -1904,6 +1913,8 @@ export function MainApp({ profile, onSettings }) {
                       onClose={() => setBellOpen(false)}
                       onMarkOne={markOneRead}
                       onMarkAll={markAllRead}
+                      onOpenTask={(id) => { setBellOpen(false); setDetailTaskId(id); }}
+                      onOpenEvent={(id) => { setBellOpen(false); setDetailEventId(id); }}
                     />
                   )}
                 </div>
