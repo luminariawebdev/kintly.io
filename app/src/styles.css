@@ -570,7 +570,12 @@ html { overscroll-behavior-x: none; }
   box-shadow: var(--shadow-soft);
   transition: all 0.25s var(--ease);
 }
-.upcoming-row:hover { transform: translateY(-1px); box-shadow: var(--shadow-medium); }
+.upcoming-row { cursor: pointer; }
+.upcoming-row:hover {
+  transform: translateY(-4px) scale(1.015);
+  box-shadow: var(--shadow-large);
+  border-color: var(--hover-border);
+}
 .upcoming-row .when {
   text-align: center;
   font-family: 'JetBrains Mono', monospace;
@@ -1088,6 +1093,33 @@ html { overscroll-behavior-x: none; }
 }
 .copy-btn:hover { transform: translateY(-1px); background: var(--hover-tint); border-color: var(--hover-border); box-shadow: var(--shadow-medium); }
 .copy-btn:active { transform: translateY(0); }
+
+/* Danger button (Delete event / task / note) — red hover shader */
+.danger-btn {
+  flex-shrink: 0;
+  padding: 9px 18px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #B23030;
+  background: rgba(178, 48, 48, 0.06);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid #B23030;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  transition: all 0.25s var(--ease);
+}
+.danger-btn:hover {
+  background: rgba(178, 48, 48, 0.16);
+  border-color: #8E1F1F;
+  color: #8E1F1F;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(178, 48, 48, 0.25);
+}
+.danger-btn:active { transform: translateY(0); }
 
 /* ── Notifications bell + menu ───────────────────────────────── */
 .fb-head-top {

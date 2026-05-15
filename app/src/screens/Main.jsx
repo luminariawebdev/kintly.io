@@ -841,8 +841,7 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
       <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
         <button
           onClick={() => { onDelete(event.id); onClose(); }}
-          className="copy-btn"
-          style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+          className="danger-btn"
         >Delete event</button>
       </div>
     </Modal>
@@ -1196,8 +1195,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
           <button
             onClick={() => { onDelete(task.id); onClose(); }}
-            className="copy-btn"
-            style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+            className="danger-btn"
           >Delete task</button>
         </div>
       )}
@@ -1296,8 +1294,7 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
       <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
         <button
           onClick={() => { onDelete(note.id); onClose(); }}
-          className="copy-btn"
-          style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+          className="danger-btn"
         >Delete note</button>
       </div>
     </Modal>
