@@ -141,8 +141,9 @@ function buildCalendar(year, month) {
 function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
   const color = getColor(assignee?.color);
   const overdue = !task.completed && dueDateOverdue(task.due_date);
-  // Only the assignee can delete a task. Unassigned tasks can be removed by anyone in the group.
-  const canDelete = !task.assigned_to || task.assigned_to === myId;
+  // Only the assignee can check off or delete a task.
+  // Unassigned tasks can be acted on by anyone in the group.
+  const canActOnTask = !task.assigned_to || task.assigned_to === myId;
   return (
     <div
       className={'trow' + (task.completed ? ' done' : '')}
@@ -150,8 +151,18 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
       onClick={onClick}
     >
       <button
-        style={{ width: 22, height: 22, borderRadius: '50%', border: `2.5px solid ${color}`, background: task.completed ? color : 'transparent', cursor: 'pointer', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        disabled={!canActOnTask}
+        style={{
+          width: 22, height: 22, borderRadius: '50%',
+          border: `2.5px solid ${color}`,
+          background: task.completed ? color : 'transparent',
+          cursor: canActOnTask ? 'pointer' : 'not-allowed',
+          opacity: canActOnTask ? 1 : 0.45,
+          flexShrink: 0, marginTop: 1,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+        }}
+        onClick={(e) => { e.stopPropagation(); if (canActOnTask) onToggle(); }}
+        title={canActOnTask ? '' : 'Only the assignee can complete this task'}
       >
         {task.completed && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
       </button>
@@ -163,7 +174,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
           </div>
         )}
       </div>
-      {canDelete && (
+      {canActOnTask && (
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
           style={{ opacity: 0.25, fontSize: 16, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}
@@ -1069,6 +1080,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   const creator = getProfile(task.created_by);
   const color = getColor(assignee?.color);
   const overdue = !task.completed && dueDateOverdue(task.due_date);
+  const canActOnTask = !task.assigned_to || task.assigned_to === myId;
   const dueLabel = task.due_date ? formatDue(task.due_date) : null;
   const dueLongLabel = task.due_date
     ? new Date(task.due_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
@@ -1087,12 +1099,16 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
       }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <button
-            onClick={() => onToggle(task.id, task.completed)}
+            disabled={!canActOnTask}
+            onClick={() => { if (canActOnTask) onToggle(task.id, task.completed); }}
+            title={canActOnTask ? '' : 'Only the assignee can complete this task'}
             style={{
               width: 28, height: 28, borderRadius: '50%',
               border: `3px solid ${color}`,
               background: task.completed ? color : 'transparent',
-              cursor: 'pointer', flexShrink: 0, marginTop: 2,
+              cursor: canActOnTask ? 'pointer' : 'not-allowed',
+              opacity: canActOnTask ? 1 : 0.45,
+              flexShrink: 0, marginTop: 2,
               display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
             }}
           >
@@ -1185,7 +1201,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   );
 }
 
-function NoteDetailsModal({ open, note, tasks, getProfile, onClose, onDelete, onToggleTask }) {
+function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDelete, onToggleTask }) {
   if (!open || !note) return null;
   const author = getProfile(note.created_by);
   const when = new Date(note.created_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -1223,6 +1239,7 @@ function NoteDetailsModal({ open, note, tasks, getProfile, onClose, onDelete, on
               const assn = getProfile(t.assigned_to);
               const dueLabel = formatDue(t.due_date);
               const dueColor = dueDateOverdue(t.due_date) && !t.completed ? '#E27457' : 'var(--mute)';
+              const taskActionable = !t.assigned_to || t.assigned_to === myId;
               return (
                 <div key={t.id} style={{
                   display: 'flex', alignItems: 'flex-start', gap: 10,
@@ -1232,12 +1249,16 @@ function NoteDetailsModal({ open, note, tasks, getProfile, onClose, onDelete, on
                   borderLeft: `6px solid ${getColor(assn?.color)}`,
                 }}>
                   <button
-                    onClick={() => onToggleTask(t.id, t.completed)}
+                    disabled={!taskActionable}
+                    onClick={() => { if (taskActionable) onToggleTask(t.id, t.completed); }}
+                    title={taskActionable ? '' : 'Only the assignee can complete this task'}
                     style={{
                       width: 22, height: 22, borderRadius: '50%',
                       border: `2.5px solid ${getColor(assn?.color)}`,
                       background: t.completed ? getColor(assn?.color) : 'transparent',
-                      cursor: 'pointer', flexShrink: 0, marginTop: 1,
+                      cursor: taskActionable ? 'pointer' : 'not-allowed',
+                      opacity: taskActionable ? 1 : 0.45,
+                      flexShrink: 0, marginTop: 1,
                       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
                     }}
                   >
@@ -1792,6 +1813,7 @@ export function MainApp({ profile, onSettings }) {
         open={!!detailNoteId}
         note={notes.find(n => n.id === detailNoteId) || null}
         tasks={tasks}
+        myId={profile?.id}
         getProfile={getProfile}
         onClose={() => setDetailNoteId(null)}
         onDelete={(id) => deleteNote(id)}
