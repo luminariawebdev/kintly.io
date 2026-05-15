@@ -1411,10 +1411,7 @@ export function MainApp({ profile, onSettings }) {
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-row">
-            <div className="fb-brand">
-              <KinnektLogo size={48} />
-              <span className="fb-brand-text">Kinnekt</span>
-            </div>
+            <span />
             <div className="fb-grp-wrap" ref={groupMenuRef}>
               <button className="fb-grp-pill" onClick={() => setGroupMenuOpen(o => !o)} aria-expanded={groupMenuOpen}>
                 <Dot profile={profile} />
