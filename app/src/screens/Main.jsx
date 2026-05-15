@@ -305,7 +305,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDelete, onShowMonth, onShowEvent }) {
+function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick, onDelete, onShowMonth, onShowEvent }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
@@ -430,10 +430,13 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
                       {p && <><Dot profile={p} /><span>{p.display_name}</span></>}
                     </div>
                   </div>
-                  <button
-                    onClick={(ev) => { ev.stopPropagation(); onDelete(e.id); }}
-                    style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                  >×</button>
+                  {e.created_by === myId && (
+                    <button
+                      onClick={(ev) => { ev.stopPropagation(); onDelete(e.id); }}
+                      style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+                      title="Delete event"
+                    >×</button>
+                  )}
                 </div>
               );
             })}
@@ -445,7 +448,7 @@ function CalendarSection({ events, members, getProfile, onAdd, onDayClick, onDel
 }
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
-function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember }) {
+function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember }) {
   const sorted = [...notes].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || new Date(b.created_at) - new Date(a.created_at));
 
   return (
@@ -495,10 +498,13 @@ function NotesSection({ notes, getProfile, onAdd, onDelete, onTogglePin, onOpenN
                   style={{ fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', opacity: n.pinned ? 0.8 : 0.25 }}
                   title={n.pinned ? 'Unpin' : 'Pin'}
                 >📌</button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDelete(n.id); }}
-                  style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
-                >×</button>
+                {n.created_by === myId && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDelete(n.id); }}
+                    style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
+                    title="Delete note"
+                  >×</button>
+                )}
               </div>
             </div>
           );
@@ -700,7 +706,7 @@ function fmtTime(t) {
   return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
 }
 
-function EventCard({ event, getProfile, onDelete, onClick }) {
+function EventCard({ event, getProfile, myId, onDelete, onClick }) {
   const p = getProfile(event.created_by);
   const color = getColor(event.color || p?.color);
   const timeStr = event.start_time
@@ -740,17 +746,19 @@ function EventCard({ event, getProfile, onDelete, onClick }) {
           </div>
         )}
       </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(event.id); }}
-        style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-        title="Delete event"
-      >×</button>
+      {event.created_by === myId && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(event.id); }}
+          style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+          title="Delete event"
+        >×</button>
+      )}
     </div>
   );
 }
 
 // ─── Event Details Modal (single event) ───────────────────────────────────────
-function EventDetailsModal({ open, event, getProfile, onClose, onDelete, onShowMember }) {
+function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, onShowMember }) {
   if (!open || !event) return null;
   const p = getProfile(event.created_by);
   const color = getColor(event.color || p?.color);
@@ -857,17 +865,19 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete, onShowM
         )}
       </div>
 
-      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
-        <button
-          onClick={() => { onDelete(event.id); onClose(); }}
-          className="danger-btn"
-        >Delete event</button>
-      </div>
+      {event.created_by === myId && (
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => { onDelete(event.id); onClose(); }}
+            className="danger-btn"
+          >Delete event</button>
+        </div>
+      )}
     </Modal>
   );
 }
 
-function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, onDelete, onShowEvent }) {
+function DayDetailsModal({ open, date, events, getProfile, myId, onClose, onAddEvent, onDelete, onShowEvent }) {
   if (!open || !date) return null;
   const [y, m, d] = date.split('-').map(Number);
   const jsDate = new Date(y, m - 1, d);
@@ -895,6 +905,7 @@ function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, 
               key={e.id}
               event={e}
               getProfile={getProfile}
+              myId={myId}
               onDelete={onDelete}
               onClick={onShowEvent ? () => onShowEvent(e) : undefined}
             />
@@ -906,7 +917,7 @@ function DayDetailsModal({ open, date, events, getProfile, onClose, onAddEvent, 
 }
 
 // ─── Month Events Modal ───────────────────────────────────────────────────────
-function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, onDelete, onShowEvent }) {
+function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, myId, onDelete, onShowEvent }) {
   if (!open) return null;
 
   // Group events by ISO date and sort dates ascending
@@ -937,6 +948,7 @@ function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, 
                       key={e.id}
                       event={e}
                       getProfile={getProfile}
+                      myId={myId}
                       onDelete={onDelete}
                       onClick={onShowEvent ? () => onShowEvent(e) : undefined}
                     />
@@ -1483,12 +1495,14 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
         )}
       </div>
 
-      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
-        <button
-          onClick={() => { onDelete(note.id); onClose(); }}
-          className="danger-btn"
-        >Delete note</button>
-      </div>
+      {note.created_by === myId && (
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => { onDelete(note.id); onClose(); }}
+            className="danger-btn"
+          >Delete note</button>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -1933,12 +1947,13 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} />
+          <NotesSection notes={notes} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} />
           <CalendarSection
             events={events}
             members={members}
             getProfile={getProfile}
+            myId={profile?.id}
             onAdd={() => { setEventInitDate(null); setModal('event'); }}
             onDayClick={(iso) => setDayDetailsDate(iso)}
             onDelete={deleteEvent}
@@ -1956,6 +1971,7 @@ export function MainApp({ profile, onSettings }) {
         date={dayDetailsDate}
         events={events}
         getProfile={getProfile}
+        myId={profile?.id}
         onClose={() => setDayDetailsDate(null)}
         onAddEvent={() => { setEventInitDate(dayDetailsDate); setDayDetailsDate(null); setModal('event'); }}
         onDelete={(id) => deleteEvent(id)}
@@ -1968,6 +1984,7 @@ export function MainApp({ profile, onSettings }) {
         year={monthModalData?.year}
         events={monthModalData?.events || []}
         getProfile={getProfile}
+        myId={profile?.id}
         onDelete={(id) => { deleteEvent(id); setMonthModalData(d => d ? { ...d, events: d.events.filter(e => e.id !== id) } : d); }}
         onShowEvent={(e) => setDetailEventId(e.id)}
       />
@@ -1975,6 +1992,7 @@ export function MainApp({ profile, onSettings }) {
         open={!!detailEventId}
         event={events.find(e => e.id === detailEventId) || null}
         getProfile={getProfile}
+        myId={profile?.id}
         onClose={() => setDetailEventId(null)}
         onDelete={(id) => deleteEvent(id)}
         onShowMember={(p) => { setDetailEventId(null); setDetailMemberId(p.id); }}
