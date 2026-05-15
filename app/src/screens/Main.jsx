@@ -504,6 +504,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
 function AddEventModal({ open, onClose, members, onSave, initialDate }) {
   const today = new Date().toISOString().slice(0, 10);
   const [title, setTitle] = React.useState('');
+  const [description, setDescription] = React.useState('');
   const [date, setDate] = React.useState(initialDate || today);
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
@@ -520,8 +521,15 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
     if (!title.trim() || !date) return;
     setSaving(true);
     const owner = members.find(m => m.id === colorOwner);
-    await onSave({ title: title.trim(), date, start_time: startTime || null, end_time: endTime || null, color: owner?.color || 'coral' });
-    setTitle(''); setDate(today); setStartTime(''); setEndTime(''); setColorOwner(null);
+    await onSave({
+      title: title.trim(),
+      description: description.trim() || null,
+      date,
+      start_time: startTime || null,
+      end_time: endTime || null,
+      color: owner?.color || 'coral',
+    });
+    setTitle(''); setDescription(''); setDate(today); setStartTime(''); setEndTime(''); setColorOwner(null);
     setSaving(false);
     onClose();
   };
@@ -532,6 +540,20 @@ function AddEventModal({ open, onClose, members, onSave, initialDate }) {
       <div className="field">
         <label>Title</label>
         <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice" />
+      </div>
+      <div className="field">
+        <label>Description <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <textarea
+          value={description}
+          onChange={e => setDescription(e.target.value.slice(0, 500))}
+          placeholder="Address, things to bring, notes…"
+          rows={3}
+          maxLength={500}
+          style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule, #141414)', borderRadius: 8, background: 'var(--cream, #FFFEF7)', color: 'var(--ink, #141414)', outline: 'none', boxSizing: 'border-box' }}
+        />
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--mute)', textAlign: 'right', marginTop: 4 }}>
+          {description.length} / 500
+        </div>
       </div>
       <div className="field">
         <label>Date</label>
@@ -596,6 +618,11 @@ function EventCard({ event, getProfile, onDelete }) {
             </>
           )}
         </div>
+        {event.description && (
+          <div style={{ fontSize: 13, color: 'var(--ink)', marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+            {event.description}
+          </div>
+        )}
       </div>
       <button
         onClick={() => onDelete(event.id)}
