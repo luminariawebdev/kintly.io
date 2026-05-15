@@ -138,14 +138,18 @@ function buildCalendar(year, month) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, onToggle, onDelete }) {
+function TaskRow({ task, assignee, onToggle, onDelete, onClick }) {
   const color = getColor(assignee?.color);
   const overdue = !task.completed && dueDateOverdue(task.due_date);
   return (
-    <div className={'trow' + (task.completed ? ' done' : '')} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--rule)' }}>
+    <div
+      className={'trow' + (task.completed ? ' done' : '')}
+      style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--rule)', cursor: onClick ? 'pointer' : 'default' }}
+      onClick={onClick}
+    >
       <button
         style={{ width: 22, height: 22, borderRadius: '50%', border: `2.5px solid ${color}`, background: task.completed ? color : 'transparent', cursor: 'pointer', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-        onClick={onToggle}
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
       >
         {task.completed && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
       </button>
@@ -157,13 +161,16 @@ function TaskRow({ task, assignee, onToggle, onDelete }) {
           </div>
         )}
       </div>
-      <button onClick={onDelete} style={{ opacity: 0.25, fontSize: 16, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}>×</button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        style={{ opacity: 0.25, fontSize: 16, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}
+      >×</button>
     </div>
   );
 }
 
 // ─── Tasks Section ────────────────────────────────────────────────────────────
-function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete }) {
+function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete, onShowTask }) {
   const [filter, setFilter] = React.useState('today');
   const [showDone, setShowDone] = React.useState(false);
 
@@ -232,7 +239,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
               </div>
               <div className="tasklist">
                 {g.items.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={g.member} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                  <TaskRow key={t.id} task={t} assignee={g.member} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
                 ))}
               </div>
             </div>
@@ -245,7 +252,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
               </div>
               <div className="tasklist">
                 {unassigned.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={null} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                  <TaskRow key={t.id} task={t} assignee={null} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
                 ))}
               </div>
             </div>
@@ -265,7 +272,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
               {showDone && (
                 <div className="tasklist">
                   {doneItems.map(t => (
-                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} />
+                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
                   ))}
                 </div>
               )}
@@ -1004,6 +1011,127 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
 }
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
+// ─── Task Details Modal ───────────────────────────────────────────────────────
+function TaskDetailsModal({ open, task, notes, getProfile, onClose, onToggle, onDelete, onOpenNote }) {
+  if (!open || !task) return null;
+  const assignee = getProfile(task.assigned_to);
+  const creator = getProfile(task.created_by);
+  const color = getColor(assignee?.color);
+  const overdue = !task.completed && dueDateOverdue(task.due_date);
+  const dueLabel = task.due_date ? formatDue(task.due_date) : null;
+  const dueLongLabel = task.due_date
+    ? new Date(task.due_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    : null;
+  const createdAt = task.created_at
+    ? new Date(task.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null;
+  const linkedNote = task.note_id ? (notes || []).find(n => n.id === task.note_id) : null;
+
+  return (
+    <Modal open={open} onClose={onClose} title="Task">
+      <div style={{
+        borderLeft: `6px solid ${color}`,
+        padding: '4px 0 4px 14px',
+        marginBottom: 14,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <button
+            onClick={() => onToggle(task.id, task.completed)}
+            style={{
+              width: 28, height: 28, borderRadius: '50%',
+              border: `3px solid ${color}`,
+              background: task.completed ? color : 'transparent',
+              cursor: 'pointer', flexShrink: 0, marginTop: 2,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+            }}
+          >
+            {task.completed && <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, lineHeight: 1 }}>✓</span>}
+          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: 22, fontWeight: 700, lineHeight: 1.2,
+              textDecoration: task.completed ? 'line-through' : 'none',
+              opacity: task.completed ? 0.55 : 1,
+              wordBreak: 'break-word',
+            }}>{task.title}</div>
+            {task.completed && (
+              <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--mute)', marginTop: 6 }}>
+                Completed
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="field" style={{ marginBottom: 14 }}>
+        <label>Assigned to</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          {assignee ? (
+            <>
+              <Dot profile={assignee} />
+              <span style={{ fontWeight: 600 }}>{assignee.display_name}</span>
+            </>
+          ) : (
+            <span style={{ opacity: 0.55, fontStyle: 'italic' }}>Unassigned</span>
+          )}
+        </div>
+      </div>
+
+      {dueLabel && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Due</label>
+          <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+              textTransform: 'uppercase', letterSpacing: '0.06em',
+              color: overdue ? '#E27457' : 'var(--mute)',
+              fontWeight: 600,
+            }}>{dueLabel}</span>
+            {dueLongLabel && <span style={{ color: 'var(--mute)' }}>· {dueLongLabel}</span>}
+          </div>
+        </div>
+      )}
+
+      {linkedNote && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>From note</label>
+          <div
+            onClick={() => onOpenNote?.(linkedNote)}
+            style={{
+              padding: '10px 12px',
+              background: 'rgba(20, 20, 20, 0.04)',
+              border: '1px solid rgba(20, 20, 20, 0.15)',
+              borderRadius: 8,
+              fontSize: 13, lineHeight: 1.4, whiteSpace: 'pre-wrap',
+              maxHeight: 110, overflow: 'auto',
+              cursor: onOpenNote ? 'pointer' : 'default',
+            }}
+          >
+            {linkedNote.content}
+          </div>
+        </div>
+      )}
+
+      <div className="field" style={{ marginBottom: 0 }}>
+        <label>Created by</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          {creator && <Dot profile={creator} />}
+          <span>{creator?.display_name || 'Unknown'}</span>
+          {createdAt && <span style={{ marginLeft: 'auto', fontSize: 11, fontStyle: 'italic', color: 'var(--mute)' }}>{createdAt}</span>}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={() => { onDelete(task.id); onClose(); }}
+          className="copy-btn"
+          style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+        >Delete task</button>
+      </div>
+    </Modal>
+  );
+}
+
 function NoteDetailsModal({ open, note, tasks, getProfile, onClose, onDelete, onToggleTask }) {
   if (!open || !note) return null;
   const author = getProfile(note.created_by);
@@ -1107,6 +1235,7 @@ export function MainApp({ profile, onSettings }) {
   const [monthModalData, setMonthModalData] = React.useState(null);
   const [detailEventId, setDetailEventId] = React.useState(null);
   const [detailNoteId, setDetailNoteId] = React.useState(null);
+  const [detailTaskId, setDetailTaskId] = React.useState(null);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
 
@@ -1318,7 +1447,7 @@ export function MainApp({ profile, onSettings }) {
 
         <div className="fb-sec-wrap">
           <NotesSection notes={notes} getProfile={getProfile} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} />
           <CalendarSection
             events={events}
             members={members}
@@ -1370,6 +1499,16 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDetailNoteId(null)}
         onDelete={(id) => deleteNote(id)}
         onToggleTask={toggleTask}
+      />
+      <TaskDetailsModal
+        open={!!detailTaskId}
+        task={tasks.find(t => t.id === detailTaskId) || null}
+        notes={notes}
+        getProfile={getProfile}
+        onClose={() => setDetailTaskId(null)}
+        onToggle={toggleTask}
+        onDelete={deleteTask}
+        onOpenNote={(n) => { setDetailTaskId(null); setDetailNoteId(n.id); }}
       />
     </div>
   );
