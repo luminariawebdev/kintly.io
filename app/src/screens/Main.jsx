@@ -776,9 +776,17 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
         </div>
       )}
 
-      {Array.isArray(event.attendees) && event.attendees.length > 0 && (
-        <div className="field" style={{ marginBottom: 14 }}>
-          <label>Attendees</label>
+      <div className="field" style={{ marginBottom: 14 }}>
+        <label>Created by</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          {p && <Dot profile={p} />}
+          <span>{p?.display_name || 'Unknown'}</span>
+        </div>
+      </div>
+
+      <div className="field" style={{ marginBottom: 0 }}>
+        <label>Attendees</label>
+        {Array.isArray(event.attendees) && event.attendees.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {event.attendees.map(uid => {
               const ap = getProfile(uid);
@@ -803,15 +811,11 @@ function EventDetailsModal({ open, event, getProfile, onClose, onDelete }) {
               );
             })}
           </div>
-        </div>
-      )}
-
-      <div className="field" style={{ marginBottom: 0 }}>
-        <label>Created by</label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          {p && <Dot profile={p} />}
-          <span>{p?.display_name || 'Unknown'}</span>
-        </div>
+        ) : (
+          <div style={{ fontSize: 13, color: 'var(--mute)', fontStyle: 'italic' }}>
+            No attendees added.
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
@@ -1500,6 +1504,7 @@ export function MainApp({ profile, onSettings }) {
 
     // Optional columns that may not exist in older schemas — strip them on error.
     const optionalCols = ['description', 'location', 'attendees'];
+    const droppedCols = [];
 
     let row = null;
     let error = null;
@@ -1514,6 +1519,7 @@ export function MainApp({ profile, onSettings }) {
           const { [col]: _, ...next } = payload;
           payload = next;
           stripped = col;
+          droppedCols.push(col);
           break;
         }
       }
@@ -1523,6 +1529,17 @@ export function MainApp({ profile, onSettings }) {
     if (error || !row) {
       alert('Could not save event: ' + (error?.message || 'no row returned'));
       return;
+    }
+
+    // Warn loudly if attendees couldn't be saved — almost always means the
+    // SQL migration hasn't been run on the Supabase database.
+    if (droppedCols.includes('attendees') && attendees.length > 0) {
+      alert(
+        'Event saved, but attendees could NOT be stored.\n\n' +
+        'The "attendees" column is missing from your events table.\n' +
+        'Run this in your Supabase SQL Editor:\n\n' +
+        'alter table public.events add column if not exists attendees uuid[] default \'{}\';'
+      );
     }
 
     setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
