@@ -138,9 +138,11 @@ function buildCalendar(year, month) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, onToggle, onDelete, onClick }) {
+function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
   const color = getColor(assignee?.color);
   const overdue = !task.completed && dueDateOverdue(task.due_date);
+  // Only the assignee can delete a task. Unassigned tasks can be removed by anyone in the group.
+  const canDelete = !task.assigned_to || task.assigned_to === myId;
   return (
     <div
       className={'trow' + (task.completed ? ' done' : '')}
@@ -161,10 +163,13 @@ function TaskRow({ task, assignee, onToggle, onDelete, onClick }) {
           </div>
         )}
       </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        style={{ opacity: 0.25, fontSize: 16, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}
-      >×</button>
+      {canDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          style={{ opacity: 0.25, fontSize: 16, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}
+          title="Delete task"
+        >×</button>
+      )}
     </div>
   );
 }
@@ -239,7 +244,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
               </div>
               <div className="tasklist">
                 {g.items.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={g.member} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                  <TaskRow key={t.id} task={t} assignee={g.member} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
                 ))}
               </div>
             </div>
@@ -252,7 +257,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
               </div>
               <div className="tasklist">
                 {unassigned.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={null} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                  <TaskRow key={t.id} task={t} assignee={null} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
                 ))}
               </div>
             </div>
@@ -272,7 +277,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
               {showDone && (
                 <div className="tasklist">
                   {doneItems.map(t => (
-                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
                   ))}
                 </div>
               )}
@@ -1058,7 +1063,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, getProfile, onClose, onToggle, onDelete, onOpenNote }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote }) {
   if (!open || !task) return null;
   const assignee = getProfile(task.assigned_to);
   const creator = getProfile(task.created_by);
@@ -1167,13 +1172,15 @@ function TaskDetailsModal({ open, task, notes, getProfile, onClose, onToggle, on
         </div>
       </div>
 
-      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
-        <button
-          onClick={() => { onDelete(task.id); onClose(); }}
-          className="copy-btn"
-          style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
-        >Delete task</button>
-      </div>
+      {(!task.assigned_to || task.assigned_to === myId) && (
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => { onDelete(task.id); onClose(); }}
+            className="copy-btn"
+            style={{ color: '#B23030', borderColor: '#B23030', background: 'rgba(178, 48, 48, 0.06)' }}
+          >Delete task</button>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -1794,6 +1801,7 @@ export function MainApp({ profile, onSettings }) {
         open={!!detailTaskId}
         task={tasks.find(t => t.id === detailTaskId) || null}
         notes={notes}
+        myId={profile?.id}
         getProfile={getProfile}
         onClose={() => setDetailTaskId(null)}
         onToggle={toggleTask}
