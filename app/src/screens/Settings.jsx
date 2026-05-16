@@ -348,9 +348,8 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Account</div>
           <div className="set-group">
-            <div className="set-row danger" style={{ cursor: 'pointer' }} onClick={() => setConfirmSignOut(true)}>
-              <span className="val">Sign out</span>
-              <span className="car">›</span>
+            <div className="set-row danger" style={{ cursor: 'pointer', justifyContent: 'center' }} onClick={() => setConfirmSignOut(true)}>
+              <span className="val" style={{ fontWeight: 600 }}>Sign out</span>
             </div>
           </div>
 
