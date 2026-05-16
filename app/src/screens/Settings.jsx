@@ -24,7 +24,8 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const [copied, setCopied] = React.useState(false);
   const [nameErr, setNameErr] = React.useState('');
   const [avatar, setAvatar] = React.useState(profile?.avatar ?? '');
-  const [emojiInput, setEmojiInput] = React.useState('');
+  const [avatarPickerOpen, setAvatarPickerOpen] = React.useState(false);
+  const [avatarMode, setAvatarMode] = React.useState('main'); // 'main' | 'emoji'
   const [confirmSignOut, setConfirmSignOut] = React.useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const groupMenuRef = React.useRef(null);
@@ -84,13 +85,10 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
     onProfileUpdate();
   };
 
-  const onEmojiSubmit = (val) => {
-    const trimmed = (val || '').trim();
-    if (!trimmed) return;
-    // Take just the first grapheme so multi-char text doesn't fit awkwardly
-    const first = [...trimmed][0];
-    saveAvatar(first);
-    setEmojiInput('');
+  const pickEmoji = async (emoji) => {
+    await saveAvatar(emoji);
+    setAvatarPickerOpen(false);
+    setAvatarMode('main');
   };
 
   const onPickPhoto = async (file) => {
@@ -109,6 +107,8 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
         ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         saveAvatar(dataUrl);
+        setAvatarPickerOpen(false);
+        setAvatarMode('main');
       };
       img.onerror = () => alert('Could not load that image — try another file.');
       img.src = reader.result;
@@ -117,7 +117,18 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
     reader.readAsDataURL(file);
   };
 
-  const removeAvatar = () => saveAvatar('');
+  const removeAvatar = async () => {
+    await saveAvatar('');
+    setAvatarPickerOpen(false);
+    setAvatarMode('main');
+  };
+
+  const PRESET_EMOJIS = [
+    '😀', '😎', '🥰', '🤓', '🥳', '🤩', '🥹', '😴',
+    '🦊', '🐻', '🐼', '🦁', '🐯', '🐰', '🐶', '🐱',
+    '🦄', '🐸', '🦋', '🌟', '☀️', '🌈', '🌸', '🌻',
+    '🍕', '☕', '🍎', '🧁', '⚽', '🎸', '📚', '🚀',
+  ];
 
   const avatarIsImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
 
@@ -162,11 +173,11 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
             <div className="set-row" style={{ display: 'block' }}>
               <span className="lbl">Avatar</span>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, marginTop: 8, position: 'relative' }}>
-                <label
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
+                <button
                   className="avatar-circle"
+                  onClick={() => { setAvatarMode('main'); setAvatarPickerOpen(true); }}
                   style={{
-                    position: 'relative',
                     width: 84, height: 84, borderRadius: '50%',
                     background: avatarIsImage ? `center / cover no-repeat url(${avatar})` : (me.hex),
                     border: '3px solid rgba(255, 255, 255, 0.9)',
@@ -174,49 +185,16 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 40, lineHeight: 1,
                     color: 'var(--ink)',
-                    flexShrink: 0,
                     cursor: 'pointer',
                     transition: 'transform 0.2s var(--ease), box-shadow 0.2s var(--ease)',
+                    padding: 0,
                   }}
                   onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.04)'; e.currentTarget.style.boxShadow = '0 10px 24px rgba(106, 77, 255, 0.25)'; }}
                   onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 6px 18px rgba(15, 30, 60, 0.16)'; }}
-                  title="Click to set an emoji"
+                  title="Change avatar"
                 >
                   {!avatarIsImage && (avatar || '')}
-                  <input
-                    type="text"
-                    inputMode="text"
-                    value={emojiInput}
-                    onChange={e => { setEmojiInput(e.target.value); if (e.target.value) { onEmojiSubmit(e.target.value); } }}
-                    style={{
-                      position: 'absolute', inset: 0,
-                      width: '100%', height: '100%',
-                      opacity: 0, border: 0, padding: 0, margin: 0,
-                      background: 'transparent',
-                      cursor: 'pointer',
-                      borderRadius: '50%',
-                      outline: 'none',
-                    }}
-                    aria-label="Click to set an emoji avatar"
-                  />
-                </label>
-                <button
-                  className="copy-btn"
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{ marginLeft: 0, fontSize: 13, padding: '8px 16px' }}
-                >Upload photo</button>
-                {avatar && (
-                  <button
-                    onClick={removeAvatar}
-                    style={{
-                      background: 'none', border: 0, padding: 0,
-                      fontSize: 11, color: 'var(--text-muted)',
-                      cursor: 'pointer', textDecoration: 'underline',
-                      textUnderlineOffset: 3,
-                      fontFamily: 'inherit',
-                    }}
-                  >Remove avatar</button>
-                )}
+                </button>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -347,6 +325,117 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
           <div className="auth-foot" style={{ marginTop: 22 }}>kinnekt v1.0</div>
         </div>
+
+        {avatarPickerOpen && (
+          <div
+            className="sheet-overlay"
+            onClick={() => { setAvatarPickerOpen(false); setAvatarMode('main'); }}
+          >
+            <div
+              className="sheet"
+              onClick={e => e.stopPropagation()}
+              style={{ maxWidth: 380, alignSelf: 'center', margin: 'auto 0', maxHeight: 'none' }}
+            >
+              <div className="sheet-hd">
+                <h3>{avatarMode === 'emoji' ? 'Pick an emoji' : 'Change avatar'}</h3>
+                <button
+                  className="close"
+                  onClick={() => { setAvatarPickerOpen(false); setAvatarMode('main'); }}
+                >Cancel</button>
+              </div>
+
+              <div className="sheet-body">
+                {avatarMode === 'main' && (
+                  <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
+                    <button
+                      onClick={() => setAvatarMode('emoji')}
+                      style={{
+                        flex: 1,
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                        padding: '22px 12px',
+                        background: 'var(--surface-glass)',
+                        border: '1px solid var(--border-glass)',
+                        borderRadius: 'var(--r-lg)',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        boxShadow: 'var(--shadow-soft)',
+                        transition: 'all 0.25s var(--ease)',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-tint)'; e.currentTarget.style.borderColor = 'var(--hover-border)'; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow-medium)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-glass)'; e.currentTarget.style.borderColor = 'var(--border-glass)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-soft)'; }}
+                    >
+                      <span style={{ fontSize: 40, lineHeight: 1 }} aria-hidden="true">😀</span>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>Emoji</span>
+                    </button>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      style={{
+                        flex: 1,
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                        padding: '22px 12px',
+                        background: 'var(--surface-glass)',
+                        border: '1px solid var(--border-glass)',
+                        borderRadius: 'var(--r-lg)',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        boxShadow: 'var(--shadow-soft)',
+                        transition: 'all 0.25s var(--ease)',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-tint)'; e.currentTarget.style.borderColor = 'var(--hover-border)'; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow-medium)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-glass)'; e.currentTarget.style.borderColor = 'var(--border-glass)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-soft)'; }}
+                    >
+                      <span style={{ fontSize: 40, lineHeight: 1 }} aria-hidden="true">📷</span>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>Photo</span>
+                    </button>
+                  </div>
+                )}
+
+                {avatarMode === 'emoji' && (
+                  <div>
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(8, 1fr)',
+                      gap: 6,
+                      marginBottom: 12,
+                    }}>
+                      {PRESET_EMOJIS.map(emoji => (
+                        <button
+                          key={emoji}
+                          onClick={() => pickEmoji(emoji)}
+                          style={{
+                            aspectRatio: '1 / 1',
+                            fontSize: 22,
+                            border: '1px solid transparent',
+                            background: 'transparent',
+                            borderRadius: 8,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s var(--ease)',
+                            padding: 0,
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-tint)'; e.currentTarget.style.borderColor = 'var(--hover-border)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; }}
+                        >{emoji}</button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setAvatarMode('main')}
+                      className="fb-btn"
+                      style={{ width: '100%' }}
+                    >‹ Back</button>
+                  </div>
+                )}
+              </div>
+
+              {avatar && avatarMode === 'main' && (
+                <div className="sheet-foot">
+                  <button onClick={removeAvatar} className="danger-btn" style={{ width: '100%' }}>
+                    Remove avatar
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {confirmSignOut && (
           <div className="sheet-overlay" onClick={() => setConfirmSignOut(false)}>
