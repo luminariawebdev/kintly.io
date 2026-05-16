@@ -103,9 +103,21 @@ export function App() {
   }, [loadProfile]);
 
   const refreshProfile = React.useCallback(async () => {
+    // Re-fetches the profile WITHOUT touching the screen state. Used after
+    // in-place edits like changing avatar/color/name so the user stays
+    // wherever they are (most often Settings).
     const { data: { session } } = await supabase.auth.getSession();
-    if (session) loadProfile(session.user.id);
-  }, [loadProfile]);
+    if (!session) return;
+    const userId = session.user.id;
+    const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+    if (!prof) return;
+    let fullProfile = prof;
+    if (prof.group_id) {
+      const { data: grp } = await supabase.from('groups').select('id, name, invite_code').eq('id', prof.group_id).maybeSingle();
+      fullProfile = { ...prof, group: grp || null };
+    }
+    setProfile(fullProfile);
+  }, []);
 
   const onGroupReady = React.useCallback((fullProfile) => {
     setProfile(fullProfile);

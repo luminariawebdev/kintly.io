@@ -164,7 +164,11 @@ function ProfileButton({ profile, onClick }) {
       onClick={onClick}
       title="Settings"
     >
-      {avatar || getInitial(profile?.display_name)}
+      <span style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: '100%', height: '100%',
+        lineHeight: 1,
+      }}>{avatar || getInitial(profile?.display_name)}</span>
     </button>
   );
 }

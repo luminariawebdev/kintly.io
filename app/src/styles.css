@@ -268,12 +268,15 @@ html { overscroll-behavior-x: none; }
   border-radius: var(--r-pill);
   border: 1px solid var(--border-glass);
   background: var(--surface-glass-strong);
-  display: grid; place-items: center;
+  display: inline-flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 700;
   color: var(--text-primary);
   cursor: pointer;
   box-shadow: var(--shadow-soft);
   transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease);
+  overflow: hidden;
+  padding: 0;
+  line-height: 1;
 }
 .fb-prof:hover { transform: translateY(-1px); background: var(--hover-tint); border-color: var(--hover-border); box-shadow: var(--shadow-medium); }
 .fb-prof:active { transform: translateY(0); }
