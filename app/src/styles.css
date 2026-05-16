@@ -193,7 +193,7 @@ html { overscroll-behavior-x: none; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px 14px;
+  padding: 12px 12px 14px 10px;
 }
 .fb-stickyhead-right {
   display: flex;
@@ -209,9 +209,8 @@ html { overscroll-behavior-x: none; }
 .fb-brand-block {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   min-width: 0;
-  flex: 1;
 }
 .fb-brand-block svg { flex-shrink: 0; display: block; }
 .fb-brand-block .fb-brand-text {
