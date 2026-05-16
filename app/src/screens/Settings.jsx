@@ -19,12 +19,11 @@ const COLORS = [
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
   const theme = React.useContext(ThemeContext);
-  const [name, setName] = React.useState(profile?.display_name ?? '');
   const [color, setColor] = React.useState(profile?.color ?? 'coral');
   const [showSw, setShowSw] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
-  const [nameErr, setNameErr] = React.useState('');
+  const [saveErr, setSaveErr] = React.useState('');
   const [avatar, setAvatar] = React.useState(profile?.avatar ?? '');
   const [avatarPickerOpen, setAvatarPickerOpen] = React.useState(false);
   const [avatarMode, setAvatarMode] = React.useState('main'); // 'main' | 'emoji'
@@ -51,35 +50,26 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const saveAvatar = (next) => { setAvatar(next || ''); };
 
   const dirty = (
-    name !== (profile?.display_name ?? '') ||
     color !== (profile?.color ?? 'coral') ||
     avatar !== (profile?.avatar ?? '')
   );
 
   const saveProfile = async () => {
-    if (!name.trim()) { setNameErr('Name cannot be empty'); return; }
     if (!dirty) return;
     setSaving(true);
-    setNameErr('');
-    let payload = {
-      display_name: name.trim(),
-      color,
-      avatar: avatar || null,
-    };
+    setSaveErr('');
+    let payload = { color, avatar: avatar || null };
     let { error } = await supabase.from('profiles').update(payload).eq('id', profile.id);
     // Fallback if avatar column hasn't been migrated yet
     if (error && /avatar/i.test(error.message || '')) {
       const { avatar: _a, ...rest } = payload;
       ({ error } = await supabase.from('profiles').update(rest).eq('id', profile.id));
       if (!error) {
-        alert('Saved name & color — avatar column missing.\nRun:\n\nalter table public.profiles add column if not exists avatar text;');
+        alert('Saved color — avatar column missing.\nRun:\n\nalter table public.profiles add column if not exists avatar text;');
       }
     }
     setSaving(false);
-    if (error) {
-      setNameErr(error.message);
-      return;
-    }
+    if (error) { setSaveErr(error.message); return; }
     onProfileUpdate();
   };
 
@@ -163,20 +153,15 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
           <div className="set-group">
             <div className="set-row" style={{ display: 'block' }}>
               <span className="lbl">Display name</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input
-                  value={name}
-                  onChange={e => { setName(e.target.value); setNameErr(''); }}
-                  onKeyDown={e => e.key === 'Enter' && e.target.blur()}
-                  style={{
-                    border: 0, background: 'transparent',
-                    font: 'inherit', fontSize: 16, fontWeight: 600,
-                    color: 'var(--ink)', flex: 1, padding: 0, outline: 'none',
-                  }}
-                />
-                {saving && <span style={{ fontSize: 11, opacity: 0.4 }}>saving…</span>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--ink)', flex: 1 }}>
+                  {profile?.display_name}
+                </span>
+                <span aria-hidden="true" title="Display name is set at signup and cannot be changed" style={{ fontSize: 13, color: 'var(--text-muted)' }}>🔒</span>
               </div>
-              {nameErr && <div className="err-msg" style={{ marginTop: 4 }}>{nameErr}</div>}
+              <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                Set at signup — cannot be changed.
+              </div>
             </div>
 
             <div className="set-row" style={{ display: 'block' }}>
@@ -238,12 +223,13 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '-4px 0 22px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '-4px 0 6px' }}>
             <span style={{
-              fontSize: 11, color: dirty ? 'var(--kinnekt-purple)' : 'var(--text-muted)',
+              fontSize: 11,
+              color: saveErr ? 'var(--kinnekt-coral)' : (dirty ? 'var(--kinnekt-purple)' : 'var(--text-muted)'),
               fontStyle: 'italic',
             }}>
-              {saving ? 'Saving…' : (dirty ? 'Unsaved changes' : 'All changes saved')}
+              {saving ? 'Saving…' : (saveErr ? saveErr : (dirty ? 'Unsaved changes' : 'All changes saved'))}
             </span>
             <button
               className="fb-btn solid"
@@ -256,6 +242,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
               }}
             >{saving ? 'Saving…' : 'Save'}</button>
           </div>
+          <div style={{ height: 16 }} />
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Group</div>
           <div className="set-group">

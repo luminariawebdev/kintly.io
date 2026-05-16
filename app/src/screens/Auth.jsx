@@ -122,6 +122,15 @@ function SignupForm({ onComplete }) {
       <div className="field">
         <label>Your name</label>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="First name or nickname" />
+        <div style={{
+          fontSize: 11,
+          fontStyle: 'italic',
+          color: 'var(--kinnekt-coral)',
+          marginTop: 6,
+          letterSpacing: '0.01em',
+        }}>
+          ⚠ This name is final and cannot be changed.
+        </div>
       </div>
       <div className="field">
         <label>Your color</label>
