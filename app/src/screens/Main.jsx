@@ -540,7 +540,7 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
             <div
               key={n.id}
               className={'note-card' + (n.pinned ? ' pinned' : '')}
-              style={{ position: 'relative', cursor: 'pointer' }}
+              style={{ position: 'relative', cursor: 'pointer', '--author-c': getColor(author?.color) }}
               onClick={() => onOpenNote?.(n)}
             >
               <div className="note-meta">
