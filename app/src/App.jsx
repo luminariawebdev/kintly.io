@@ -8,10 +8,46 @@ import { SettingsScreen } from './screens/Settings';
 const FRAME_W = 402;
 const FRAME_H = 874;
 
+// Resolve the actual visual theme given a user preference and current state.
+// 'auto' = follow system preference AND time of day (light 6am-7pm).
+function resolveTheme(pref) {
+  if (pref === 'light' || pref === 'dark') return pref;
+  const sysDark = typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)').matches
+    : false;
+  const hour = new Date().getHours();
+  const timeIsNight = hour < 6 || hour >= 19;
+  return sysDark && timeIsNight ? 'dark' : (sysDark || timeIsNight ? 'dark' : 'light');
+}
+
+export const ThemeContext = React.createContext({ pref: 'auto', setPref: () => {}, resolved: 'light' });
+
 export function App() {
   const [screen, setScreen] = React.useState('loading');
   const [profile, setProfile] = React.useState(null);
   const [profileErr, setProfileErr] = React.useState('');
+  const [themePref, setThemePref] = React.useState(() => {
+    try { return localStorage.getItem('kinnekt:theme') || 'auto'; } catch { return 'auto'; }
+  });
+  const [resolved, setResolved] = React.useState(() => resolveTheme(themePref));
+
+  // Re-resolve on preference change, system theme change, or hourly tick (for auto by time-of-day)
+  React.useEffect(() => {
+    try { localStorage.setItem('kinnekt:theme', themePref); } catch {}
+    setResolved(resolveTheme(themePref));
+
+    const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => setResolved(resolveTheme(themePref));
+    mq?.addEventListener?.('change', onChange);
+    // Recheck every 5 min so auto-by-time crosses dawn/dusk without a refresh
+    const tick = setInterval(() => setResolved(resolveTheme(themePref)), 5 * 60 * 1000);
+    return () => { mq?.removeEventListener?.('change', onChange); clearInterval(tick); };
+  }, [themePref]);
+
+  // Apply data-theme attribute to root so CSS overrides cascade
+  React.useEffect(() => {
+    document.documentElement.setAttribute('data-theme', resolved);
+  }, [resolved]);
 
   const loadProfile = React.useCallback(async (userId) => {
     setProfileErr('');
@@ -77,40 +113,41 @@ export function App() {
   }, []);
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: 'linear-gradient(135deg, #E0E8FF 0%, #ECE5FF 50%, #DDEEFF 100%)',
-      padding: 24,
-    }}>
-      <IOSDevice width={FRAME_W} height={FRAME_H}>
-        {screen === 'loading' && <LoadingScreen />}
-        {(screen === 'auth' || screen === 'group-setup') && (
-          <AuthScreen
-            initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
-            onComplete={refreshProfile}
-            onGroupReady={onGroupReady}
-          />
-        )}
-        {screen === 'app' && (
-          <MainApp
-            profile={profile}
-            onSettings={() => setScreen('settings')}
-            onProfileUpdate={refreshProfile}
-          />
-        )}
-        {screen === 'settings' && (
-          <SettingsScreen
-            profile={profile}
-            onBack={() => setScreen('app')}
-            onProfileUpdate={refreshProfile}
-            onSignOut={() => { setScreen('auth'); setProfile(null); }}
-          />
-        )}
-      </IOSDevice>
-    </div>
+    <ThemeContext.Provider value={{ pref: themePref, setPref: setThemePref, resolved }}>
+      <div className="app-shell" style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+      }}>
+        <IOSDevice width={FRAME_W} height={FRAME_H}>
+          {screen === 'loading' && <LoadingScreen />}
+          {(screen === 'auth' || screen === 'group-setup') && (
+            <AuthScreen
+              initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
+              onComplete={refreshProfile}
+              onGroupReady={onGroupReady}
+            />
+          )}
+          {screen === 'app' && (
+            <MainApp
+              profile={profile}
+              onSettings={() => setScreen('settings')}
+              onProfileUpdate={refreshProfile}
+            />
+          )}
+          {screen === 'settings' && (
+            <SettingsScreen
+              profile={profile}
+              onBack={() => setScreen('app')}
+              onProfileUpdate={refreshProfile}
+              onSignOut={() => { setScreen('auth'); setProfile(null); }}
+            />
+          )}
+        </IOSDevice>
+      </div>
+    </ThemeContext.Provider>
   );
 }
 

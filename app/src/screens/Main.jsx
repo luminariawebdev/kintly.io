@@ -581,6 +581,9 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const [assignee, setAssignee] = React.useState(myId || null);
   const [dueOpt, setDueOpt] = React.useState('today');
   const [dueDate, setDueDate] = React.useState('');
+  const [repeatFreq, setRepeatFreq] = React.useState('none'); // none | daily | weekly | monthly
+  const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly
+  const [repeatTime, setRepeatTime] = React.useState('');     // HH:MM
   const [saving, setSaving] = React.useState(false);
 
   const getDueDate = () => {
@@ -592,11 +595,33 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
     return null;
   };
 
+  const getRecurrence = () => {
+    if (repeatFreq === 'none') return null;
+    const r = { freq: repeatFreq };
+    if (repeatTime) r.time = repeatTime;
+    if (repeatFreq === 'weekly') r.days = repeatDays.slice().sort();
+    return r;
+  };
+
+  const toggleDay = (d) => {
+    setRepeatDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  };
+
+  const reset = () => {
+    setTitle(''); setAssignee(myId || null); setDueOpt('today'); setDueDate('');
+    setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
+  };
+
   const save = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    await onSave({ title: title.trim(), assigned_to: assignee, due_date: getDueDate() });
-    setTitle(''); setAssignee(myId || null); setDueOpt('today'); setDueDate('');
+    await onSave({
+      title: title.trim(),
+      assigned_to: assignee,
+      due_date: getDueDate(),
+      recurrence: getRecurrence(),
+    });
+    reset();
     setSaving(false);
     onClose();
   };
@@ -604,7 +629,12 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const saveAndAnother = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    await onSave({ title: title.trim(), assigned_to: assignee, due_date: getDueDate() });
+    await onSave({
+      title: title.trim(),
+      assigned_to: assignee,
+      due_date: getDueDate(),
+      recurrence: getRecurrence(),
+    });
     setTitle('');
     setSaving(false);
   };
@@ -643,6 +673,47 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
         </div>
         {dueOpt === 'pick' && (
           <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={{ marginTop: 8, width: '100%' }} />
+        )}
+      </div>
+
+      <div className="field">
+        <label>Repeat</label>
+        <div className="date-row">
+          {[
+            ['none',    "Doesn't repeat"],
+            ['daily',   'Daily'],
+            ['weekly',  'Weekly'],
+            ['monthly', 'Monthly'],
+          ].map(([k, lbl]) => (
+            <button key={k} className={'pick' + (repeatFreq === k ? ' on' : '')} onClick={() => setRepeatFreq(k)}>{lbl}</button>
+          ))}
+        </div>
+
+        {repeatFreq === 'weekly' && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              On these days
+            </div>
+            <div className="date-row">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, i) => (
+                <button
+                  key={day}
+                  className={'pick' + (repeatDays.includes(i) ? ' on' : '')}
+                  onClick={() => toggleDay(i)}
+                  style={{ minWidth: 0, padding: '8px 10px' }}
+                >{day}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {repeatFreq !== 'none' && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              At time <span style={{ fontWeight: 400, opacity: 0.6 }}>· optional</span>
+            </div>
+            <input type="time" value={repeatTime} onChange={e => setRepeatTime(e.target.value)} style={{ width: '100%' }} />
+          </div>
         )}
       </div>
     </Modal>
@@ -1337,6 +1408,21 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
     ? new Date(task.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : null;
   const linkedNote = task.note_id ? (notes || []).find(n => n.id === task.note_id) : null;
+  const recurrenceLabel = (() => {
+    const r = task.recurrence;
+    if (!r || !r.freq || r.freq === 'none') return null;
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const t = r.time ? ` at ${fmtTime(r.time)}` : '';
+    if (r.freq === 'daily') return `Every day${t}`;
+    if (r.freq === 'weekly') {
+      const days = Array.isArray(r.days) && r.days.length > 0
+        ? r.days.map(i => dayNames[i]).join(', ')
+        : 'no day selected';
+      return `Weekly · ${days}${t}`;
+    }
+    if (r.freq === 'monthly') return `Every month${t}`;
+    return null;
+  })();
 
   return (
     <Modal open={open} onClose={onClose} title="Task">
@@ -1390,6 +1476,16 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
             }}>{dueLabel}</span>
             {dueLongLabel && <span style={{ color: 'var(--mute)' }}>· {dueLongLabel}</span>}
           </div>
+        </div>
+      )}
+
+      {recurrenceLabel && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Repeats</label>
+          <div style={{
+            fontSize: 13, fontWeight: 600,
+            color: 'var(--kinnekt-purple)',
+          }}>↻ {recurrenceLabel}</div>
         </div>
       )}
 
@@ -1787,18 +1883,26 @@ export function MainApp({ profile, onSettings }) {
   };
 
   const addTask = async (data) => {
-    const { data: row } = await supabase.from('tasks').insert({ group_id: profile.group_id, created_by: profile.id, ...data }).select().single();
-    if (row) {
-      setTasks(prev => [row, ...prev]);
-      if (row.assigned_to && row.assigned_to !== profile.id) {
-        notify([row.assigned_to], 'task_assigned', {
-          task_id: row.id,
-          task_title: row.title,
-          due_date: row.due_date,
-          by_name: profile.display_name,
-          by_color: profile.color,
-        });
-      }
+    let payload = { group_id: profile.group_id, created_by: profile.id, ...data };
+    let { data: row, error } = await supabase.from('tasks').insert(payload).select().single();
+    // Retry without recurrence if the column doesn't exist yet
+    if (error && /recurrence/i.test(error.message || '') && payload.recurrence !== undefined) {
+      const { recurrence: _r, ...rest } = payload;
+      ({ data: row, error } = await supabase.from('tasks').insert(rest).select().single());
+    }
+    if (error || !row) {
+      if (error) alert('Could not save task: ' + error.message);
+      return;
+    }
+    setTasks(prev => [row, ...prev]);
+    if (row.assigned_to && row.assigned_to !== profile.id) {
+      notify([row.assigned_to], 'task_assigned', {
+        task_id: row.id,
+        task_title: row.title,
+        due_date: row.due_date,
+        by_name: profile.display_name,
+        by_color: profile.color,
+      });
     }
   };
   const deleteTask = async (id) => {

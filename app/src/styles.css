@@ -74,6 +74,47 @@
   --hi: #FFFFFF;
   --r-card: var(--r-lg);
   --b: 1px;
+
+  /* App-shell (around the phone frame) — light + dark variants */
+  --shell-bg: linear-gradient(135deg, #E0E8FF 0%, #ECE5FF 50%, #DDEEFF 100%);
+  --screen-bg: linear-gradient(180deg, #F7F9FF 0%, #EAF0FF 50%, #EDE6FF 100%);
+  --sec-wrap-bg: linear-gradient(180deg, #F7F9FF 0%, #EFF4FF 50%, #F1EDFF 100%);
+}
+
+/* ── Dark theme overrides ───────────────────────────────────── */
+:root[data-theme="dark"] {
+  --text-primary:   #F2F4FB;
+  --text-secondary: #A8B2C8;
+  --text-muted:     #6E7A95;
+
+  --surface-primary:      #14203A;
+  --surface-secondary:    #0F1A30;
+  --surface-glass:        rgba(20, 30, 55, 0.55);
+  --surface-glass-strong: rgba(28, 40, 70, 0.75);
+  --surface-glass-soft:   rgba(20, 30, 55, 0.30);
+
+  --border-glass:  rgba(255, 255, 255, 0.10);
+  --border-soft:   rgba(255, 255, 255, 0.06);
+  --border-medium: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  --shadow-soft:   0 8px 30px rgba(0, 0, 0, 0.40);
+  --shadow-medium: 0 12px 40px rgba(0, 0, 0, 0.50);
+  --shadow-large:  0 18px 60px rgba(0, 0, 0, 0.60);
+
+  --hover-tint: linear-gradient(135deg, rgba(106, 77, 255, 0.28), rgba(45, 156, 255, 0.22) 50%, rgba(61, 217, 197, 0.22));
+  --hover-tint-strong: linear-gradient(135deg, rgba(106, 77, 255, 0.40), rgba(45, 156, 255, 0.36) 50%, rgba(61, 217, 197, 0.36));
+  --hover-border: rgba(132, 110, 255, 0.45);
+
+  --shell-bg: linear-gradient(135deg, #050B1B 0%, #0A1530 50%, #1A0A30 100%);
+  --screen-bg: linear-gradient(180deg, #091120 0%, #0D1830 50%, #1A0F30 100%);
+  --sec-wrap-bg: linear-gradient(180deg, #0B132A 0%, #101A3A 50%, #1A1140 100%);
+
+  /* Legacy aliases — refresh for dark */
+  --paper: var(--surface-primary);
+  --cream: var(--surface-secondary);
+  --paper-2: var(--surface-secondary);
+  --hi: #1B284A;
 }
 
 * { box-sizing: border-box; }
@@ -82,13 +123,15 @@ html, body {
   margin: 0;
   font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   color: var(--text-primary);
-  background: linear-gradient(180deg, #F7F9FF 0%, #EEF4FF 100%);
+  background: var(--shell-bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* Lock horizontal scroll + disable browser back/forward swipe */
   overflow-x: hidden;
   overscroll-behavior-x: none;
 }
+
+.app-shell { background: var(--shell-bg); transition: background 0.3s var(--ease); }
 html { overscroll-behavior-x: none; }
 
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; letter-spacing: 0.02em; }
@@ -97,7 +140,7 @@ html { overscroll-behavior-x: none; }
 /* ── Frame inner ─────────────────────────────────────────────── */
 .fb-screen {
   height: 100%;
-  background: linear-gradient(180deg, #F7F9FF 0%, #EAF0FF 50%, #EDE6FF 100%);
+  background: var(--screen-bg);
   color: var(--text-primary);
   font-family: 'Inter', system-ui, sans-serif;
   display: flex; flex-direction: column;
@@ -119,7 +162,7 @@ html { overscroll-behavior-x: none; }
 /* ── Sticky header — glass ───────────────────────────────────── */
 .fb-stickyhead {
   position: sticky; top: 0; z-index: 30;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--surface-glass);
   backdrop-filter: blur(22px) saturate(140%);
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   color: var(--text-primary);
@@ -278,7 +321,7 @@ html { overscroll-behavior-x: none; }
 .fb-sec-wrap {
   position: relative;
   isolation: isolate;
-  background: linear-gradient(180deg, #F7F9FF 0%, #EFF4FF 50%, #F1EDFF 100%);
+  background: var(--sec-wrap-bg);
 }
 .fb-sec-wrap::before {
   content: '';
@@ -1284,4 +1327,4 @@ html { overscroll-behavior-x: none; }
 .dot.lg.avatar-emoji  { font-size: 22px; }
 .dot.xl.avatar-emoji  { font-size: 32px; }
 .fb-prof.has-avatar { background-color: transparent; background-repeat: no-repeat; }
-.fb-prof.has-emoji   { font-size: 28px; line-height: 1; }
+.fb-prof.has-emoji   { font-size: 36px; line-height: 1; }

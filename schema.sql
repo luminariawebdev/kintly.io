@@ -27,6 +27,7 @@ create table if not exists public.tasks (
   title       text not null,
   completed   boolean default false,
   due_date    date,
+  recurrence  jsonb,
   created_at  timestamptz default now()
 );
 

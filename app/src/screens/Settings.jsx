@@ -1,5 +1,6 @@
 import React from 'react';
 import { supabase } from '../lib/supabase';
+import { ThemeContext } from '../App';
 
 const COLORS = [
   { id: 'coral',       hex: '#FF9F8A', label: 'Coral' },
@@ -17,6 +18,7 @@ const COLORS = [
 ];
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
+  const theme = React.useContext(ThemeContext);
   const [name, setName] = React.useState(profile?.display_name ?? '');
   const [color, setColor] = React.useState(profile?.color ?? 'coral');
   const [showSw, setShowSw] = React.useState(false);
@@ -193,7 +195,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                   onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 6px 18px rgba(15, 30, 60, 0.16)'; }}
                   title="Change avatar"
                 >
-                  {!avatarIsImage && (avatar || '')}
+                  {!avatarIsImage && (avatar || (profile?.display_name || '?')[0].toUpperCase())}
                 </button>
                 <input
                   ref={fileInputRef}
@@ -313,6 +315,35 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                 <span className="val" style={{ opacity: 0.5 }}>Not in a group</span>
               </div>
             )}
+          </div>
+
+          <div className="fb-sec-label" style={{ marginBottom: 8 }}>Display</div>
+          <div className="set-group">
+            <div className="set-row" style={{ display: 'block' }}>
+              <span className="lbl">Theme</span>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                {[
+                  { id: 'light', label: 'Light', icon: '☀' },
+                  { id: 'dark',  label: 'Dark',  icon: '☾' },
+                  { id: 'auto',  label: 'Auto',  icon: '⌁' },
+                ].map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => theme.setPref(opt.id)}
+                    className={'fb-chip' + (theme.pref === opt.id ? ' on' : '')}
+                    style={{ flex: 1, padding: '8px 10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                  >
+                    <span style={{ fontSize: 14, lineHeight: 1 }}>{opt.icon}</span>
+                    <span>{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+              {theme.pref === 'auto' && (
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  Currently {theme.resolved} — switches with your system settings and time of day.
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Account</div>
