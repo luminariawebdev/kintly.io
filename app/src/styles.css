@@ -1024,6 +1024,11 @@ html { overscroll-behavior-x: none; }
   -webkit-backdrop-filter: blur(8px);
   display: flex; flex-direction: column;
   justify-content: flex-end;
+  animation: sheet-overlay-fade 0.25s var(--ease);
+}
+@keyframes sheet-overlay-fade {
+  from { background: rgba(9, 18, 38, 0); backdrop-filter: blur(0); }
+  to   { background: rgba(9, 18, 38, 0.30); backdrop-filter: blur(8px); }
 }
 .sheet {
   background: var(--surface-glass-strong);
@@ -1032,20 +1037,44 @@ html { overscroll-behavior-x: none; }
   border-top: 1px solid var(--border-glass);
   border-radius: var(--r-xl) var(--r-xl) 0 0;
   padding: 22px 22px 38px;
-  max-height: 88%;
+  min-height: 75%;
+  max-height: 92%;
   display: flex; flex-direction: column;
   box-shadow: 0 -12px 40px rgba(9, 18, 38, 0.18);
   position: relative;
   overflow: auto;
+  will-change: transform;
+  animation: sheet-slide-up 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.sheet::before {
-  content: '';
-  position: absolute;
-  top: 8px; left: 50%; transform: translateX(-50%);
-  width: 42px; height: 4px;
-  background: rgba(15, 30, 60, 0.20);
+@keyframes sheet-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+/* Grab handle area sits at the top of the sheet, full width, draggable */
+.sheet-grab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  margin: -22px -22px 4px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+}
+.sheet-grab:active { cursor: grabbing; }
+.sheet-grab-bar {
+  display: block;
+  width: 48px;
+  height: 5px;
   border-radius: 999px;
+  background: rgba(15, 30, 60, 0.25);
+  transition: background 0.2s var(--ease), width 0.2s var(--ease);
 }
+.sheet-grab:hover .sheet-grab-bar { background: rgba(15, 30, 60, 0.40); width: 56px; }
+[data-theme="dark"] .sheet-grab-bar { background: rgba(255, 255, 255, 0.30); }
+[data-theme="dark"] .sheet-grab:hover .sheet-grab-bar { background: rgba(255, 255, 255, 0.50); }
 .sheet .grab { display: none; }
 .sheet-hd {
   display: flex; align-items: center; justify-content: space-between;

@@ -124,13 +124,67 @@ export function NoteCard({ note, tall = false }) {
 }
 
 export function Modal({ open, title, onClose, children, footer }) {
+  const sheetRef = React.useRef(null);
+  const dragRef = React.useRef({ startY: 0, dragging: false, offset: 0 });
+
   if (!open) return null;
+
+  const onPointerDown = (e) => {
+    if (!sheetRef.current) return;
+    dragRef.current.startY = e.clientY;
+    dragRef.current.dragging = true;
+    dragRef.current.offset = 0;
+    sheetRef.current.style.transition = 'none';
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch {}
+  };
+
+  const onPointerMove = (e) => {
+    if (!dragRef.current.dragging || !sheetRef.current) return;
+    const delta = e.clientY - dragRef.current.startY;
+    if (delta <= 0) {
+      dragRef.current.offset = 0;
+      sheetRef.current.style.transform = 'translateY(0)';
+      return;
+    }
+    dragRef.current.offset = delta;
+    sheetRef.current.style.transform = `translateY(${delta}px)`;
+  };
+
+  const endDrag = (e) => {
+    if (!dragRef.current.dragging || !sheetRef.current) return;
+    dragRef.current.dragging = false;
+    const offset = dragRef.current.offset;
+    const sheet = sheetRef.current;
+    sheet.style.transition = 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)';
+    try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {}
+    if (offset > 110) {
+      const rect = sheet.getBoundingClientRect();
+      sheet.style.transform = `translateY(${rect.height}px)`;
+      window.setTimeout(onClose, 250);
+    } else {
+      sheet.style.transform = 'translateY(0)';
+    }
+  };
+
   return (
     <div className="sheet-overlay" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="grab" />
+      <div
+        className="sheet"
+        ref={sheetRef}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="sheet-grab"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          <span className="sheet-grab-bar" />
+        </div>
         <div className="sheet-hd">
           <h3>{title}</h3>
+          {/* Cancel button remains for accessibility / non-touch dismiss */}
           <button className="close" onClick={onClose}>Cancel</button>
         </div>
         <div className="sheet-body">{children}</div>

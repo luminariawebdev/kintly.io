@@ -364,7 +364,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
             <div
               className="sheet"
               onClick={e => e.stopPropagation()}
-              style={{ maxWidth: 380, alignSelf: 'center', margin: 'auto 0', maxHeight: 'none' }}
+              style={{ maxWidth: 380, alignSelf: 'center', margin: 'auto 0', maxHeight: 'none', minHeight: 'auto' }}
             >
               <div className="sheet-hd">
                 <h3>{avatarMode === 'emoji' ? 'Pick an emoji' : 'Change avatar'}</h3>
@@ -472,7 +472,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
             <div
               className="sheet"
               onClick={e => e.stopPropagation()}
-              style={{ maxWidth: 380, alignSelf: 'center', margin: 'auto 0', maxHeight: 'none' }}
+              style={{ maxWidth: 380, alignSelf: 'center', margin: 'auto 0', maxHeight: 'none', minHeight: 'auto' }}
             >
               <div className="sheet-hd">
                 <h3>Sign out?</h3>
