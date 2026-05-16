@@ -46,23 +46,40 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const me = COLORS.find(c => c.id === color) ?? COLORS[0];
   const group = profile?.group;
 
-  const saveName = async () => {
+  // Local-only setters — no DB writes until the user clicks Save below.
+  const saveColor = (newColor) => { setColor(newColor); setShowSw(false); };
+  const saveAvatar = (next) => { setAvatar(next || ''); };
+
+  const dirty = (
+    name !== (profile?.display_name ?? '') ||
+    color !== (profile?.color ?? 'coral') ||
+    avatar !== (profile?.avatar ?? '')
+  );
+
+  const saveProfile = async () => {
     if (!name.trim()) { setNameErr('Name cannot be empty'); return; }
-    if (name.trim() === profile?.display_name) return;
+    if (!dirty) return;
     setSaving(true);
     setNameErr('');
-    const { error } = await supabase
-      .from('profiles')
-      .update({ display_name: name.trim() })
-      .eq('id', profile.id);
+    let payload = {
+      display_name: name.trim(),
+      color,
+      avatar: avatar || null,
+    };
+    let { error } = await supabase.from('profiles').update(payload).eq('id', profile.id);
+    // Fallback if avatar column hasn't been migrated yet
+    if (error && /avatar/i.test(error.message || '')) {
+      const { avatar: _a, ...rest } = payload;
+      ({ error } = await supabase.from('profiles').update(rest).eq('id', profile.id));
+      if (!error) {
+        alert('Saved name & color — avatar column missing.\nRun:\n\nalter table public.profiles add column if not exists avatar text;');
+      }
+    }
     setSaving(false);
-    if (error) { setNameErr(error.message); } else { onProfileUpdate(); }
-  };
-
-  const saveColor = async (newColor) => {
-    setColor(newColor);
-    setShowSw(false);
-    await supabase.from('profiles').update({ color: newColor }).eq('id', profile.id);
+    if (error) {
+      setNameErr(error.message);
+      return;
+    }
     onProfileUpdate();
   };
 
@@ -77,18 +94,8 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const saveAvatar = async (next) => {
-    setAvatar(next);
-    const { error } = await supabase.from('profiles').update({ avatar: next || null }).eq('id', profile.id);
-    if (error && /avatar/i.test(error.message || '')) {
-      alert('Avatar column missing — run:\n\nalter table public.profiles add column if not exists avatar text;');
-      return;
-    }
-    onProfileUpdate();
-  };
-
-  const pickEmoji = async (emoji) => {
-    await saveAvatar(emoji);
+  const pickEmoji = (emoji) => {
+    saveAvatar(emoji);
     setAvatarPickerOpen(false);
     setAvatarMode('main');
   };
@@ -119,8 +126,8 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
     reader.readAsDataURL(file);
   };
 
-  const removeAvatar = async () => {
-    await saveAvatar('');
+  const removeAvatar = () => {
+    saveAvatar('');
     setAvatarPickerOpen(false);
     setAvatarMode('main');
   };
@@ -160,7 +167,6 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                 <input
                   value={name}
                   onChange={e => { setName(e.target.value); setNameErr(''); }}
-                  onBlur={saveName}
                   onKeyDown={e => e.key === 'Enter' && e.target.blur()}
                   style={{
                     border: 0, background: 'transparent',
@@ -230,6 +236,25 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                 </div>
               )}
             </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '-4px 0 22px' }}>
+            <span style={{
+              fontSize: 11, color: dirty ? 'var(--kinnekt-purple)' : 'var(--text-muted)',
+              fontStyle: 'italic',
+            }}>
+              {saving ? 'Saving…' : (dirty ? 'Unsaved changes' : 'All changes saved')}
+            </span>
+            <button
+              className="fb-btn solid"
+              onClick={saveProfile}
+              disabled={!dirty || saving}
+              style={{
+                width: 'auto', padding: '10px 22px', fontSize: 13,
+                opacity: (!dirty || saving) ? 0.45 : 1,
+                cursor: (!dirty || saving) ? 'not-allowed' : 'pointer',
+              }}
+            >{saving ? 'Saving…' : 'Save'}</button>
           </div>
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Group</div>
