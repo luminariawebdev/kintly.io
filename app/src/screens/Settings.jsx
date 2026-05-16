@@ -476,7 +476,6 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
             >
               <div className="sheet-hd">
                 <h3>Sign out?</h3>
-                <button className="close" onClick={() => setConfirmSignOut(false)}>Cancel</button>
               </div>
               <div className="sheet-body">
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
@@ -486,7 +485,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
               </div>
               <div className="sheet-foot">
                 <button className="danger-btn" style={{ width: '100%' }} onClick={signOut}>Sign out</button>
-                <button className="fb-btn" onClick={() => setConfirmSignOut(false)}>Stay signed in</button>
+                <button className="fb-btn" onClick={() => setConfirmSignOut(false)}>Cancel</button>
               </div>
             </div>
           </div>
