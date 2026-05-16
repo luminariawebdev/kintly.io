@@ -1806,11 +1806,27 @@ export function MainApp({ profile, onSettings }) {
       supabase.from('events').select('*').eq('group_id', profile.group_id).order('date', { ascending: true }),
       supabase.from('notes').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
     ]).then(([m, t, e, n]) => {
+      const allTasks = t.data || [];
+      // Auto-delete completed tasks older than 72 hours (only those the
+      // current user is allowed to delete via RLS — typically tasks
+      // assigned to them or unassigned). Others stay until their owner
+      // signs in and triggers their own cleanup pass.
+      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+      const stale = allTasks.filter(task =>
+        task.completed && task.completed_at && new Date(task.completed_at).getTime() < cutoff
+      );
+      const fresh = stale.length === 0
+        ? allTasks
+        : allTasks.filter(task => !stale.some(s => s.id === task.id));
       setMembers(m.data || []);
-      setTasks(t.data || []);
+      setTasks(fresh);
       setEvents(e.data || []);
       setNotes(n.data || []);
       setLoading(false);
+      if (stale.length > 0) {
+        // Fire-and-forget — RLS will reject any we can't delete
+        supabase.from('tasks').delete().in('id', stale.map(s => s.id));
+      }
     });
 
     // Load notifications (silently no-op if table missing)
@@ -1864,8 +1880,14 @@ export function MainApp({ profile, onSettings }) {
   // Task CRUD
   const toggleTask = async (id, completed) => {
     if (!completed) playPop(); // play only when checking ON
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !completed } : t));
-    await supabase.from('tasks').update({ completed: !completed }).eq('id', id);
+    const next = !completed;
+    const completedAt = next ? new Date().toISOString() : null;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: next, completed_at: completedAt } : t));
+    let { error } = await supabase.from('tasks').update({ completed: next, completed_at: completedAt }).eq('id', id);
+    // Fall back without completed_at if the column hasn't been migrated yet
+    if (error && /completed_at/i.test(error.message || '')) {
+      await supabase.from('tasks').update({ completed: next }).eq('id', id);
+    }
   };
   const notify = async (targetIds, type, payload) => {
     if (!targetIds || targetIds.length === 0) return;

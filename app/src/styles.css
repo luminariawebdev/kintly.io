@@ -674,25 +674,28 @@ html { overscroll-behavior-x: none; }
   position: relative;
   overflow: hidden;
 }
-/* Author-color tint that fades in on hover. Sits behind the card content. */
+/* Author-color tint, always visible behind content; intensifies on hover. */
 .note-card::before {
   content: '';
   position: absolute;
   inset: 0;
   background: var(--author-c, transparent);
-  opacity: 0;
+  opacity: 0.14;
   pointer-events: none;
   border-radius: inherit;
   transition: opacity 0.25s var(--ease);
   z-index: 0;
 }
 .note-card > * { position: relative; z-index: 1; }
+.note-card {
+  border-color: color-mix(in srgb, var(--author-c, transparent) 35%, var(--border-glass));
+}
 .note-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-medium);
   border-color: var(--author-c, var(--hover-border));
 }
-.note-card:hover::before { opacity: 0.22; }
+.note-card:hover::before { opacity: 0.26; }
 .note-card.pinned {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 232, 232, 0.65));
   border-color: rgba(255, 122, 122, 0.35);
