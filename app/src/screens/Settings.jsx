@@ -162,62 +162,68 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
             <div className="set-row" style={{ display: 'block' }}>
               <span className="lbl">Avatar</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 6 }}>
-                <span
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, marginTop: 8, position: 'relative' }}>
+                <label
+                  className="avatar-circle"
                   style={{
-                    width: 56, height: 56, borderRadius: '50%',
+                    position: 'relative',
+                    width: 84, height: 84, borderRadius: '50%',
                     background: avatarIsImage ? `center / cover no-repeat url(${avatar})` : (me.hex),
-                    border: '2px solid rgba(255, 255, 255, 0.85)',
-                    boxShadow: '0 4px 14px rgba(15, 30, 60, 0.14)',
+                    border: '3px solid rgba(255, 255, 255, 0.9)',
+                    boxShadow: '0 6px 18px rgba(15, 30, 60, 0.16)',
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 28,
+                    fontSize: 40, lineHeight: 1,
                     color: 'var(--ink)',
                     flexShrink: 0,
+                    cursor: 'pointer',
+                    transition: 'transform 0.2s var(--ease), box-shadow 0.2s var(--ease)',
                   }}
+                  onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.04)'; e.currentTarget.style.boxShadow = '0 10px 24px rgba(106, 77, 255, 0.25)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 6px 18px rgba(15, 30, 60, 0.16)'; }}
+                  title="Click to set an emoji"
                 >
                   {!avatarIsImage && (avatar || '')}
-                </span>
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <input
                     type="text"
                     inputMode="text"
                     value={emojiInput}
-                    onChange={e => setEmojiInput(e.target.value)}
-                    onBlur={e => onEmojiSubmit(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') { onEmojiSubmit(e.target.value); e.target.blur(); } }}
-                    placeholder="Type an emoji…"
+                    onChange={e => { setEmojiInput(e.target.value); if (e.target.value) { onEmojiSubmit(e.target.value); } }}
                     style={{
-                      background: 'var(--surface-glass)',
-                      border: '1px solid var(--border-glass)',
-                      borderRadius: 10,
-                      padding: '8px 12px',
-                      fontSize: 16,
+                      position: 'absolute', inset: 0,
+                      width: '100%', height: '100%',
+                      opacity: 0, border: 0, padding: 0, margin: 0,
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      borderRadius: '50%',
                       outline: 'none',
-                      width: '100%',
                     }}
+                    aria-label="Click to set an emoji avatar"
                   />
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      className="copy-btn"
-                      onClick={() => fileInputRef.current?.click()}
-                      style={{ marginLeft: 0, fontSize: 12, padding: '7px 12px' }}
-                    >Upload photo…</button>
-                    {avatar && (
-                      <button
-                        className="copy-btn"
-                        onClick={removeAvatar}
-                        style={{ marginLeft: 0, fontSize: 12, padding: '7px 12px' }}
-                      >Remove</button>
-                    )}
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      style={{ display: 'none' }}
-                      onChange={e => { onPickPhoto(e.target.files?.[0]); e.target.value = ''; }}
-                    />
-                  </div>
-                </div>
+                </label>
+                <button
+                  className="copy-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{ marginLeft: 0, fontSize: 13, padding: '8px 16px' }}
+                >Upload photo</button>
+                {avatar && (
+                  <button
+                    onClick={removeAvatar}
+                    style={{
+                      background: 'none', border: 0, padding: 0,
+                      fontSize: 11, color: 'var(--text-muted)',
+                      cursor: 'pointer', textDecoration: 'underline',
+                      textUnderlineOffset: 3,
+                      fontFamily: 'inherit',
+                    }}
+                  >Remove avatar</button>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={e => { onPickPhoto(e.target.files?.[0]); e.target.value = ''; }}
+                />
               </div>
             </div>
 

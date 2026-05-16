@@ -918,7 +918,14 @@ html { overscroll-behavior-x: none; }
   font-size: 14px;
 }
 .set-row:last-child { border-bottom: 0; }
-.set-row.danger .val { color: var(--kinnekt-coral); }
+.set-row.danger {
+  transition: background-color 0.2s var(--ease), color 0.2s var(--ease);
+}
+.set-row.danger .val { color: #7A1818; }
+.set-row.danger:hover { background: rgba(94, 14, 14, 0.10); }
+.set-row.danger:hover .val,
+.set-row.danger:hover .car { color: #5E0E0E; }
+.set-row.danger:active { background: rgba(94, 14, 14, 0.18); }
 .set-row .lbl {
   display: block;
   font-size: 10px;

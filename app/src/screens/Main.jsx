@@ -870,24 +870,6 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
       )}
 
       <div className="field" style={{ marginBottom: 14 }}>
-        <label>Created by</label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          {p ? (
-            <span
-              className="member-link"
-              onClick={() => onShowMember && onShowMember(p)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-            >
-              <Dot profile={p} />
-              <span>{p.display_name}</span>
-            </span>
-          ) : (
-            <span>Unknown</span>
-          )}
-        </div>
-      </div>
-
-      <div className="field" style={{ marginBottom: 0 }}>
         <label>Attendees</label>
         {Array.isArray(event.attendees) && event.attendees.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -913,6 +895,7 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
                 >
                   <Dot profile={ap} />
                   <span>{ap?.display_name || 'Unknown'}</span>
+                  {uid === myId && <span className="userbadge"><span className="you">you</span></span>}
                 </span>
               );
             })}
@@ -922,6 +905,25 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
             No attendees added.
           </div>
         )}
+      </div>
+
+      <div className="field" style={{ marginBottom: 0 }}>
+        <label>Created by</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          {p ? (
+            <span
+              className="member-link"
+              onClick={() => onShowMember && onShowMember(p)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
+              <Dot profile={p} />
+              <span>{p.display_name}</span>
+              {p.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+            </span>
+          ) : (
+            <span>Unknown</span>
+          )}
+        </div>
       </div>
 
       {event.created_by === myId && (
@@ -1433,6 +1435,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
               >
                 <Dot profile={assignee} />
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{assignee.display_name}</span>
+                {assignee.id === myId && <span className="userbadge"><span className="you">you</span></span>}
               </span>
             ) : (
               <span style={{ fontSize: 14, color: 'var(--text-muted)', fontStyle: 'italic' }}>Unassigned</span>
@@ -1450,6 +1453,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
               >
                 <Dot profile={creator} />
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{creator.display_name}</span>
+                {creator.id === myId && <span className="userbadge"><span className="you">you</span></span>}
               </span>
             ) : (
               <span style={{ fontSize: 14 }}>Unknown</span>
@@ -1571,6 +1575,7 @@ function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDele
           >
             <Dot profile={author} />
             <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name || 'Unknown'}</span>
+            {author?.id === myId && <span className="userbadge"><span className="you">you</span></span>}
           </span>
           <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginTop: 4 }}>{when}</div>
         </div>
