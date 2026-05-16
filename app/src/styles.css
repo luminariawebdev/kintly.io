@@ -1279,8 +1279,9 @@ html { overscroll-behavior-x: none; }
   align-items: center;
   justify-content: center;
   line-height: 1;
-  font-size: 9px;
+  font-size: 14px;
 }
-.dot.lg.avatar-emoji  { font-size: 13px; }
-.dot.xl.avatar-emoji  { font-size: 20px; }
+.dot.lg.avatar-emoji  { font-size: 22px; }
+.dot.xl.avatar-emoji  { font-size: 32px; }
 .fb-prof.has-avatar { background-color: transparent; background-repeat: no-repeat; }
+.fb-prof.has-emoji   { font-size: 28px; line-height: 1; }

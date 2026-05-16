@@ -159,7 +159,7 @@ function ProfileButton({ profile, onClick }) {
   }
   return (
     <button
-      className="fb-prof"
+      className={'fb-prof' + (avatar ? ' has-emoji' : '')}
       style={baseStyle}
       onClick={onClick}
       title="Settings"
