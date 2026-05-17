@@ -101,6 +101,136 @@ if (typeof window !== 'undefined' && !window.__popPrimed) {
   window.addEventListener('keydown', prime, { once: true });
 }
 
+function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
+  const REVEAL = 76;
+  const ENGAGE = 10;
+  const SNAP_OPEN = 32;
+
+  const [offset, setOffset] = React.useState(0);
+  const stateRef = React.useRef({
+    startX: 0, startY: 0, dragging: false,
+    axis: null, startOffset: 0, moved: false,
+  });
+  const wrapRef = React.useRef(null);
+
+  // Close when user clicks/taps anywhere outside this row while open
+  React.useEffect(() => {
+    if (offset === 0) return;
+    const handler = (e) => {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target)) setOffset(0);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler, { passive: true });
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [offset]);
+
+  const onPointerDown = (e) => {
+    if (disabled) return;
+    stateRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: true,
+      axis: null,
+      startOffset: offset,
+      moved: false,
+    };
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch {}
+  };
+
+  const onPointerMove = (e) => {
+    const s = stateRef.current;
+    if (!s.dragging) return;
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    if (!s.axis) {
+      if (Math.abs(dx) < ENGAGE && Math.abs(dy) < ENGAGE) return;
+      s.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    }
+    if (s.axis !== 'x') return;
+    s.moved = true;
+    const next = Math.min(0, Math.max(-REVEAL, s.startOffset + dx));
+    setOffset(next);
+  };
+
+  const onPointerUp = (e) => {
+    const s = stateRef.current;
+    if (!s.dragging) return;
+    s.dragging = false;
+    try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {}
+    if (s.axis === 'x' && s.moved) {
+      setOffset(offset < -SNAP_OPEN ? -REVEAL : 0);
+    }
+  };
+
+  // Suppress click that happens after a drag, OR close-on-tap when open
+  const onClickCapture = (e) => {
+    if (stateRef.current.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+      stateRef.current.moved = false;
+      return;
+    }
+    if (offset !== 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      setOffset(0);
+    }
+  };
+
+  if (disabled) return <>{children}</>;
+
+  const open = offset <= -SNAP_OPEN;
+  const fade = Math.min(1, -offset / REVEAL);
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', overflow: 'hidden', borderRadius: 'inherit' }}>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOffset(0); onDelete?.(); }}
+        aria-hidden={!open}
+        tabIndex={open ? 0 : -1}
+        style={{
+          position: 'absolute',
+          right: 0, top: 0, bottom: 0,
+          width: REVEAL,
+          background: '#7A1818',
+          color: '#FFFFFF',
+          border: 0,
+          padding: 0,
+          fontFamily: 'Inter, system-ui, sans-serif',
+          fontSize: 13,
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          cursor: open ? 'pointer' : 'default',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          opacity: fade,
+          pointerEvents: open ? 'auto' : 'none',
+        }}
+      >{label}</button>
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onClickCapture={onClickCapture}
+        style={{
+          transform: `translateX(${offset}px)`,
+          transition: stateRef.current.dragging ? 'none' : 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
+          touchAction: 'pan-y',
+          background: 'inherit',
+          willChange: 'transform',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function Dot({ profile, size = '' }) {
   const avatar = profile?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
@@ -214,9 +344,10 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
   const canActOnTask = !isCancelled && (!task.assigned_to || task.assigned_to === myId);
   const dimText = task.completed || isCancelled;
   return (
+    <SwipeToDelete onDelete={onDelete} disabled={!canActOnTask}>
     <div
       className={'trow' + (task.completed ? ' done' : '') + (isCancelled ? ' cancelled' : '')}
-      style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--rule)', cursor: onClick ? 'pointer' : 'default' }}
+      style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px', background: 'var(--surface-glass-strong)', borderBottom: '1px solid var(--rule)', cursor: onClick ? 'pointer' : 'default' }}
       onClick={onClick}
     >
       <button
@@ -265,14 +396,8 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
           </div>
         )}
       </div>
-      {canActOnTask && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          style={{ opacity: 0.25, fontSize: 16, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}
-          title="Delete task"
-        >×</button>
-      )}
     </div>
+    </SwipeToDelete>
   );
 }
 
@@ -499,8 +624,8 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
               const p = getProfile(e.created_by);
               const d = new Date(e.date + 'T00:00:00');
               return (
+                <SwipeToDelete key={e.id} onDelete={() => onDelete(e.id)} disabled={e.created_by !== myId}>
                 <div
-                  key={e.id}
                   className="upcoming-row"
                   style={{ borderLeft: `5px solid ${getColor(e.color || p?.color)}`, cursor: 'pointer' }}
                   onClick={() => onShowEvent?.(e)}
@@ -517,14 +642,8 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
                       {p && <><Dot profile={p} /><span>{p.display_name}</span></>}
                     </div>
                   </div>
-                  {e.created_by === myId && (
-                    <button
-                      onClick={(ev) => { ev.stopPropagation(); onDelete(e.id); }}
-                      style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                      title="Delete event"
-                    >×</button>
-                  )}
                 </div>
+                </SwipeToDelete>
               );
             })}
           </div>
@@ -561,8 +680,8 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
           const author = getProfile(n.created_by);
           const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
           return (
+            <SwipeToDelete key={n.id} onDelete={() => onDelete(n.id)} disabled={n.created_by !== myId}>
             <div
-              key={n.id}
               className={'note-card' + (n.pinned ? ' pinned' : '')}
               style={{ position: 'relative', cursor: 'pointer', '--author-c': getColor(author?.color) }}
               onClick={() => onOpenNote?.(n)}
@@ -579,21 +698,13 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
                 <span className="when">{when}</span>
               </div>
               <div className="note-body">{n.content}</div>
-              <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4 }}>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onTogglePin(n.id, n.pinned); }}
-                  style={{ fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', opacity: n.pinned ? 0.8 : 0.25 }}
-                  title={n.pinned ? 'Unpin' : 'Pin'}
-                >📌</button>
-                {n.created_by === myId && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(n.id); }}
-                    style={{ opacity: 0.25, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
-                    title="Delete note"
-                  >×</button>
-                )}
-              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); onTogglePin(n.id, n.pinned); }}
+                style={{ position: 'absolute', top: 8, right: 8, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', opacity: n.pinned ? 0.8 : 0.25 }}
+                title={n.pinned ? 'Unpin' : 'Pin'}
+              >📌</button>
             </div>
+            </SwipeToDelete>
           );
         })}
           </div>
@@ -885,6 +996,7 @@ function EventCard({ event, getProfile, myId, onDelete, onClick }) {
     ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
     : 'All day';
   return (
+    <SwipeToDelete onDelete={() => onDelete(event.id)} disabled={event.created_by !== myId}>
     <div
       onClick={onClick}
       style={{
@@ -918,14 +1030,8 @@ function EventCard({ event, getProfile, myId, onDelete, onClick }) {
           </div>
         )}
       </div>
-      {event.created_by === myId && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(event.id); }}
-          style={{ opacity: 0.3, fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-          title="Delete event"
-        >×</button>
-      )}
     </div>
+    </SwipeToDelete>
   );
 }
 
