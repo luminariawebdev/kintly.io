@@ -19,18 +19,45 @@ create table if not exists public.profiles (
 );
 
 create table if not exists public.tasks (
-  id           uuid default gen_random_uuid() primary key,
-  group_id     uuid references public.groups not null,
-  created_by   uuid references public.profiles not null,
-  assigned_to  uuid references public.profiles,
-  note_id      uuid references public.notes on delete set null,
-  title        text not null,
-  completed    boolean default false,
-  completed_at timestamptz,
-  due_date     date,
-  recurrence   jsonb,
-  created_at   timestamptz default now()
+  id                  uuid default gen_random_uuid() primary key,
+  group_id            uuid references public.groups not null,
+  created_by          uuid references public.profiles not null,
+  assigned_to         uuid references public.profiles,
+  note_id             uuid references public.notes on delete set null,
+  title               text not null,
+  description         text,
+  completed           boolean default false,
+  completed_at        timestamptz,
+  cancelled_at        timestamptz,
+  cancellation_reason text,
+  due_date            date,
+  recurrence          jsonb,
+  created_at          timestamptz default now()
 );
+
+-- Comments on bulletin board notes — anyone in the group can post.
+create table if not exists public.note_comments (
+  id         uuid default gen_random_uuid() primary key,
+  note_id    uuid references public.notes on delete cascade not null,
+  group_id   uuid references public.groups not null,
+  created_by uuid references public.profiles not null,
+  content    text not null,
+  created_at timestamptz default now()
+);
+create index if not exists note_comments_note_idx on public.note_comments(note_id, created_at);
+alter table public.note_comments enable row level security;
+drop policy if exists "note_comments_select" on public.note_comments;
+drop policy if exists "note_comments_insert" on public.note_comments;
+drop policy if exists "note_comments_update" on public.note_comments;
+drop policy if exists "note_comments_delete" on public.note_comments;
+create policy "note_comments_select" on public.note_comments
+  for select using (group_id = public.my_group_id());
+create policy "note_comments_insert" on public.note_comments
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+create policy "note_comments_update" on public.note_comments
+  for update using (created_by = auth.uid());
+create policy "note_comments_delete" on public.note_comments
+  for delete using (created_by = auth.uid());
 
 create table if not exists public.events (
   id         uuid default gen_random_uuid() primary key,

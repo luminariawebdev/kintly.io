@@ -207,13 +207,15 @@ function buildCalendar(year, month) {
 // ─── Task Row ────────────────────────────────────────────────────────────────
 function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
   const color = getColor(assignee?.color);
-  const overdue = !task.completed && dueDateOverdue(task.due_date);
+  const isCancelled = !!task.cancelled_at;
+  const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
   // Only the assignee can check off or delete a task.
   // Unassigned tasks can be acted on by anyone in the group.
-  const canActOnTask = !task.assigned_to || task.assigned_to === myId;
+  const canActOnTask = !isCancelled && (!task.assigned_to || task.assigned_to === myId);
+  const dimText = task.completed || isCancelled;
   return (
     <div
-      className={'trow' + (task.completed ? ' done' : '')}
+      className={'trow' + (task.completed ? ' done' : '') + (isCancelled ? ' cancelled' : '')}
       style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--rule)', cursor: onClick ? 'pointer' : 'default' }}
       onClick={onClick}
     >
@@ -221,7 +223,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
         disabled={!canActOnTask}
         style={{
           width: 22, height: 22, borderRadius: '50%',
-          border: `2.5px solid ${color}`,
+          border: `2.5px solid ${isCancelled ? '#7A1818' : color}`,
           background: task.completed ? color : 'transparent',
           cursor: canActOnTask ? 'pointer' : 'not-allowed',
           opacity: canActOnTask ? 1 : 0.45,
@@ -229,13 +231,35 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
         }}
         onClick={(e) => { e.stopPropagation(); if (canActOnTask) onToggle(); }}
-        title={canActOnTask ? '' : 'Only the assignee can complete this task'}
+        title={isCancelled ? 'This task was cancelled' : (canActOnTask ? '' : 'Only the assignee can complete this task')}
       >
         {task.completed && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
+        {isCancelled && !task.completed && <span style={{ color: '#7A1818', fontSize: 12, fontWeight: 800, lineHeight: 1 }}>×</span>}
       </button>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 500, textDecoration: task.completed ? 'line-through' : 'none', opacity: task.completed ? 0.45 : 1, wordBreak: 'break-word' }}>{task.title}</div>
-        {task.due_date && (
+        <div style={{
+          fontSize: 14, fontWeight: 500,
+          textDecoration: dimText ? 'line-through' : 'none',
+          opacity: dimText ? 0.55 : 1,
+          wordBreak: 'break-word',
+        }}>
+          {task.title}
+          {isCancelled && (
+            <span style={{
+              marginLeft: 8,
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 9, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '0.10em',
+              color: '#7A1818',
+              padding: '2px 6px',
+              borderRadius: 6,
+              background: 'rgba(122, 24, 24, 0.10)',
+              border: '1px solid rgba(122, 24, 24, 0.25)',
+              verticalAlign: 'middle',
+            }}>Cancelled</span>
+          )}
+        </div>
+        {task.due_date && !isCancelled && (
           <div style={{ fontSize: 11, marginTop: 2, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: overdue ? '#E27457' : 'var(--ink-mid)' }}>
             {formatDue(task.due_date)}
           </div>
@@ -582,6 +606,7 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
 // ─── Add Task Modal ───────────────────────────────────────────────────────────
 function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const [title, setTitle] = React.useState('');
+  const [description, setDescription] = React.useState('');
   const [assignee, setAssignee] = React.useState(myId || null);
   const [dueOpt, setDueOpt] = React.useState('today');
   const [dueDate, setDueDate] = React.useState('');
@@ -612,19 +637,23 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   };
 
   const reset = () => {
-    setTitle(''); setAssignee(myId || null); setDueOpt('today'); setDueDate('');
+    setTitle(''); setDescription(''); setAssignee(myId || null);
+    setDueOpt('today'); setDueDate('');
     setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
   };
+
+  const buildPayload = () => ({
+    title: title.trim(),
+    description: description.trim() || null,
+    assigned_to: assignee,
+    due_date: getDueDate(),
+    recurrence: getRecurrence(),
+  });
 
   const save = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    await onSave({
-      title: title.trim(),
-      assigned_to: assignee,
-      due_date: getDueDate(),
-      recurrence: getRecurrence(),
-    });
+    await onSave(buildPayload());
     reset();
     setSaving(false);
     onClose();
@@ -633,13 +662,8 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const saveAndAnother = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    await onSave({
-      title: title.trim(),
-      assigned_to: assignee,
-      due_date: getDueDate(),
-      recurrence: getRecurrence(),
-    });
-    setTitle('');
+    await onSave(buildPayload());
+    setTitle(''); setDescription('');
     setSaving(false);
   };
 
@@ -654,6 +678,20 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
       <div className="field">
         <label>Title</label>
         <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?" onKeyDown={e => e.key === 'Enter' && save()} />
+      </div>
+      <div className="field">
+        <label>Details <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <textarea
+          value={description}
+          onChange={e => setDescription(e.target.value.slice(0, 500))}
+          placeholder="Instructions, links, things to bring…"
+          rows={3}
+          maxLength={500}
+          style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule, #141414)', borderRadius: 8, background: 'var(--cream, #FFFEF7)', color: 'var(--ink, #141414)', outline: 'none', boxSizing: 'border-box' }}
+        />
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--mute)', textAlign: 'right', marginTop: 4 }}>
+          {description.length} / 500
+        </div>
       </div>
       <div className="field">
         <label>Assign to</label>
@@ -1397,7 +1435,15 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask }) {
+  const [cancelMode, setCancelMode] = React.useState(false);
+  const [cancelReason, setCancelReason] = React.useState('');
+  const [cancelling, setCancelling] = React.useState(false);
+
+  React.useEffect(() => {
+    if (open) { setCancelMode(false); setCancelReason(''); }
+  }, [open, task?.id]);
+
   if (!open || !task) return null;
   const assignee = getProfile(task.assigned_to);
   const creator = getProfile(task.created_by);
@@ -1493,6 +1539,33 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         </div>
       )}
 
+      {task.description && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Details</label>
+          <div style={{ fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{task.description}</div>
+        </div>
+      )}
+
+      {task.cancelled_at && (
+        <div style={{
+          marginBottom: 14,
+          padding: '12px 14px',
+          background: 'rgba(122, 24, 24, 0.06)',
+          border: '1px solid rgba(122, 24, 24, 0.30)',
+          borderRadius: 10,
+          color: '#7A1818',
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 4 }}>
+            Cancelled
+          </div>
+          {task.cancellation_reason && (
+            <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+              {task.cancellation_reason}
+            </div>
+          )}
+        </div>
+      )}
+
       {linkedNote && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>From note</label>
@@ -1561,34 +1634,300 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
             {createdAt && <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginTop: 4 }}>{createdAt}</div>}
           </div>
         </div>
-        {(!task.assigned_to || task.assigned_to === myId) && (
-          <button
-            onClick={() => { onDelete(task.id); onClose(); }}
-            className="danger-btn"
-          >Delete task</button>
-        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+          {task.created_by === myId && !task.cancelled_at && !cancelMode && onCancelTask && (
+            <button
+              onClick={() => setCancelMode(true)}
+              className="copy-btn"
+              style={{ marginLeft: 0 }}
+            >Cancel task</button>
+          )}
+          {(!task.assigned_to || task.assigned_to === myId) && (
+            <button
+              onClick={() => { onDelete(task.id); onClose(); }}
+              className="danger-btn"
+            >Delete task</button>
+          )}
+        </div>
       </div>
+
+      {cancelMode && (
+        <div style={{
+          marginTop: 14,
+          padding: '14px',
+          background: 'rgba(122, 24, 24, 0.05)',
+          border: '1px solid rgba(122, 24, 24, 0.25)',
+          borderRadius: 12,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#7A1818', marginBottom: 8 }}>
+            Cancel this task?
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4, marginBottom: 10 }}>
+            {assignee && assignee.id !== myId
+              ? <>The assignee, <strong>{assignee.display_name}</strong>, will be notified so they don't do duplicate work.</>
+              : <>The task will be marked as cancelled.</>
+            }
+          </div>
+          <textarea
+            value={cancelReason}
+            onChange={e => setCancelReason(e.target.value.slice(0, 300))}
+            placeholder="Reason (optional) — e.g. already taken care of"
+            rows={2}
+            maxLength={300}
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 13, padding: '8px 10px', border: '1px solid rgba(122,24,24,0.30)', borderRadius: 8, background: 'rgba(255,255,255,0.6)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box' }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => { setCancelMode(false); setCancelReason(''); }}
+              className="fb-btn"
+              style={{ width: 'auto', padding: '8px 16px', fontSize: 13 }}
+              disabled={cancelling}
+            >Back</button>
+            <button
+              onClick={async () => {
+                setCancelling(true);
+                await onCancelTask(task.id, cancelReason.trim() || null);
+                setCancelling(false);
+                onClose();
+              }}
+              className="danger-btn"
+              disabled={cancelling}
+            >{cancelling ? 'Cancelling…' : 'Confirm cancel'}</button>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
 
-function NoteDetailsModal({ open, note, tasks, myId, getProfile, onClose, onDelete, onToggleTask, onShowMember }) {
+function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated }) {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState('');
+  const [savingEdit, setSavingEdit] = React.useState(false);
+  const [comments, setComments] = React.useState([]);
+  const [newComment, setNewComment] = React.useState('');
+  const [postingComment, setPostingComment] = React.useState(false);
+
+  // Reset edit mode whenever we open a different note
+  React.useEffect(() => {
+    setEditing(false);
+    setDraft(note?.content || '');
+    setNewComment('');
+  }, [note?.id]);
+
+  // Load comments when the modal opens for a note
+  React.useEffect(() => {
+    if (!open || !note?.id) return;
+    let cancelled = false;
+    supabase
+      .from('note_comments')
+      .select('*')
+      .eq('note_id', note.id)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) { setComments([]); return; }
+        setComments(data || []);
+      });
+    return () => { cancelled = true; };
+  }, [open, note?.id]);
+
   if (!open || !note) return null;
   const author = getProfile(note.created_by);
   const when = new Date(note.created_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const linked = (tasks || []).filter(t => t.note_id === note.id);
+  const isCreator = note.created_by === myId;
+
+  const saveEdit = async () => {
+    if (!draft.trim()) return;
+    setSavingEdit(true);
+    const { error } = await supabase
+      .from('notes')
+      .update({ content: draft.trim() })
+      .eq('id', note.id);
+    setSavingEdit(false);
+    if (error) { alert('Could not save note: ' + error.message); return; }
+    if (onNoteUpdated) onNoteUpdated({ ...note, content: draft.trim() });
+    setEditing(false);
+  };
+
+  const postComment = async () => {
+    const text = newComment.trim();
+    if (!text || !myId || !myGroupId) return;
+    setPostingComment(true);
+    const { data, error } = await supabase
+      .from('note_comments')
+      .insert({ note_id: note.id, group_id: myGroupId, created_by: myId, content: text })
+      .select()
+      .single();
+    setPostingComment(false);
+    if (error) {
+      if (/note_comments/i.test(error.message || '')) {
+        alert('Comments table is missing — see schema.sql to add it.');
+      } else {
+        alert('Could not post comment: ' + error.message);
+      }
+      return;
+    }
+    setComments(prev => [...prev, data]);
+    setNewComment('');
+  };
+
+  const deleteComment = async (id) => {
+    setComments(prev => prev.filter(c => c.id !== id));
+    await supabase.from('note_comments').delete().eq('id', id);
+  };
 
   return (
     <Modal open={open} onClose={onClose} title="Note">
-      <div style={{
-        padding: '14px 16px',
-        background: 'var(--surface-glass-strong)',
-        border: '1px solid var(--border-glass)',
-        borderRadius: 'var(--r-md)',
-        fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
-        marginBottom: 14,
-      }}>
-        {note.content}
+      {editing ? (
+        <div style={{ marginBottom: 14 }}>
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            rows={5}
+            style={{
+              width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14,
+              padding: '12px 14px', border: '1.5px solid var(--kinnekt-purple)', borderRadius: 'var(--r-md)',
+              background: 'var(--surface-glass-strong)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box',
+              lineHeight: 1.5,
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => { setEditing(false); setDraft(note.content || ''); }}
+              className="fb-btn"
+              style={{ width: 'auto', padding: '8px 16px', fontSize: 13 }}
+              disabled={savingEdit}
+            >Cancel</button>
+            <button
+              onClick={saveEdit}
+              className="fb-btn solid"
+              style={{ width: 'auto', padding: '8px 18px', fontSize: 13 }}
+              disabled={savingEdit || !draft.trim()}
+            >{savingEdit ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ position: 'relative', marginBottom: 14 }}>
+          <div style={{
+            padding: '14px 16px',
+            background: 'var(--surface-glass-strong)',
+            border: '1px solid var(--border-glass)',
+            borderRadius: 'var(--r-md)',
+            fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+          }}>
+            {note.content}
+          </div>
+          {isCreator && (
+            <button
+              onClick={() => { setDraft(note.content || ''); setEditing(true); }}
+              style={{
+                position: 'absolute', top: 8, right: 8,
+                background: 'rgba(106, 77, 255, 0.10)',
+                border: '1px solid rgba(106, 77, 255, 0.30)',
+                color: 'var(--kinnekt-purple)',
+                padding: '4px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 999,
+                cursor: 'pointer',
+              }}
+              title="Edit note"
+            >Edit</button>
+          )}
+        </div>
+      )}
+
+      {/* Comments */}
+      <div style={{ marginBottom: 14, paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--text-muted)', marginBottom: 8 }}>
+          Comments{comments.length > 0 ? ` · ${comments.length}` : ''}
+        </div>
+        {comments.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 10 }}>
+            No comments yet — be the first.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+            {comments.map(c => {
+              const cAuthor = getProfile(c.created_by);
+              const cWhen = new Date(c.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+              const canDeleteComment = c.created_by === myId || isCreator;
+              return (
+                <div
+                  key={c.id}
+                  style={{
+                    padding: '10px 12px',
+                    background: 'var(--surface-glass)',
+                    border: '1px solid var(--border-glass)',
+                    borderRadius: 10,
+                    fontSize: 13, lineHeight: 1.4,
+                    position: 'relative',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                    <span
+                      className="member-link"
+                      onClick={() => cAuthor && onShowMember && onShowMember(cAuthor)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: cAuthor ? 'pointer' : 'default' }}
+                    >
+                      <Dot profile={cAuthor} />
+                      <span style={{ fontWeight: 600, fontSize: 12 }}>{cAuthor?.display_name || 'Unknown'}</span>
+                      {c.created_by === myId && <span className="userbadge"><span className="you">you</span></span>}
+                    </span>
+                    <span style={{ marginLeft: 'auto', fontSize: 10, fontStyle: 'italic', color: 'var(--text-muted)' }}>{cWhen}</span>
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{c.content}</div>
+                  {canDeleteComment && (
+                    <button
+                      onClick={() => deleteComment(c.id)}
+                      style={{
+                        position: 'absolute', top: 6, right: 6,
+                        opacity: 0.4, fontSize: 14,
+                        background: 'none', border: 'none',
+                        cursor: 'pointer', padding: '2px 4px',
+                      }}
+                      title="Delete comment"
+                    >×</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={newComment}
+            onChange={e => setNewComment(e.target.value.slice(0, 300))}
+            placeholder="Add a comment…"
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postComment(); } }}
+            style={{
+              flex: 1,
+              fontFamily: 'inherit', fontSize: 13,
+              padding: '9px 12px',
+              border: '1px solid var(--border-glass)',
+              borderRadius: 999,
+              background: 'var(--surface-glass)',
+              color: 'var(--ink)',
+              outline: 'none',
+              minWidth: 0,
+            }}
+            maxLength={300}
+            disabled={postingComment}
+          />
+          <button
+            onClick={postComment}
+            disabled={!newComment.trim() || postingComment}
+            className="fb-btn solid"
+            style={{
+              width: 'auto', padding: '9px 18px', fontSize: 13,
+              opacity: (!newComment.trim() || postingComment) ? 0.45 : 1,
+              cursor: (!newComment.trim() || postingComment) ? 'not-allowed' : 'pointer',
+            }}
+          >{postingComment ? '…' : 'Post'}</button>
+        </div>
       </div>
 
       <div style={{ borderTop: '1px dashed rgba(20, 20, 20, 0.2)', paddingTop: 14 }}>
@@ -1719,6 +2058,19 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'task_cancelled') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: '#7A1818' }}>⊘</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> cancelled a task assigned to you
+            </div>
+            <div className="fb-bell-sub">{p.task_title}{p.reason ? ` · ${p.reason}` : ''}</div>
+          </div>
+        </>
+      );
+    }
     if (n.type === 'event_invited') {
       const d = p.event_date ? new Date(p.event_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
       return (
@@ -1757,7 +2109,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!n.read) onMarkOne(n.id);
               const id = n.payload?.task_id || n.payload?.event_id;
               if (!id) return;
-              if (n.type === 'task_assigned' && onOpenTask) onOpenTask(id);
+              if ((n.type === 'task_assigned' || n.type === 'task_cancelled') && onOpenTask) onOpenTask(id);
               else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
             };
             return (
@@ -1910,11 +2262,24 @@ export function MainApp({ profile, onSettings }) {
 
   const addTask = async (data) => {
     let payload = { group_id: profile.group_id, created_by: profile.id, ...data };
-    let { data: row, error } = await supabase.from('tasks').insert(payload).select().single();
-    // Retry without recurrence if the column doesn't exist yet
-    if (error && /recurrence/i.test(error.message || '') && payload.recurrence !== undefined) {
-      const { recurrence: _r, ...rest } = payload;
-      ({ data: row, error } = await supabase.from('tasks').insert(rest).select().single());
+    // Optional columns that older schemas may not have — strip on error.
+    const optional = ['description', 'recurrence'];
+    let row = null;
+    let error = null;
+    for (let i = 0; i < 4; i++) {
+      ({ data: row, error } = await supabase.from('tasks').insert(payload).select().single());
+      if (!error) break;
+      let stripped = null;
+      const msg = (error.message || '').toLowerCase();
+      for (const col of optional) {
+        if (payload[col] !== undefined && msg.includes(col)) {
+          const { [col]: _, ...rest } = payload;
+          payload = rest;
+          stripped = col;
+          break;
+        }
+      }
+      if (!stripped) break;
     }
     if (error || !row) {
       if (error) alert('Could not save task: ' + error.message);
@@ -1934,6 +2299,39 @@ export function MainApp({ profile, onSettings }) {
   const deleteTask = async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
     await supabase.from('tasks').delete().eq('id', id);
+  };
+
+  const cancelTask = async (id, reason) => {
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+    const cancelledAt = new Date().toISOString();
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, cancelled_at: cancelledAt, cancellation_reason: reason || null } : t));
+    let payload = { cancelled_at: cancelledAt, cancellation_reason: reason || null };
+    let { error } = await supabase.from('tasks').update(payload).eq('id', id);
+    if (error) {
+      // Fall back: strip whichever optional column is missing, retry
+      const msg = (error.message || '').toLowerCase();
+      if (msg.includes('cancellation_reason')) {
+        const { cancellation_reason: _r, ...rest } = payload;
+        ({ error } = await supabase.from('tasks').update(rest).eq('id', id));
+      }
+      if (error && msg.includes('cancelled_at')) {
+        alert('Cancellation columns missing — run:\n\nalter table public.tasks add column if not exists cancelled_at timestamptz;\nalter table public.tasks add column if not exists cancellation_reason text;');
+        // revert optimistic UI
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, cancelled_at: null, cancellation_reason: null } : t));
+        return;
+      }
+    }
+    // Notify the assignee (if it's not the canceller)
+    if (task.assigned_to && task.assigned_to !== profile.id) {
+      notify([task.assigned_to], 'task_cancelled', {
+        task_id: task.id,
+        task_title: task.title,
+        reason: reason || null,
+        by_name: profile.display_name,
+        by_color: profile.color,
+      });
+    }
   };
 
   // Event CRUD
@@ -2208,11 +2606,13 @@ export function MainApp({ profile, onSettings }) {
         note={notes.find(n => n.id === detailNoteId) || null}
         tasks={tasks}
         myId={profile?.id}
+        myGroupId={profile?.group_id}
         getProfile={getProfile}
         onClose={() => setDetailNoteId(null)}
         onDelete={(id) => deleteNote(id)}
         onToggleTask={toggleTask}
         onShowMember={(p) => { setDetailNoteId(null); setDetailMemberId(p.id); }}
+        onNoteUpdated={(updated) => setNotes(prev => prev.map(n => n.id === updated.id ? updated : n))}
       />
       <TaskDetailsModal
         open={!!detailTaskId}
@@ -2223,6 +2623,7 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDetailTaskId(null)}
         onToggle={toggleTask}
         onDelete={deleteTask}
+        onCancelTask={cancelTask}
         onOpenNote={(n) => { setDetailTaskId(null); setDetailNoteId(n.id); }}
         onShowMember={(p) => { setDetailTaskId(null); setDetailMemberId(p.id); }}
       />
