@@ -130,15 +130,22 @@ function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
 
   const onPointerDown = (e) => {
     if (disabled) return;
+    // NOTE: we deliberately do NOT call setPointerCapture here. Capturing on
+    // pointerdown redirects the subsequent click event to this wrapper and
+    // prevents the child's onClick from firing — which broke tapping rows
+    // that had swipe enabled. We only capture once a horizontal drag has
+    // actually engaged (see onPointerMove below).
     stateRef.current = {
       startX: e.clientX,
       startY: e.clientY,
+      pointerId: e.pointerId,
+      target: e.currentTarget,
       dragging: true,
       axis: null,
+      captured: false,
       startOffset: offset,
       moved: false,
     };
-    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch {}
   };
 
   const onPointerMove = (e) => {
@@ -149,6 +156,11 @@ function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
     if (!s.axis) {
       if (Math.abs(dx) < ENGAGE && Math.abs(dy) < ENGAGE) return;
       s.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      // Only now, once we've committed to a horizontal swipe, capture the
+      // pointer so the user can drag past the element bounds.
+      if (s.axis === 'x') {
+        try { e.currentTarget.setPointerCapture?.(e.pointerId); s.captured = true; } catch {}
+      }
     }
     if (s.axis !== 'x') return;
     s.moved = true;
@@ -160,7 +172,10 @@ function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
     const s = stateRef.current;
     if (!s.dragging) return;
     s.dragging = false;
-    try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {}
+    if (s.captured) {
+      try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {}
+      s.captured = false;
+    }
     if (s.axis === 'x' && s.moved) {
       setOffset(offset < -SNAP_OPEN ? -REVEAL : 0);
     }
