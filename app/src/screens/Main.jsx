@@ -1762,8 +1762,24 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
       .single();
     setPostingComment(false);
     if (error) {
-      if (/note_comments/i.test(error.message || '')) {
-        alert('Comments table is missing — see schema.sql to add it.');
+      if (/note_comments/i.test(error.message || '') || /relation .* does not exist/i.test(error.message || '')) {
+        alert(
+          'Comments need a one-time database setup.\n\n' +
+          'Open Supabase → SQL Editor and run:\n\n' +
+          'create table if not exists public.note_comments (\n' +
+          '  id uuid default gen_random_uuid() primary key,\n' +
+          '  note_id uuid references public.notes on delete cascade not null,\n' +
+          '  group_id uuid references public.groups not null,\n' +
+          '  created_by uuid references public.profiles not null,\n' +
+          '  content text not null,\n' +
+          '  created_at timestamptz default now()\n' +
+          ');\n' +
+          'alter table public.note_comments enable row level security;\n' +
+          'create policy "note_comments_select" on public.note_comments for select using (group_id = public.my_group_id());\n' +
+          'create policy "note_comments_insert" on public.note_comments for insert with check (group_id = public.my_group_id() and created_by = auth.uid());\n' +
+          'create policy "note_comments_update" on public.note_comments for update using (created_by = auth.uid());\n' +
+          'create policy "note_comments_delete" on public.note_comments for delete using (created_by = auth.uid());'
+        );
       } else {
         alert('Could not post comment: ' + error.message);
       }
