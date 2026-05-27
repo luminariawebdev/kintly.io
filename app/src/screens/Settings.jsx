@@ -233,14 +233,25 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                     return (
                       <div
                         key={c.id}
-                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: disabled ? 'not-allowed' : 'pointer' }}
                         onClick={e => { e.stopPropagation(); if (!disabled) saveColor(c.id); }}
                         title={disabled ? `Chosen by ${takenBy}` : c.label}
                       >
-                        <span
-                          className={'swatch' + (isMine ? ' on' : '')}
-                          style={{ '--c': c.hex, filter: disabled ? 'grayscale(1)' : 'none', pointerEvents: 'none' }}
-                        />
+                        <div style={{ position: 'relative', display: 'inline-flex' }}>
+                          <span
+                            className={'swatch' + (isMine ? ' on' : '')}
+                            style={{ '--c': c.hex, pointerEvents: 'none' }}
+                          />
+                          {disabled && (
+                            <svg
+                              viewBox="0 0 28 28"
+                              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                            >
+                              <circle cx="14" cy="14" r="12" fill="none" stroke="rgba(80,80,80,0.85)" strokeWidth="2.5" />
+                              <line x1="5" y1="5" x2="23" y2="23" stroke="rgba(80,80,80,0.85)" strokeWidth="2.5" strokeLinecap="round" />
+                            </svg>
+                          )}
+                        </div>
                         {disabled && (
                           <span style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.2, maxWidth: 40 }}>
                             {takenBy}
