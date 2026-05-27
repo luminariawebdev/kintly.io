@@ -29,8 +29,25 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const [avatarMode, setAvatarMode] = React.useState('main'); // 'main' | 'emoji'
   const [confirmSignOut, setConfirmSignOut] = React.useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
+  const [memberColors, setMemberColors] = React.useState({}); // { colorId: displayName }
   const groupMenuRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
+
+  // Load colors already claimed by other members in the same group
+  React.useEffect(() => {
+    if (!profile?.group_id) return;
+    supabase
+      .from('profiles')
+      .select('id, display_name, color')
+      .eq('group_id', profile.group_id)
+      .neq('id', profile.id)
+      .then(({ data }) => {
+        if (!data) return;
+        const map = {};
+        data.forEach(m => { if (m.color) map[m.color] = m.display_name || 'Someone'; });
+        setMemberColors(map);
+      });
+  }, [profile?.group_id, profile?.id]);
 
   React.useEffect(() => {
     if (!groupMenuOpen) return;
@@ -208,16 +225,30 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                 <span className="car">{showSw ? '▴' : '▾'}</span>
               </div>
               {showSw && (
-                <div className="swatches" style={{ paddingTop: 10 }}>
-                  {COLORS.map(c => (
-                    <span
-                      key={c.id}
-                      className={'swatch' + (c.id === color ? ' on' : '')}
-                      style={{ '--c': c.hex }}
-                      onClick={e => { e.stopPropagation(); saveColor(c.id); }}
-                      title={c.label}
-                    />
-                  ))}
+                <div className="swatches" style={{ paddingTop: 10, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                  {COLORS.map(c => {
+                    const takenBy = memberColors[c.id];
+                    const isMine = c.id === color;
+                    const disabled = !!takenBy;
+                    return (
+                      <div
+                        key={c.id}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}
+                        onClick={e => { e.stopPropagation(); if (!disabled) saveColor(c.id); }}
+                        title={disabled ? `Chosen by ${takenBy}` : c.label}
+                      >
+                        <span
+                          className={'swatch' + (isMine ? ' on' : '')}
+                          style={{ '--c': c.hex, filter: disabled ? 'grayscale(1)' : 'none', pointerEvents: 'none' }}
+                        />
+                        {disabled && (
+                          <span style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.2, maxWidth: 40 }}>
+                            {takenBy}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
