@@ -616,7 +616,7 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
               {evs.slice(0, 2).map(e => {
                 const p = getProfile(e.created_by);
                 return (
-                  <div key={e.id} className="evt-chip" style={{ background: getColor(e.color || p?.color), fontSize: 9, padding: '1px 3px', borderRadius: 3, color: '#fff', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', marginTop: 1, cursor: 'pointer' }} title={e.title}>
+                  <div key={e.id} className="evt-chip" style={{ background: getColor(p?.color || e.color), fontSize: 9, padding: '1px 3px', borderRadius: 3, color: '#fff', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', marginTop: 1, cursor: 'pointer' }} title={e.title}>
                     {e.title}
                   </div>
                 );
@@ -650,7 +650,7 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
                 <SwipeToDelete key={e.id} onDelete={() => onDelete(e.id)} disabled={e.created_by !== myId}>
                 <div
                   className="upcoming-row"
-                  style={{ borderLeft: `5px solid ${getColor(e.color || p?.color)}`, cursor: 'pointer' }}
+                  style={{ borderLeft: `5px solid ${getColor(p?.color || e.color)}`, cursor: 'pointer' }}
                   onClick={() => onShowEvent?.(e)}
                 >
                   <div className="when">
@@ -1014,7 +1014,7 @@ function fmtTime(t) {
 
 function EventCard({ event, getProfile, myId, onDelete, onClick }) {
   const p = getProfile(event.created_by);
-  const color = getColor(event.color || p?.color);
+  const color = getColor(p?.color || event.color);
   const timeStr = event.start_time
     ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
     : 'All day';
@@ -1062,7 +1062,7 @@ function EventCard({ event, getProfile, myId, onDelete, onClick }) {
 function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, onShowMember }) {
   if (!open || !event) return null;
   const p = getProfile(event.created_by);
-  const color = getColor(event.color || p?.color);
+  const color = getColor(p?.color || event.color);
   const [y, m, d] = event.date.split('-').map(Number);
   const jsDate = new Date(y, m - 1, d);
   const longDate = jsDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
