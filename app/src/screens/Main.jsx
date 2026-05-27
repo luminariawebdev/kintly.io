@@ -18,6 +18,23 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
+// Render text with @[Name] mentions highlighted as styled spans
+function renderWithMentions(text, isMe) {
+  if (!text) return null;
+  const parts = text.split(/(@\[[^\]]+\])/g);
+  return parts.map((part, i) => {
+    const m = part.match(/^@\[([^\]]+)\]$/);
+    if (m) {
+      return (
+        <span key={i} className={'mention-tag' + (isMe ? ' mention-me' : '')}>
+          @{m[1]}
+        </span>
+      );
+    }
+    return part;
+  });
+}
+
 function KinnektLogo({ size = 54 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="Kinnekt">
@@ -742,7 +759,7 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
                           title="Unpin"
                         >📌</button>
                       )}
-                      <div className="chat-text">{n.content}</div>
+                      <div className="chat-text">{renderWithMentions(n.content, isMe)}</div>
                       <div className="chat-time">{when}</div>
                     </div>
                   </div>
@@ -1299,6 +1316,10 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   const [taskDueOpt, setTaskDueOpt] = React.useState('today');
   const [taskDueDate, setTaskDueDate] = React.useState('');
 
+  // @mention state
+  const textareaRef = React.useRef(null);
+  const [mentionAnchor, setMentionAnchor] = React.useState(null); // { start, query } | null
+
   // Reset everything each time the modal opens
   React.useEffect(() => {
     if (open) {
@@ -1308,6 +1329,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       setTaskAssignee(profile?.id || null);
       setTaskDueOpt('today');
       setTaskDueDate('');
+      setMentionAnchor(null);
     }
   }, [open, profile?.id]);
 
@@ -1320,6 +1342,48 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     }
   }, [body, titleEdited]);
 
+  // @mention detection on every keystroke
+  const handleBodyChange = (e) => {
+    const val = e.target.value;
+    setBody(val);
+    const pos = e.target.selectionStart;
+    const textBefore = val.slice(0, pos);
+    // Match a bare @ (possibly followed by partial name, no brackets/newlines)
+    const m = textBefore.match(/@([^@\[\]\n]*)$/);
+    if (m) {
+      setMentionAnchor({ start: pos - m[0].length, query: m[1].toLowerCase().trim() });
+    } else {
+      setMentionAnchor(null);
+    }
+  };
+
+  // Insert a chosen member's mention into the textarea
+  const insertMention = (member) => {
+    if (mentionAnchor === null) return;
+    const cursorPos = textareaRef.current?.selectionStart ?? (mentionAnchor.start + 1);
+    const before = body.slice(0, mentionAnchor.start);
+    const after  = body.slice(cursorPos);
+    const tag    = '@[' + member.display_name + '] ';
+    const newBody = before + tag + after;
+    setBody(newBody);
+    setMentionAnchor(null);
+    // Restore focus and move cursor to end of inserted tag
+    setTimeout(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const newPos = before.length + tag.length;
+      ta.focus();
+      ta.setSelectionRange(newPos, newPos);
+    }, 0);
+  };
+
+  const otherMembers = (members || []).filter(m => m.id !== profile?.id);
+  const mentionMatches = mentionAnchor !== null
+    ? otherMembers.filter(m =>
+        !mentionAnchor.query || m.display_name?.toLowerCase().startsWith(mentionAnchor.query)
+      )
+    : [];
+
   const getDueDate = () => {
     const d = new Date();
     if (taskDueOpt === 'today') return d.toISOString().slice(0, 10);
@@ -1330,7 +1394,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   };
 
   const save = async () => {
-    if (!body.trim()) { alert('Please enter a note before posting.'); return; }
+    if (!body.trim()) { alert('Please enter a message before posting.'); return; }
     if (makeTask && !taskTitle.trim()) { alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return; }
     setSaving(true);
     const taskPayload = makeTask
@@ -1346,8 +1410,8 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={<>Pin a <em>note</em></>}
-      footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Posting…' : 'Post note'}</button>}>
+    <Modal open={open} onClose={onClose} title={<>New <em>message</em></>}
+      footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Posting…' : 'Post'}</button>}>
       <div className="field">
         <label>Posting as</label>
         <div className="assignee-picker">
@@ -1358,16 +1422,40 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           </button>
         </div>
       </div>
-      <div className="field">
-        <label>Note</label>
+      <div className="field" style={{ position: 'relative' }}>
+        <label>
+          Message
+          {otherMembers.length > 0 && (
+            <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
+              — type @ to tag someone
+            </span>
+          )}
+        </label>
         <textarea
+          ref={textareaRef}
           autoFocus
           value={body}
-          onChange={e => setBody(e.target.value)}
+          onChange={handleBodyChange}
+          onKeyDown={(e) => { if (e.key === 'Escape') setMentionAnchor(null); }}
           placeholder="What's on your mind?"
           rows={4}
           style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule)', borderRadius: 8, background: 'var(--cream)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box' }}
         />
+        {/* @mention picker dropdown */}
+        {mentionAnchor !== null && mentionMatches.length > 0 && (
+          <div className="mention-picker">
+            {mentionMatches.map(m => (
+              <button
+                key={m.id}
+                className="mention-pick-item"
+                onMouseDown={(e) => { e.preventDefault(); insertMention(m); }}
+              >
+                <Dot profile={m} />
+                <span>{m.display_name}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="field" style={{ marginTop: 4 }}>
@@ -1986,7 +2074,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
             borderRadius: 'var(--r-md)',
             fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
           }}>
-            {note.content}
+            {renderWithMentions(note.content, false)}
           </div>
           {isCreator && (
             <button
@@ -2198,7 +2286,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
 }
 
 // ─── Notifications Menu ──────────────────────────────────────────────────────
-function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent, onDelete }) {
+function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent, onOpenNote, onDelete }) {
   const unread = notifications.filter(n => !n.read).length;
 
   const formatRelative = (iso) => {
@@ -2253,6 +2341,19 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'note_tagged') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color), fontWeight: 800, fontSize: 15 }}>@</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> tagged you in a post
+            </div>
+            {p.preview && <div className="fb-bell-sub">{p.preview}</div>}
+          </div>
+        </>
+      );
+    }
     return (
       <div style={{ flex: 1 }}>
         <div className="fb-bell-text">{p.text || 'Notification'}</div>
@@ -2275,10 +2376,11 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
           notifications.slice(0, 20).map(n => {
             const handleClick = () => {
               if (!n.read) onMarkOne(n.id);
-              const id = n.payload?.task_id || n.payload?.event_id;
+              const id = n.payload?.task_id || n.payload?.event_id || n.payload?.note_id;
               if (!id) return;
               if ((n.type === 'task_assigned' || n.type === 'task_cancelled') && onOpenTask) onOpenTask(id);
               else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
+              else if (n.type === 'note_tagged' && onOpenNote) onOpenNote(id);
             };
             return (
               <SwipeToDelete key={n.id} onDelete={() => onDelete?.(n.id)}>
@@ -2585,6 +2687,24 @@ export function MainApp({ profile, onSettings }) {
     }
     setNotes(prev => [noteRow, ...prev]);
 
+    // Notify tagged members — parse @[Name] from content
+    const tagMatches = [...content.matchAll(/@\[([^\]]+)\]/g)];
+    if (tagMatches.length > 0) {
+      const taggedIds = [...new Set(
+        tagMatches
+          .map(m => members.find(mb => mb.display_name === m[1])?.id)
+          .filter(id => id && id !== profile.id)
+      )];
+      if (taggedIds.length > 0) {
+        notify(taggedIds, 'note_tagged', {
+          note_id: noteRow.id,
+          by_name: profile.display_name,
+          by_color: profile.color,
+          preview: content.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 80),
+        });
+      }
+    }
+
     if (!taskPayload || !taskPayload.title) return;
 
     const basePayload = {
@@ -2714,6 +2834,7 @@ export function MainApp({ profile, onSettings }) {
                       onMarkAll={markAllRead}
                       onOpenTask={(id) => { setBellOpen(false); setDetailTaskId(id); }}
                       onOpenEvent={(id) => { setBellOpen(false); setDetailEventId(id); }}
+                      onOpenNote={(id) => { setBellOpen(false); setDetailNoteId(id); }}
                       onDelete={deleteNotification}
                     />
                   )}

@@ -885,6 +885,70 @@ html { overscroll-behavior-x: none; }
 }
 .chat-row.them .chat-pin { right: auto; left: 6px; }
 
+/* ── @mention highlight inside chat bubbles ─────────────────── */
+.mention-tag {
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+/* On "them" bubbles — color-tinted on the neutral background */
+.chat-row.them .mention-tag,
+.mention-tag:not(.mention-me) {
+  color: var(--kinnekt-indigo);
+  background: rgba(74, 108, 255, 0.12);
+}
+/* On "me" bubbles — stands out against the colored background */
+.mention-tag.mention-me {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.28);
+}
+/* In note detail modal */
+.mention-tag:not(.mention-me) {
+  color: var(--kinnekt-indigo);
+  background: rgba(74, 108, 255, 0.12);
+}
+
+/* ── @mention picker dropdown ────────────────────────────────── */
+.mention-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--surface-primary);
+  border: 1.5px solid var(--border-medium);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-medium);
+  z-index: 200;
+  overflow: hidden;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.mention-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background 0.12s;
+}
+.mention-pick-item:last-child { border-bottom: none; }
+.mention-pick-item:hover,
+.mention-pick-item:focus {
+  background: var(--surface-secondary);
+  outline: none;
+}
+
 /* ── Generic list box (Upcoming events, To-do, Posts) ────────── */
 .fb-listbox, .upcoming-box {
   position: relative;
