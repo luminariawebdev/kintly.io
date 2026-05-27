@@ -3,18 +3,20 @@ import { supabase } from '../lib/supabase';
 import { ThemeContext } from '../App';
 
 const COLORS = [
-  { id: 'coral',       hex: '#FF9F8A', label: 'Coral' },
-  { id: 'peach',       hex: '#FFC18C', label: 'Peach' },
-  { id: 'amber',       hex: '#FFD787', label: 'Apricot' },
-  { id: 'lemon',       hex: '#F0E68C', label: 'Lemon' },
-  { id: 'moss',        hex: '#C8D685', label: 'Chartreuse' },
-  { id: 'green',       hex: '#98D4A8', label: 'Mint' },
-  { id: 'teal',        hex: '#7FCDC1', label: 'Turquoise' },
-  { id: 'blue',        hex: '#87BDE8', label: 'Sky' },
-  { id: 'periwinkle',  hex: '#A8AEE5', label: 'Periwinkle' },
-  { id: 'plum',        hex: '#BFA0E5', label: 'Lavender' },
-  { id: 'lilac',       hex: '#DAAEDA', label: 'Lilac' },
-  { id: 'rose',        hex: '#F2A4C2', label: 'Rose' },
+  { id: 'red',         hex: '#E63946', label: 'Red' },
+  { id: 'coral',       hex: '#FF6B35', label: 'Coral' },
+  { id: 'peach',       hex: '#FF9F1C', label: 'Orange' },
+  { id: 'amber',       hex: '#FFD60A', label: 'Yellow' },
+  { id: 'lemon',       hex: '#AACC00', label: 'Lime' },
+  { id: 'green',       hex: '#2DC653', label: 'Green' },
+  { id: 'teal',        hex: '#00B4D8', label: 'Cyan' },
+  { id: 'blue',        hex: '#4361EE', label: 'Blue' },
+  { id: 'periwinkle',  hex: '#7B2FBE', label: 'Purple' },
+  { id: 'plum',        hex: '#C77DFF', label: 'Violet' },
+  { id: 'lilac',       hex: '#F72585', label: 'Pink' },
+  { id: 'rose',        hex: '#FF86C8', label: 'Rose' },
+  { id: 'moss',        hex: '#57886C', label: 'Forest' },
+  { id: 'black',       hex: '#2D2D2D', label: 'Black' },
 ];
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
