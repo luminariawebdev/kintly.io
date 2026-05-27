@@ -2649,11 +2649,12 @@ export function MainApp({ profile, onSettings }) {
     <div className="fb-screen">
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
-          <div className="fb-stickyhead-head">
+          <div className="fb-stickyhead-head" style={{position:'relative'}}>
             <div className="fb-brand-block">
               <KinnektLogo size={54} />
               <span className="fb-brand-text">Kinnekt</span>
             </div>
+            <div style={{position:'absolute',top:4,right:4,width:16,height:16,borderRadius:'50%',background:'red',zIndex:9999}} />
             <div className="fb-stickyhead-right">
               <div className="fb-head-top">
                 <div className="fb-bell-wrap" ref={bellMenuRef}>
