@@ -5,9 +5,7 @@ import { ThemeContext } from '../App';
 const COLORS = [
   { id: 'red',         hex: '#E63946', label: 'Red' },
   { id: 'coral',       hex: '#FF6B35', label: 'Coral' },
-  { id: 'peach',       hex: '#FF9F1C', label: 'Orange' },
   { id: 'amber',       hex: '#FFD60A', label: 'Yellow' },
-  { id: 'lemon',       hex: '#AACC00', label: 'Lime' },
   { id: 'green',       hex: '#2DC653', label: 'Green' },
   { id: 'teal',        hex: '#00B4D8', label: 'Cyan' },
   { id: 'blue',        hex: '#4361EE', label: 'Blue' },
@@ -15,7 +13,6 @@ const COLORS = [
   { id: 'plum',        hex: '#C77DFF', label: 'Violet' },
   { id: 'lilac',       hex: '#F72585', label: 'Pink' },
   { id: 'rose',        hex: '#FF86C8', label: 'Rose' },
-  { id: 'moss',        hex: '#57886C', label: 'Forest' },
   { id: 'black',       hex: '#2D2D2D', label: 'Black' },
 ];
 

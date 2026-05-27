@@ -5,9 +5,7 @@ import { AnchorTabs, Modal } from '../Components';
 const COLOR_MAP = {
   red:        '#E63946',
   coral:      '#FF6B35',
-  peach:      '#FF9F1C',
   amber:      '#FFD60A',
-  lemon:      '#AACC00',
   green:      '#2DC653',
   teal:       '#00B4D8',
   blue:       '#4361EE',
@@ -15,7 +13,6 @@ const COLOR_MAP = {
   plum:       '#C77DFF',
   lilac:      '#F72585',
   rose:       '#FF86C8',
-  moss:       '#57886C',
   black:      '#2D2D2D',
 };
 const getColor = c => COLOR_MAP[c] || '#999';
