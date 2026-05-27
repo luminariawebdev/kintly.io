@@ -1317,12 +1317,47 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   const [taskDueDate, setTaskDueDate] = React.useState('');
 
   // @mention state
-  const textareaRef = React.useRef(null);
-  const [mentionAnchor, setMentionAnchor] = React.useState(null); // { start, query } | null
+  const editorRef = React.useRef(null);
+  const [mentionAnchor, setMentionAnchor] = React.useState(null); // { query } | null
+
+  // Extract plain text (with @[Name] markers) from the contentEditable editor
+  const getEditorText = () => {
+    const el = editorRef.current;
+    if (!el) return '';
+    function extract(node) {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+      if (node.tagName === 'BR') return '\n';
+      if (node.dataset && node.dataset.mention) return '@[' + node.dataset.mention + ']';
+      const isBlock = node !== el && (node.tagName === 'DIV' || node.tagName === 'P');
+      const children = Array.from(node.childNodes).map(extract).join('');
+      return isBlock ? '\n' + children : children;
+    }
+    return extract(el).replace(/^\n+/, '');
+  };
+
+  // Get serialized text before the cursor (for @mention detection)
+  const getTextBeforeCursor = () => {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !editorRef.current) return '';
+    const range = sel.getRangeAt(0).cloneRange();
+    range.collapse(true);
+    const preRange = document.createRange();
+    preRange.selectNodeContents(editorRef.current);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    const frag = preRange.cloneContents();
+    function extract(node) {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+      if (node.tagName === 'BR') return '\n';
+      if (node.dataset && node.dataset.mention) return '@[' + node.dataset.mention + ']';
+      return Array.from(node.childNodes).map(extract).join('');
+    }
+    return Array.from(frag.childNodes).map(extract).join('');
+  };
 
   // Reset everything each time the modal opens
   React.useEffect(() => {
     if (open) {
+      if (editorRef.current) editorRef.current.innerHTML = '';
       setBody('');
       setMakeTask(false);
       setTaskTitle('');
@@ -1330,6 +1365,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       setTaskDueOpt('today');
       setTaskDueDate('');
       setMentionAnchor(null);
+      setTimeout(() => editorRef.current?.focus(), 50);
     }
   }, [open, profile?.id]);
 
@@ -1342,39 +1378,93 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     }
   }, [body, titleEdited]);
 
-  // @mention detection on every keystroke
-  const handleBodyChange = (e) => {
-    const val = e.target.value;
-    setBody(val);
-    const pos = e.target.selectionStart;
-    const textBefore = val.slice(0, pos);
-    // Match a bare @ (possibly followed by partial name, no brackets/newlines)
-    const m = textBefore.match(/@([^@\[\]\n]*)$/);
+  // @mention detection on every input in the contentEditable editor
+  const handleInput = () => {
+    const text = getEditorText();
+    setBody(text);
+    const before = getTextBeforeCursor();
+    const m = before.match(/@([^@\[\]\n]*)$/);
     if (m) {
-      setMentionAnchor({ start: pos - m[0].length, query: m[1].toLowerCase().trim() });
+      setMentionAnchor({ query: m[1].toLowerCase().trim() });
     } else {
       setMentionAnchor(null);
     }
   };
 
-  // Insert a chosen member's mention into the textarea
+  // Paste as plain text to prevent HTML injection into the editor
+  const handlePaste = (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    if (text) {
+      document.execCommand('insertText', false, text);
+      handleInput();
+    }
+  };
+
+  // Insert a styled mention chip into the contentEditable editor
   const insertMention = (member) => {
-    if (mentionAnchor === null) return;
-    const cursorPos = textareaRef.current?.selectionStart ?? (mentionAnchor.start + 1);
-    const before = body.slice(0, mentionAnchor.start);
-    const after  = body.slice(cursorPos);
-    const tag    = '@[' + member.display_name + '] ';
-    const newBody = before + tag + after;
-    setBody(newBody);
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) { setMentionAnchor(null); return; }
+
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE) { setMentionAnchor(null); return; }
+
+    const offset = range.startOffset;
+    const textBefore = node.textContent.slice(0, offset);
+    const atMatch = textBefore.match(/@([^@\[\]\n]*)$/);
+    if (!atMatch) { setMentionAnchor(null); return; }
+
+    const atStart = offset - atMatch[0].length;
+    const afterText = node.textContent.slice(offset);
+
+    // Truncate the text node to remove the @query
+    node.textContent = node.textContent.slice(0, atStart);
+
+    // Build the mention chip element
+    const color = getColor(member.color);
+    const chip = document.createElement('span');
+    chip.contentEditable = 'false';
+    chip.dataset.mention = member.display_name;
+    chip.className = 'mention-chip-inline';
+    chip.style.setProperty('--chip-c', color);
+
+    const dotEl = document.createElement('span');
+    dotEl.className = 'mention-chip-dot';
+    dotEl.style.background = color;
+
+    const nameEl = document.createElement('span');
+    nameEl.textContent = member.display_name;
+    nameEl.style.color = color;
+
+    chip.appendChild(dotEl);
+    chip.appendChild(nameEl);
+
+    // Insert chip after the truncated text node
+    const parent = node.parentNode;
+    const nextSib = node.nextSibling;
+    if (nextSib) {
+      parent.insertBefore(chip, nextSib);
+    } else {
+      parent.appendChild(chip);
+    }
+
+    // Add a regular space + any remaining text after the cursor
+    const spaceNode = document.createTextNode(' ' + afterText);
+    chip.after(spaceNode);
+
+    // Move cursor to just after the space
+    const newRange = document.createRange();
+    newRange.setStart(spaceNode, 1);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+
     setMentionAnchor(null);
-    // Restore focus and move cursor to end of inserted tag
-    setTimeout(() => {
-      const ta = textareaRef.current;
-      if (!ta) return;
-      const newPos = before.length + tag.length;
-      ta.focus();
-      ta.setSelectionRange(newPos, newPos);
-    }, 0);
+    setBody(getEditorText());
   };
 
   const otherMembers = (members || []).filter(m => m.id !== profile?.id);
@@ -1394,14 +1484,15 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   };
 
   const save = async () => {
-    if (!body.trim()) { alert('Please enter a message before posting.'); return; }
+    const content = getEditorText().trim();
+    if (!content) { alert('Please enter a message before posting.'); return; }
     if (makeTask && !taskTitle.trim()) { alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return; }
     setSaving(true);
     const taskPayload = makeTask
       ? { title: taskTitle.trim(), assigned_to: taskAssignee, due_date: getDueDate() }
       : null;
     try {
-      await onSave(body.trim(), taskPayload);
+      await onSave(content, taskPayload);
     } catch (e) {
       alert('Error: ' + (e?.message || String(e)));
     }
@@ -1422,7 +1513,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           </button>
         </div>
       </div>
-      <div className="field" style={{ position: 'relative' }}>
+      <div className="field">
         <label>
           Message
           {otherMembers.length > 0 && (
@@ -1431,31 +1522,37 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
             </span>
           )}
         </label>
-        <textarea
-          ref={textareaRef}
-          autoFocus
-          value={body}
-          onChange={handleBodyChange}
-          onKeyDown={(e) => { if (e.key === 'Escape') setMentionAnchor(null); }}
-          placeholder="What's on your mind?"
-          rows={4}
-          style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule)', borderRadius: 8, background: 'var(--cream)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box' }}
-        />
-        {/* @mention picker dropdown */}
-        {mentionAnchor !== null && mentionMatches.length > 0 && (
-          <div className="mention-picker">
-            {mentionMatches.map(m => (
-              <button
-                key={m.id}
-                className="mention-pick-item"
-                onMouseDown={(e) => { e.preventDefault(); insertMention(m); }}
-              >
-                <Dot profile={m} />
-                <span>{m.display_name}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <div style={{ position: 'relative' }}>
+          <div
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            data-gramm="false"
+            data-gramm_editor="false"
+            className="mention-editor"
+            onInput={handleInput}
+            onKeyDown={(e) => { if (e.key === 'Escape') setMentionAnchor(null); }}
+            onPaste={handlePaste}
+          />
+          {!body && (
+            <span className="mention-editor-placeholder">What's on your mind?</span>
+          )}
+          {/* @mention picker dropdown */}
+          {mentionAnchor !== null && mentionMatches.length > 0 && (
+            <div className="mention-picker">
+              {mentionMatches.map(m => (
+                <button
+                  key={m.id}
+                  className="mention-pick-item"
+                  onMouseDown={(e) => { e.preventDefault(); insertMention(m); }}
+                >
+                  <Dot profile={m} />
+                  <span style={{ color: getColor(m.color) }}>{m.display_name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="field" style={{ marginTop: 4 }}>

@@ -944,6 +944,65 @@ html { overscroll-behavior-x: none; }
   outline: none;
 }
 
+/* ── ContentEditable mention editor ─────────────────────────── */
+.mention-editor {
+  min-height: 96px;
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1.5px solid var(--rule);
+  border-radius: 8px;
+  background: var(--cream);
+  color: var(--ink);
+  outline: none;
+  box-sizing: border-box;
+  overflow-y: auto;
+  word-break: break-word;
+  cursor: text;
+}
+.mention-editor:focus {
+  border-color: var(--kinnekt-purple);
+  box-shadow: var(--shadow-glow);
+}
+.mention-editor-placeholder {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  pointer-events: none;
+  user-select: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-family: 'Inter', system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+/* ── Inline mention chip (displayed inside the editor while composing) ── */
+.mention-chip-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 1px 5px;
+  border-radius: 999px;
+  border: 1.5px solid var(--chip-c, #999);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: default;
+  vertical-align: middle;
+  margin: 0 1px;
+  user-select: all;
+}
+.mention-chip-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 /* ── Generic list box (Upcoming events, To-do, Posts) ────────── */
 .fb-listbox, .upcoming-box {
   position: relative;
