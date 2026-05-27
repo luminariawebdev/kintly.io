@@ -2167,7 +2167,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
 }
 
 // ─── Notifications Menu ──────────────────────────────────────────────────────
-function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent }) {
+function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent, onDelete }) {
   const unread = notifications.filter(n => !n.read).length;
 
   const formatRelative = (iso) => {
@@ -2250,14 +2250,15 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
             };
             return (
-              <div
-                key={n.id}
-                className={'fb-bell-item' + (n.read ? '' : ' unread')}
-                onClick={handleClick}
-              >
-                {renderItem(n)}
-                <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
-              </div>
+              <SwipeToDelete key={n.id} onDelete={() => onDelete?.(n.id)}>
+                <div
+                  className={'fb-bell-item' + (n.read ? '' : ' unread')}
+                  onClick={handleClick}
+                >
+                  {renderItem(n)}
+                  <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
+                </div>
+              </SwipeToDelete>
             );
           })
         )}
@@ -2589,6 +2590,10 @@ export function MainApp({ profile, onSettings }) {
     setNotes(prev => prev.filter(n => n.id !== id));
     await supabase.from('notes').delete().eq('id', id);
   };
+  const deleteNotification = async (id) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    await supabase.from('notifications').delete().eq('id', id);
+  };
   const togglePin = async (id, pinned) => {
     setNotes(prev => prev.map(n => n.id === id ? { ...n, pinned: !pinned } : n));
     await supabase.from('notes').update({ pinned: !pinned }).eq('id', id);
@@ -2678,6 +2683,7 @@ export function MainApp({ profile, onSettings }) {
                       onMarkAll={markAllRead}
                       onOpenTask={(id) => { setBellOpen(false); setDetailTaskId(id); }}
                       onOpenEvent={(id) => { setBellOpen(false); setDetailEventId(id); }}
+                      onDelete={deleteNotification}
                     />
                   )}
                 </div>
