@@ -678,7 +678,8 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
 function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember }) {
-  const sorted = [...notes].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || new Date(b.created_at) - new Date(a.created_at));
+  // Chat order: oldest first
+  const sorted = [...notes].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
   return (
     <section className="fb-sec" id="sec-notes">
@@ -686,53 +687,75 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
         <div>
           <h2 className="fb-sec-title">Bulletin Board</h2>
         </div>
-        <div className="fb-sec-meta">{notes.length} notes</div>
+        <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'message' : 'messages'}</div>
       </div>
 
-      <button className="fb-btn" onClick={onAdd}>
-        <span className="plus">+</span> Add note
-      </button>
-
       {sorted.length === 0 ? (
-        <div className="kbd-hint" style={{ padding: '20px 0' }}>NO NOTES YET — ADD ONE ABOVE</div>
+        <div className="kbd-hint" style={{ padding: '24px 0' }}>NO MESSAGES YET — ADD ONE BELOW</div>
       ) : (
-        <div className="fb-listbox">
-          <div className="fb-listbox-legend">Posts</div>
-          <div className="notes" style={{ margin: 0 }}>
-        {sorted.map(n => {
-          const author = getProfile(n.created_by);
-          const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-          return (
-            <SwipeToDelete key={n.id} onDelete={() => onDelete(n.id)} disabled={n.created_by !== myId}>
-            <div
-              className={'note-card' + (n.pinned ? ' pinned' : '')}
-              style={{ position: 'relative', cursor: 'pointer', '--author-c': getColor(author?.color) }}
-              onClick={() => onOpenNote?.(n)}
-            >
-              <div className="note-meta">
-                <span
-                  className="member-link"
-                  onClick={(e) => { e.stopPropagation(); if (author && onShowMember) onShowMember(author); }}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: author ? 'pointer' : 'default' }}
+        <div className="chat-feed">
+          {sorted.map((n, i) => {
+            const author = getProfile(n.created_by);
+            const isMe = n.created_by === myId;
+            const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+            const prevNote = i > 0 ? sorted[i - 1] : null;
+            const sameAuthorAsPrev = prevNote && prevNote.created_by === n.created_by;
+            const nextNote = i < sorted.length - 1 ? sorted[i + 1] : null;
+            const sameAuthorAsNext = nextNote && nextNote.created_by === n.created_by;
+            // Last bubble in a consecutive run gets the tail
+            const showTail = !sameAuthorAsNext;
+
+            return (
+              <SwipeToDelete key={n.id} onDelete={() => onDelete(n.id)} disabled={n.created_by !== myId}>
+                <div
+                  className={`chat-row ${isMe ? 'me' : 'them'}`}
+                  style={{ marginTop: sameAuthorAsPrev ? 2 : 10 }}
                 >
-                  <Dot profile={author} />
-                  <span className="nm">{author?.display_name}</span>
-                </span>
-                <span className="when">{when}</span>
-              </div>
-              <div className="note-body">{n.content}</div>
-              <button
-                onClick={(e) => { e.stopPropagation(); onTogglePin(n.id, n.pinned); }}
-                style={{ position: 'absolute', top: 8, right: 8, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', opacity: n.pinned ? 0.8 : 0.25 }}
-                title={n.pinned ? 'Unpin' : 'Pin'}
-              >📌</button>
-            </div>
-            </SwipeToDelete>
-          );
-        })}
-          </div>
+                  {/* Left avatar slot for "them" messages */}
+                  {!isMe && (
+                    <div
+                      className="chat-avatar"
+                      style={{ visibility: sameAuthorAsNext ? 'hidden' : 'visible' }}
+                      onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+                    >
+                      <Dot profile={author} />
+                    </div>
+                  )}
+
+                  <div className="chat-bubble-wrap">
+                    {/* Sender name — only for "them", only on first in a run */}
+                    {!isMe && !sameAuthorAsPrev && (
+                      <div className="chat-sender" style={{ color: getColor(author?.color) }}>
+                        {author?.display_name}
+                      </div>
+                    )}
+
+                    <div
+                      className={`chat-bubble${showTail ? ' has-tail' : ''}`}
+                      style={{ '--bubble-c': getColor(author?.color) }}
+                      onClick={() => onOpenNote?.(n)}
+                    >
+                      {n.pinned && (
+                        <button
+                          className="chat-pin"
+                          onClick={(e) => { e.stopPropagation(); onTogglePin(n.id, n.pinned); }}
+                          title="Unpin"
+                        >📌</button>
+                      )}
+                      <div className="chat-text">{n.content}</div>
+                      <div className="chat-time">{when}</div>
+                    </div>
+                  </div>
+                </div>
+              </SwipeToDelete>
+            );
+          })}
         </div>
       )}
+
+      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
+        <span className="plus">+</span> New message
+      </button>
     </section>
   );
 }

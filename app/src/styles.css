@@ -79,6 +79,9 @@
   --shell-bg: linear-gradient(135deg, #E0E8FF 0%, #ECE5FF 50%, #DDEEFF 100%);
   --screen-bg: linear-gradient(180deg, #F7F9FF 0%, #EAF0FF 50%, #EDE6FF 100%);
   --sec-wrap-bg: linear-gradient(180deg, #F7F9FF 0%, #EFF4FF 50%, #F1EDFF 100%);
+
+  /* Chat bubble — "other person" background */
+  --chat-other-bg: #E8EAF0;
 }
 
 /* ── Dark theme overrides ───────────────────────────────────── */
@@ -115,6 +118,9 @@
   --cream: var(--surface-secondary);
   --paper-2: var(--surface-secondary);
   --hi: #1B284A;
+
+  /* Chat bubble — "other person" background (dark) */
+  --chat-other-bg: #1E2D4A;
 }
 
 * { box-sizing: border-box; }
@@ -738,6 +744,146 @@ html { overscroll-behavior-x: none; }
 .note-hd .nm { font-weight: 600; }
 .note-hd .when { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 9px; color: var(--text-muted); }
 .note-tag { font-size: 10px; color: var(--text-muted); }
+
+/* ── Chat / Bulletin Board ─────────────────────────────────── */
+.chat-feed {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 2px;
+}
+
+.chat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  /* Extra right padding so the "me" tail isn't clipped by SwipeToDelete overflow:hidden */
+  padding: 0 14px 0 2px;
+}
+
+.chat-row.me {
+  flex-direction: row-reverse;
+  /* Extra left padding for symmetry */
+  padding: 0 14px 0 14px;
+}
+
+.chat-row.them {
+  flex-direction: row;
+  padding: 0 14px 0 2px;
+}
+
+/* ── Avatar ─── */
+.chat-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Bubble wrap ─── */
+.chat-bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  max-width: 72%;
+  min-width: 0;
+}
+.chat-row.me .chat-bubble-wrap  { align-items: flex-end; }
+.chat-row.them .chat-bubble-wrap { align-items: flex-start; }
+
+/* ── Sender name (shown above "them" bubbles at run start) ─── */
+.chat-sender {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 3px;
+  padding: 0 6px;
+  letter-spacing: 0.01em;
+}
+
+/* ── Bubble base ─── */
+.chat-bubble {
+  position: relative;
+  padding: 10px 13px 7px;
+  border-radius: 18px;
+  cursor: pointer;
+  word-break: break-word;
+  max-width: 100%;
+  transition: filter 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-bubble:active { filter: brightness(0.92); }
+
+/* ── "Me" bubble — filled with profile color, white text ─── */
+.chat-row.me .chat-bubble {
+  background: var(--bubble-c, #4361EE);
+  border-bottom-right-radius: 5px;
+}
+/* Tail: bottom-right, points outward (right) */
+.chat-row.me .chat-bubble.has-tail::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: -7px;
+  width: 0; height: 0;
+  border-style: solid;
+  /* top=10 right=0 bottom=0 left=9 → triangle in bottom-right corner pointing right */
+  border-width: 10px 0 0 9px;
+  border-color: transparent transparent transparent var(--bubble-c, #4361EE);
+}
+
+/* ── "Them" bubble — neutral background, subtle author color accent ─── */
+.chat-row.them .chat-bubble {
+  background: var(--chat-other-bg);
+  border-bottom-left-radius: 5px;
+}
+/* Tail: bottom-left, points outward (left) */
+.chat-row.them .chat-bubble.has-tail::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: -7px;
+  width: 0; height: 0;
+  border-style: solid;
+  /* top=10 right=9 bottom=0 left=0 → triangle in bottom-left corner pointing left */
+  border-width: 10px 9px 0 0;
+  border-color: transparent var(--chat-other-bg) transparent transparent;
+}
+
+/* ── Text inside bubbles ─── */
+.chat-text {
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.chat-row.me .chat-text   { color: #fff; }
+.chat-row.them .chat-text { color: var(--text-primary); }
+
+/* ── Timestamp ─── */
+.chat-time {
+  font-size: 9px;
+  margin-top: 4px;
+  opacity: 0.65;
+  white-space: nowrap;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-style: italic;
+}
+.chat-row.me .chat-time   { color: rgba(255,255,255,0.9); text-align: right; }
+.chat-row.them .chat-time { color: var(--text-muted); }
+
+/* ── Pin badge ─── */
+.chat-pin {
+  position: absolute;
+  top: -10px;
+  right: 6px;
+  font-size: 13px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.chat-row.them .chat-pin { right: auto; left: 6px; }
 
 /* ── Generic list box (Upcoming events, To-do, Posts) ────────── */
 .fb-listbox, .upcoming-box {
