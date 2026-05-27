@@ -1276,7 +1276,7 @@ html { overscroll-behavior-x: none; }
   width: max-content;
   min-width: 260px;
   max-width: min(320px, calc(100vw - 32px));
-  background: var(--surface);
+  background: var(--surface-primary);
   border: 1px solid var(--border-soft);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-large);
