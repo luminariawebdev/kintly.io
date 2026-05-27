@@ -832,9 +832,9 @@ html { overscroll-behavior-x: none; }
   border-color: transparent transparent transparent var(--bubble-c, #4361EE);
 }
 
-/* ── "Them" bubble — neutral background, subtle author color accent ─── */
+/* ── "Them" bubble — filled with author's profile color ─── */
 .chat-row.them .chat-bubble {
-  background: var(--chat-other-bg);
+  background: var(--bubble-c, #999);
   border-bottom-left-radius: 5px;
 }
 /* Tail: bottom-left, points outward (left) */
@@ -847,7 +847,7 @@ html { overscroll-behavior-x: none; }
   border-style: solid;
   /* top=10 right=9 bottom=0 left=0 → triangle in bottom-left corner pointing left */
   border-width: 10px 9px 0 0;
-  border-color: transparent var(--chat-other-bg) transparent transparent;
+  border-color: transparent var(--bubble-c, #999) transparent transparent;
 }
 
 /* ── Text inside bubbles ─── */
@@ -857,7 +857,7 @@ html { overscroll-behavior-x: none; }
   white-space: pre-wrap;
 }
 .chat-row.me .chat-text   { color: #fff; }
-.chat-row.them .chat-text { color: var(--text-primary); }
+.chat-row.them .chat-text { color: #fff; }
 
 /* ── Timestamp ─── */
 .chat-time {
@@ -869,7 +869,7 @@ html { overscroll-behavior-x: none; }
   font-style: italic;
 }
 .chat-row.me .chat-time   { color: rgba(255,255,255,0.9); text-align: right; }
-.chat-row.them .chat-time { color: var(--text-muted); }
+.chat-row.them .chat-time { color: rgba(255,255,255,0.8); }
 
 /* ── Pin badge ─── */
 .chat-pin {
@@ -892,18 +892,13 @@ html { overscroll-behavior-x: none; }
   padding: 0 3px;
   white-space: nowrap;
 }
-/* On "them" bubbles — color-tinted on the neutral background */
-.chat-row.them .mention-tag,
-.mention-tag:not(.mention-me) {
-  color: var(--kinnekt-indigo);
-  background: rgba(74, 108, 255, 0.12);
-}
-/* On "me" bubbles — stands out against the colored background */
-.mention-tag.mention-me {
+/* On colored bubbles (both "me" and "them") — white highlight */
+.chat-row.me .mention-tag,
+.chat-row.them .mention-tag {
   color: #fff;
   background: rgba(255, 255, 255, 0.28);
 }
-/* In note detail modal */
+/* In note detail modal — indigo tint on white background */
 .mention-tag:not(.mention-me) {
   color: var(--kinnekt-indigo);
   background: rgba(74, 108, 255, 0.12);
