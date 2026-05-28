@@ -812,23 +812,23 @@ html { overscroll-behavior-x: none; }
 .chat-row {
   display: flex;
   align-items: flex-end;
-  gap: 7px;
-  /* Extra right padding so the "me" tail isn't clipped by SwipeToDelete overflow:hidden */
-  padding: 0 14px 0 2px;
+  gap: 6px;
+  /* Horizontal padding includes room for the bubble tail and the
+     SwipeToDelete overflow clip. The side avatar slot is gone — the
+     caption with avatar + name now lives BELOW the bubble. The flex
+     `gap` keeps the hover reply button from crowding the bubble. */
+  padding: 0 14px;
 }
 
 .chat-row.me {
   flex-direction: row-reverse;
-  /* Extra left padding for symmetry */
-  padding: 0 14px 0 14px;
 }
 
 .chat-row.them {
   flex-direction: row;
-  padding: 0 14px 0 2px;
 }
 
-/* ── Avatar ─── */
+/* ── Avatar (legacy side-avatar slot, no longer rendered) ─── */
 .chat-avatar {
   flex-shrink: 0;
   width: 28px;
@@ -843,19 +843,141 @@ html { overscroll-behavior-x: none; }
 .chat-bubble-wrap {
   display: flex;
   flex-direction: column;
-  max-width: 72%;
+  max-width: 78%;
   min-width: 0;
 }
 .chat-row.me .chat-bubble-wrap  { align-items: flex-end; }
 .chat-row.them .chat-bubble-wrap { align-items: flex-start; }
 
-/* ── Sender name (shown above "them" bubbles at run start) ─── */
+/* ── Sender name (legacy, above bubble) ─────────────────────
+   Retained only so any stray usage doesn't break — the active
+   pattern is `.chat-caption` BELOW each bubble. */
 .chat-sender {
   font-size: 11px;
   font-weight: 700;
   margin-bottom: 3px;
   padding: 0 6px;
   letter-spacing: 0.01em;
+}
+
+/* ── Reply button (iMessage-style) ────────────────────────────
+   Sits as a sibling of the bubble at the row level — appears on
+   the side OPPOSITE the bubble owner (left of "me", right of
+   "them"), revealed on hover at full opacity. Touch devices
+   leave it permanently visible at a low opacity so it's
+   discoverable without hover. Clicking opens the post's detail
+   modal where the user can type a reply. */
+.chat-reply-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  color: var(--text-secondary);
+  opacity: 0;
+  align-self: center;
+  transition:
+    opacity 0.18s var(--ease),
+    background-color 0.18s var(--ease),
+    transform 0.18s var(--ease);
+  box-shadow: 0 2px 6px rgba(15, 30, 60, 0.10);
+}
+.chat-row:hover .chat-reply-btn {
+  opacity: 1;
+}
+.chat-reply-btn:hover {
+  background: var(--hover-tint);
+  color: var(--kinnekt-purple);
+  transform: scale(1.06);
+}
+@media (hover: none) {
+  .chat-reply-btn { opacity: 0.42; }
+  .chat-reply-btn:active { opacity: 1; }
+}
+
+/* ── "↩ Replying to …" reference shown ABOVE a reply's bubble.
+   Clicking opens the original post's detail modal. */
+.chat-reply-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-bottom: 4px;
+  padding: 3px 9px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 1px 3px rgba(15, 30, 60, 0.06);
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.18s var(--ease);
+}
+.chat-reply-ref:hover { background: var(--hover-tint); }
+.chat-reply-ref-arrow {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.chat-reply-ref .dot {
+  width: 14px;
+  height: 14px;
+}
+.chat-reply-ref .dot.avatar-emoji {
+  font-size: 11px;
+}
+.chat-reply-ref-name {
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.chat-reply-ref-snippet {
+  font-style: italic;
+  opacity: 0.78;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 180px;
+}
+
+/* ── Caption shown BELOW every chat bubble ───────────────────
+   Avatar + author name, colored to the author's profile color.
+   The wrap container (`.chat-bubble-wrap`) is aligned right for
+   "me" rows and left for "them" rows, so the caption naturally
+   tucks under the bubble on the correct side. */
+.chat-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 0 4px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-caption .dot {
+  width: 16px;
+  height: 16px;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85), 0 2px 4px rgba(15, 30, 60, 0.10);
+}
+.chat-caption .dot.avatar-emoji {
+  font-size: 12px;
+}
+.chat-caption-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
 }
 
 /* ── Bubble base ─── */
@@ -942,23 +1064,29 @@ html { overscroll-behavior-x: none; }
 }
 .chat-row.them .chat-pin { right: auto; left: 6px; }
 
-/* ── @mention highlight inside chat bubbles ─────────────────── */
+/* ── @mention highlight ───────────────────────────────────────
+   Unified pill: white-ish background + the mentioned user's
+   profile color for the text, prefixed by their emoji avatar
+   (when they have one). Works on colored bubbles AND on light
+   surfaces — readable in both because the pill background is
+   opaque-enough white. Falls back to indigo if we couldn't
+   resolve the mention to a known profile. */
 .mention-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-weight: 700;
-  border-radius: 4px;
-  padding: 0 3px;
+  border-radius: 6px;
+  padding: 1px 6px;
   white-space: nowrap;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--mention-c, var(--kinnekt-indigo));
+  box-shadow: 0 1px 2px rgba(15, 30, 60, 0.08);
 }
-/* On colored bubbles (both "me" and "them") — white highlight */
-.chat-row.me .mention-tag,
-.chat-row.them .mention-tag {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.28);
-}
-/* In note detail modal — indigo tint on white background */
-.mention-tag:not(.mention-me) {
-  color: var(--kinnekt-indigo);
-  background: rgba(74, 108, 255, 0.12);
+.mention-emoji {
+  font-size: 0.95em;
+  line-height: 1;
+  display: inline-block;
 }
 
 /* ── @mention picker dropdown ────────────────────────────────── */
@@ -1355,7 +1483,11 @@ html { overscroll-behavior-x: none; }
 }
 .photo-thumb-remove:hover { background: rgba(0, 0, 0, 0.85); }
 
-/* ── Photos: chat bubble grid ─────────────────────────────────── */
+/* ── Photos: chat bubble grid (iMessage-style catalog) ──────────
+   2+ photos collapse into a single square tile divided into smaller
+   squares, with a count badge in the top-right corner showing the
+   total. The catalog is clickable — it opens the photo detail
+   modal where the photos appear individually. */
 .photo-bubble {
   padding: 6px 6px 8px !important;
 }
@@ -1364,19 +1496,40 @@ html { overscroll-behavior-x: none; }
   gap: 3px;
   border-radius: 12px;
   overflow: hidden;
-}
-.photo-grid.count-1 { grid-template-columns: 1fr; }
-.photo-grid.count-2 { grid-template-columns: 1fr 1fr; }
-.photo-grid.count-3 { grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr; }
-.photo-grid.count-3 .photo-cell:first-child { grid-row: span 2; }
-.photo-grid.count-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
-.photo-cell {
   position: relative;
-  aspect-ratio: 1 / 1;
-  background: rgba(0, 0, 0, 0.10);
-  overflow: hidden;
+}
+/* Single photo: natural rectangle, no count badge needed */
+.photo-grid.count-1 {
+  grid-template-columns: 1fr;
 }
 .photo-grid.count-1 .photo-cell { aspect-ratio: 4 / 3; }
+/* 2+ photos: outer container is a single square split into sub-cells */
+.photo-grid.count-2,
+.photo-grid.count-3,
+.photo-grid.count-4 {
+  aspect-ratio: 1 / 1;
+}
+.photo-grid.count-2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+.photo-grid.count-3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+.photo-grid.count-3 .photo-cell:first-child { grid-row: span 2; }
+.photo-grid.count-4 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+.photo-cell {
+  position: relative;
+  background: rgba(0, 0, 0, 0.10);
+  overflow: hidden;
+  /* Parent aspect-ratio controls the catalog tile shape; child cells
+     just fill their grid slot. Count-1 keeps its own aspect-ratio
+     above. */
+}
 .photo-cell img {
   width: 100%; height: 100%;
   object-fit: cover;
@@ -1393,26 +1546,124 @@ html { overscroll-behavior-x: none; }
   font-size: 22px;
   font-weight: 700;
 }
+/* Total-count badge — only shown for catalogs of 2+ photos.
+   Sits over the top-right corner of the catalog tile. */
+.photo-count-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
 
-/* Photos: details view */
+/* Photos: details view — each photo gets its own full-width row so
+   they read as individual images, not crammed into a grid. */
 .photo-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-  border-radius: 12px;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 0;
+  overflow: visible;
 }
 .photo-detail-cell {
   display: block;
   position: relative;
-  aspect-ratio: 1 / 1;
   background: var(--surface-glass);
   overflow: hidden;
   cursor: zoom-in;
+  border-radius: 12px;
+  /* Reset <button> chrome — this element is now a button (was an <a>)
+     so the user gets an in-app lightbox instead of a blank new tab from
+     data-URL navigation. */
+  width: 100%;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+}
+.photo-detail-cell:focus-visible {
+  outline: 2px solid var(--kinnekt-purple);
+  outline-offset: 2px;
 }
 .photo-detail-cell img {
-  width: 100%; height: 100%;
-  object-fit: cover;
+  width: 100%;
+  height: auto;
+  max-height: 70vh;
+  object-fit: contain;
+  display: block;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* ── Photo lightbox (fullscreen viewer) ───────────────────────────
+   Opens when a photo cell inside a note detail is tapped. Lives in a
+   fixed full-viewport layer above the modal so the image can fill the
+   screen and the modal beneath stays mounted (state is preserved on
+   dismiss). Closing: tap the backdrop, the × button, or hit Esc. */
+.photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding:
+    max(20px, env(safe-area-inset-top, 0px))
+    16px
+    max(20px, env(safe-area-inset-bottom, 0px));
+  cursor: zoom-out;
+  animation: photo-lightbox-fade 0.18s var(--ease, ease-out);
+}
+@keyframes photo-lightbox-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.photo-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: default;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.50);
+  border-radius: 8px;
+}
+.photo-lightbox-close {
+  position: absolute;
+  top: max(20px, env(safe-area-inset-top, 0px));
+  right: 16px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.18s var(--ease, ease-out);
+}
+.photo-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+.photo-lightbox-close:active {
+  background: rgba(255, 255, 255, 0.32);
 }
 
 /* ── Poll: composer ───────────────────────────────────────────── */

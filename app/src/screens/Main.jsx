@@ -18,16 +18,37 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
-// Render text with @[Name] mentions highlighted as styled spans
-function renderWithMentions(text, isMe) {
+// Render text with @[Name] mentions highlighted as styled spans.
+// `members` is an optional array of profiles used to look up each
+// mentioned user — if found, the mention chip is prefixed with that
+// user's avatar (emoji or color dot) and colored in their profile
+// color, so mentions visually match the rest of the app's identity
+// styling. Falls back to a neutral chip if no matching profile.
+function renderWithMentions(text, isMe, members) {
   if (!text) return null;
   const parts = text.split(/(@\[[^\]]+\])/g);
   return parts.map((part, i) => {
     const m = part.match(/^@\[([^\]]+)\]$/);
     if (m) {
+      const name = m[1];
+      const profile = Array.isArray(members)
+        ? members.find(p => p?.display_name === name)
+        : null;
+      const color = profile ? getColor(profile.color) : null;
+      const avatar = profile?.avatar;
+      const isEmojiAvatar = typeof avatar === 'string' && avatar.length > 0
+        && !avatar.startsWith('data:image')
+        && !/^https?:\/\//.test(avatar);
       return (
-        <span key={i} className={'mention-tag' + (isMe ? ' mention-me' : '')}>
-          @{m[1]}
+        <span
+          key={i}
+          className={'mention-tag' + (isMe ? ' mention-me' : '')}
+          style={color ? { color, '--mention-c': color } : undefined}
+        >
+          {isEmojiAvatar && (
+            <span className="mention-emoji" aria-hidden>{avatar}</span>
+          )}
+          @{name}
         </span>
       );
     }
@@ -733,10 +754,80 @@ function SectionToggle({ collapsed, onClick }) {
 }
 
 // ─── Renderer for an individual feed post (type-aware) ──────────────────────
-function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, inPinned = false }) {
+function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToNote, replyToAuthor, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, inPinned = false }) {
   const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const type = n.type || 'message';
   const canDelete = n.created_by === myId;
+  const authorColor = getColor(author?.color);
+
+  // Shared bubble caption — sits BELOW every bubble, on the same side
+  // as the bubble (right for "me", left for "them"). Avatar precedes
+  // the name; name is colored to the author's profile color. Tapping
+  // the caption opens the member detail sheet (same as tapping the
+  // old side avatar did).
+  const Caption = () => (
+    <div
+      className="chat-caption"
+      onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+    >
+      <Dot profile={author} />
+      <span className="chat-caption-name" style={{ color: authorColor }}>
+        {author?.display_name}
+      </span>
+    </div>
+  );
+
+  // "↩ Replying to …" header — rendered above the bubble when this
+  // post is a reply to another post. Clicking it opens the original
+  // post's detail modal so the user can see the full context.
+  const ReplyRef = () => {
+    if (!replyToNote) return null;
+    const refColor = getColor(replyToAuthor?.color);
+    const refType = replyToNote.type || 'message';
+    let snippet = '';
+    if (refType === 'photos') {
+      const count = Array.isArray(replyToNote.payload?.photos)
+        ? replyToNote.payload.photos.length : 0;
+      snippet = count > 1 ? `${count} photos` : 'photo';
+    } else if (refType === 'poll') {
+      snippet = replyToNote.payload?.question || 'poll';
+    } else {
+      snippet = (replyToNote.content || '').slice(0, 80);
+    }
+    return (
+      <button
+        type="button"
+        className="chat-reply-ref"
+        onClick={(e) => { e.stopPropagation(); onOpenNote?.(replyToNote); }}
+        title="Show original post"
+      >
+        <span className="chat-reply-ref-arrow" aria-hidden>↩</span>
+        <Dot profile={replyToAuthor} />
+        <span className="chat-reply-ref-name" style={{ color: refColor }}>
+          {replyToAuthor?.display_name || 'Unknown'}
+        </span>
+        {snippet && <span className="chat-reply-ref-snippet">{snippet}</span>}
+      </button>
+    );
+  };
+
+  // Hoverable iMessage-style reply affordance. Clicking it opens the
+  // post's detail modal where the user can type a reply (which posts
+  // a new message with `payload.reply_to = n.id`, threading them
+  // together).
+  const ReplyButton = () => (
+    <button
+      type="button"
+      className="chat-reply-btn"
+      onClick={(e) => { e.stopPropagation(); onOpenNote?.(n); }}
+      title="Reply"
+      aria-label="Reply to this post"
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <path d="M6 3L2 7l4 4M2 7h7a3 3 0 013 3v1" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  );
 
   // ── Announcement: full-width red, bold/italic, no bubble ────────────────
   if (type === 'announcement') {
@@ -747,11 +838,11 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
             <span className="announcement-pin" title="Pinned">📌</span>
           )}
           <div className="announcement-head">
-            <span className="announcement-siren" aria-hidden>🚨</span>
-            <span className="announcement-label">ANNOUNCEMENT</span>
+            <span className="announcement-siren" aria-hidden>💡</span>
+            <span className="announcement-label">URGENT</span>
           </div>
           <div className="announcement-text">
-            {renderWithMentions(n.content, false)}
+            {renderWithMentions(n.content, false, members)}
           </div>
           <div className="announcement-meta">
             <span
@@ -760,7 +851,9 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
             >
               <Dot profile={author} />
-              <span className="announcement-author">{author?.display_name}</span>
+              <span className="announcement-author" style={{ color: authorColor }}>
+                {author?.display_name}
+              </span>
             </span>
             <span className="announcement-time">{when}</span>
           </div>
@@ -769,38 +862,28 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
     );
   }
 
-  // ── Quick Update: normal bubble, but with red "QUICK UPDATE" label ──────
+  // ── Quick Update / Reminder: normal bubble with red "REMINDER" label ──
   if (type === 'quick_update') {
     return (
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
-          {!isMe && (
-            <div
-              className="chat-avatar"
-              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-            >
-              <Dot profile={author} />
-            </div>
-          )}
           <div className="chat-bubble-wrap">
-            {!isMe && (
-              <div className="chat-sender" style={{ color: getColor(author?.color) }}>
-                {author?.display_name}
-              </div>
-            )}
+            <ReplyRef />
             <div
               className="chat-bubble has-tail"
-              style={{ '--bubble-c': getColor(author?.color) }}
+              style={{ '--bubble-c': authorColor }}
               onClick={() => onOpenNote?.(n)}
             >
               {n.pinned && !inPinned && (
                 <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
               )}
-              <div className="quick-update-label">QUICK UPDATE</div>
-              <div className="chat-text">{renderWithMentions(n.content, isMe)}</div>
+              <div className="quick-update-label">REMINDER</div>
+              <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
               <div className="chat-time">{when}</div>
             </div>
+            <Caption />
           </div>
+          <ReplyButton />
         </div>
       </SwipeToDelete>
     );
@@ -812,29 +895,23 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
     return (
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
-          {!isMe && (
-            <div
-              className="chat-avatar"
-              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-            >
-              <Dot profile={author} />
-            </div>
-          )}
           <div className="chat-bubble-wrap">
-            {!isMe && (
-              <div className="chat-sender" style={{ color: getColor(author?.color) }}>
-                {author?.display_name}
-              </div>
-            )}
+            <ReplyRef />
             <div
               className="chat-bubble photo-bubble has-tail"
-              style={{ '--bubble-c': getColor(author?.color) }}
+              style={{ '--bubble-c': authorColor }}
               onClick={() => onOpenNote?.(n)}
             >
               {n.pinned && !inPinned && (
                 <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
               )}
               <div className={'photo-grid count-' + Math.min(photos.length, 4)}>
+                {photos.length > 1 && (
+                  <span className="photo-count-badge" aria-hidden>
+                    <span aria-hidden>🖼️</span>
+                    {photos.length}
+                  </span>
+                )}
                 {photos.slice(0, 4).map((src, i) => (
                   <div key={i} className="photo-cell">
                     <img src={src} alt="" />
@@ -845,11 +922,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
                 ))}
               </div>
               {n.content && (
-                <div className="chat-text" style={{ marginTop: 8 }}>{renderWithMentions(n.content, isMe)}</div>
+                <div className="chat-text" style={{ marginTop: 8 }}>{renderWithMentions(n.content, isMe, members)}</div>
               )}
               <div className="chat-time">{when}</div>
             </div>
+            <Caption />
           </div>
+          <ReplyButton />
         </div>
       </SwipeToDelete>
     );
@@ -865,23 +944,11 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
     return (
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
-          {!isMe && (
-            <div
-              className="chat-avatar"
-              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-            >
-              <Dot profile={author} />
-            </div>
-          )}
           <div className="chat-bubble-wrap" style={{ maxWidth: '86%' }}>
-            {!isMe && (
-              <div className="chat-sender" style={{ color: getColor(author?.color) }}>
-                {author?.display_name}
-              </div>
-            )}
+            <ReplyRef />
             <div
               className="chat-bubble poll-bubble has-tail"
-              style={{ '--bubble-c': getColor(author?.color) }}
+              style={{ '--bubble-c': authorColor }}
               onClick={(e) => {
                 // Don't pop the modal when clicking an option (handled by option click)
                 if (e.target.closest('.poll-option')) return;
@@ -919,69 +986,61 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
                 <span className="chat-time" style={{ marginTop: 0 }}>{when}</span>
               </div>
             </div>
+            <Caption />
           </div>
+          <ReplyButton />
         </div>
       </SwipeToDelete>
     );
   }
 
-  // ── Default: plain message bubble ───────────────────────────────────────
-  const prevSameAuthor = prevNote && prevNote.created_by === n.created_by && (prevNote.type || 'message') === 'message';
-  const nextSameAuthor = nextNote && nextNote.created_by === n.created_by && (nextNote.type || 'message') === 'message';
-  const showTail = !nextSameAuthor;
+  // ── Default: plain message bubble. Streak grouping has been removed —
+  //    every message now carries its own avatar + name caption directly
+  //    below the bubble, so each post is self-attributed regardless of
+  //    neighbors. Tail shows on every bubble for visual consistency.
   return (
     <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
-      <div
-        className={`chat-row ${isMe ? 'me' : 'them'}`}
-        style={{ marginTop: prevSameAuthor ? 2 : 10 }}
-      >
-        {!isMe && (
-          <div
-            className="chat-avatar"
-            style={{ visibility: nextSameAuthor ? 'hidden' : 'visible' }}
-            onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-          >
-            <Dot profile={author} />
-          </div>
-        )}
+      <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
         <div className="chat-bubble-wrap">
-          {!isMe && !prevSameAuthor && (
-            <div className="chat-sender" style={{ color: getColor(author?.color) }}>
-              {author?.display_name}
-            </div>
-          )}
+          <ReplyRef />
           <div
-            className={`chat-bubble${showTail ? ' has-tail' : ''}`}
-            style={{ '--bubble-c': getColor(author?.color) }}
+            className="chat-bubble has-tail"
+            style={{ '--bubble-c': authorColor }}
             onClick={() => onOpenNote?.(n)}
           >
-            <div className="chat-text">{renderWithMentions(n.content, isMe)}</div>
+            <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
             <div className="chat-time">{when}</div>
           </div>
+          <Caption />
         </div>
+        <ReplyButton />
       </div>
     </SwipeToDelete>
   );
 }
 
-function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, collapsed, onToggleCollapse }) {
+function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, collapsed, onToggleCollapse }) {
   // Pinned section — shows:
-  //   • every Announcement (always pinned by design — they live only here)
-  //   • any other non-message post that the author chose to pin
+  //   • every Urgent (announcement) — auto-pinned, lives only here
+  //   • every Reminder (quick_update) — auto-pinned, lives only here
+  //   • any other non-message post that the user pinned manually
   const pinned = notes
     .filter(n => {
       const type = n.type || 'message';
-      if (type === 'announcement') return true;
+      if (type === 'announcement' || type === 'quick_update') return true;
       return n.pinned && type !== 'message';
     })
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-  // Main feed: oldest first. Announcements are explicitly excluded —
-  // they exist ONLY in the Pinned section so they don't get buried
-  // beneath the day's chatter.
+  // Main feed: NEWEST first (top). Urgent + Reminder are explicitly
+  // excluded — they exist ONLY in the Pinned section so they don't
+  // get buried beneath the day's chatter.
   const sorted = notes
-    .filter(n => (n.type || 'message') !== 'announcement')
-    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    .filter(n => {
+      const type = n.type || 'message';
+      return type !== 'announcement' && type !== 'quick_update';
+    })
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-notes">
@@ -1024,6 +1083,7 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
                       prevNote={null}
                       nextNote={null}
                       myId={myId}
+                      members={members}
                       onOpenNote={onOpenNote}
                       onDelete={onDelete}
                       onTogglePin={onTogglePin}
@@ -1044,6 +1104,16 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
                 const isMe = n.created_by === myId;
                 const prevNote = i > 0 ? sorted[i - 1] : null;
                 const nextNote = i < sorted.length - 1 ? sorted[i + 1] : null;
+                // Resolve the post being replied-to (if this post is
+                // itself a reply) so FeedPost can render a small
+                // "↩ Replying to …" link above the bubble.
+                const replyToId = n.payload && n.payload.reply_to;
+                const replyToNote = replyToId
+                  ? notes.find(x => x.id === replyToId) || null
+                  : null;
+                const replyToAuthor = replyToNote
+                  ? getProfile(replyToNote.created_by)
+                  : null;
                 return (
                   <FeedPost
                     key={n.id}
@@ -1053,6 +1123,9 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
                     prevNote={prevNote}
                     nextNote={nextNote}
                     myId={myId}
+                    members={members}
+                    replyToNote={replyToNote}
+                    replyToAuthor={replyToAuthor}
                     onOpenNote={onOpenNote}
                     onDelete={onDelete}
                     onTogglePin={onTogglePin}
@@ -1609,7 +1682,6 @@ function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, 
 function AddNoteModal({ open, onClose, profile, members, onSave }) {
   const [postType, setPostType] = React.useState('message');
   const [body, setBody] = React.useState('');
-  const [pinPost, setPinPost] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [makeTask, setMakeTask] = React.useState(false);
   const [taskTitle, setTaskTitle] = React.useState('');
@@ -1879,14 +1951,15 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return;
     }
 
-    // Pinning rules:
-    //   announcement → ALWAYS pinned (lives only in pinned section)
-    //   message      → never pinned
-    //   everything else → honors the pin checkbox
+    // Pinning rules (the manual "Pin to top" checkbox was removed):
+    //   announcement (Urgent)  → ALWAYS pinned, lives only in pinned section
+    //   quick_update (Reminder) → ALWAYS pinned, lives only in pinned section
+    //   everything else        → never auto-pinned (users can pin later
+    //                            from the post-detail modal)
     const finalPinned =
-      postType === 'announcement' ? true  :
-      postType === 'message'      ? false :
-      pinPost;
+      postType === 'announcement' ? true :
+      postType === 'quick_update' ? true :
+      false;
 
     setSaving(true);
     const taskPayload = makeTask
@@ -1907,16 +1980,20 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   };
 
   // Post type configuration — drives the segmented control
+  // Internal type IDs stay the same so existing posts in Supabase keep
+  // rendering — only the display labels and icons changed:
+  //   'announcement' → "Urgent" (light bulb)
+  //   'quick_update' → "Reminder" (bell)
   const POST_TYPES = [
-    { id: 'message',      label: 'Message',     icon: '💬' },
-    { id: 'announcement', label: 'Announce',    icon: '🚨' },
-    { id: 'quick_update', label: 'Quick Update',icon: '⚡' },
-    { id: 'photos',       label: 'Photos',      icon: '📷' },
-    { id: 'poll',         label: 'Poll',        icon: '📊' },
+    { id: 'message',      label: 'Message',  icon: '💬' },
+    { id: 'announcement', label: 'Urgent',   icon: '💡' },
+    { id: 'quick_update', label: 'Reminder', icon: '🔔' },
+    { id: 'photos',       label: 'Photos',   icon: '📷' },
+    { id: 'poll',         label: 'Poll',     icon: '📊' },
   ];
 
   // Title shows the active post type
-  const typeLabels = { message: 'Message', announcement: 'Announcement', quick_update: 'Quick Update', photos: 'Photos', poll: 'Poll' };
+  const typeLabels = { message: 'Message', announcement: 'Urgent', quick_update: 'Reminder', photos: 'Photos', poll: 'Poll' };
   const titleNode = <>New <em>{typeLabels[postType] || 'Post'}</em></>;
 
   // Helper — render the contentEditable message editor (used by message, announcement, quick_update)
@@ -2002,20 +2079,20 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       {postType === 'announcement' && (
         <>
           <div className="announcement-notice">
-            <span aria-hidden style={{ fontSize: 16 }}>🚨</span>
+            <span aria-hidden style={{ fontSize: 16 }}>💡</span>
             <span>Everyone in the group will get a notification.</span>
           </div>
-          {renderMessageEditor('Announcement', 'Important news for the whole group…', 'announcement-editor')}
+          {renderMessageEditor('Urgent', 'Important news for the whole group…', 'announcement-editor')}
         </>
       )}
 
       {postType === 'quick_update' && (
         <>
           <div className="quick-update-notice">
-            <span className="quick-update-label" style={{ display: 'inline-block', padding: 0 }}>QUICK UPDATE</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· short status, no notification</span>
+            <span className="quick-update-label" style={{ display: 'inline-block', padding: 0 }}>REMINDER</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· auto-pinned to the top of the Home Feed</span>
           </div>
-          {renderMessageEditor('Update', "Running 10 minutes late…")}
+          {renderMessageEditor('Reminder', 'Don’t forget to…')}
         </>
       )}
 
@@ -2109,38 +2186,11 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
         </>
       )}
 
-      {/* ── Pin checkbox ──
-           Hidden for plain Message (messages can't be pinned).
-           Hidden for Announcement (announcements live ONLY in the pinned
-           section by design — auto-pinned at save time, never shown in
-           the main feed). Shown for Quick Update / Photos / Poll. */}
-      {postType !== 'message' && postType !== 'announcement' && (
-        <div className="field" style={{ marginTop: 4 }}>
-          <label
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 12px', width: '100%',
-              background: pinPost ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
-              border: '1.5px solid var(--ink)', borderRadius: 8,
-              cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
-              color: 'var(--ink)', textAlign: 'left',
-              userSelect: 'none',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={pinPost}
-              onChange={e => setPinPost(e.target.checked)}
-              style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
-            />
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span aria-hidden>📌</span> Pin to top of Home Feed
-            </span>
-          </label>
-        </div>
-      )}
+      {/* The "Pin to top of Home Feed" checkbox was removed —
+          Urgent + Reminder posts auto-pin, and everything else can be
+          pinned later from the post-detail modal. */}
 
-      {/* ── Create-task option (only for Message + Quick Update) ────── */}
+      {/* ── Create-task option (only for Message + Reminder) ────── */}
       {(postType === 'message' || postType === 'quick_update') && (
         <div className="field" style={{ marginTop: 4 }}>
           <label
@@ -2625,29 +2675,48 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   );
 }
 
-function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated, onTogglePin, onVote }) {
+function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated, onTogglePin, onVote }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
   const [savingEdit, setSavingEdit] = React.useState(false);
   const [comments, setComments] = React.useState([]);
   const [newComment, setNewComment] = React.useState('');
   const [postingComment, setPostingComment] = React.useState(false);
+  // Currently-zoomed photo (data URL) — when non-null, the fullscreen
+  // lightbox overlay is rendered. We can't use `target="_blank"` to pop
+  // photos open because they're stored as base64 data URLs and modern
+  // browsers block opening those in new tabs for security, which is
+  // exactly what was causing the "blank tab" bug.
+  const [zoomedPhoto, setZoomedPhoto] = React.useState(null);
+
+  // Esc key closes the lightbox
+  React.useEffect(() => {
+    if (!zoomedPhoto) return;
+    const onKey = (e) => { if (e.key === 'Escape') setZoomedPhoto(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomedPhoto]);
 
   // Reset edit mode whenever we open a different note
   React.useEffect(() => {
     setEditing(false);
     setDraft(note?.content || '');
     setNewComment('');
+    setZoomedPhoto(null);
   }, [note?.id]);
 
-  // Load comments when the modal opens for a note
+  // Load replies when the modal opens. Replies are now plain
+  // bulletin-board posts (rows in `notes`) that carry a
+  // `payload.reply_to = <this note id>` reference — they appear here
+  // AND in the main Home Feed simultaneously, which is what
+  // "comments post directly as messages to bulletin board" means.
   React.useEffect(() => {
     if (!open || !note?.id) return;
     let cancelled = false;
     supabase
-      .from('note_comments')
+      .from('notes')
       .select('*')
-      .eq('note_id', note.id)
+      .eq('payload->>reply_to', note.id)
       .order('created_at', { ascending: true })
       .then(({ data, error }) => {
         if (cancelled) return;
@@ -2676,38 +2745,28 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
     setEditing(false);
   };
 
+  // Replies are stored as regular `notes` rows with
+  // `payload.reply_to = note.id`, so they show up in the main feed
+  // alongside other bulletin-board posts AND in this thread view.
   const postComment = async () => {
     const text = newComment.trim();
     if (!text || !myId || !myGroupId) return;
     setPostingComment(true);
     const { data, error } = await supabase
-      .from('note_comments')
-      .insert({ note_id: note.id, group_id: myGroupId, created_by: myId, content: text })
+      .from('notes')
+      .insert({
+        group_id: myGroupId,
+        created_by: myId,
+        content: text,
+        type: 'message',
+        payload: { reply_to: note.id },
+        pinned: false,
+      })
       .select()
       .single();
     setPostingComment(false);
     if (error) {
-      if (/note_comments/i.test(error.message || '') || /relation .* does not exist/i.test(error.message || '')) {
-        alert(
-          'Comments need a one-time database setup.\n\n' +
-          'Open Supabase → SQL Editor and run:\n\n' +
-          'create table if not exists public.note_comments (\n' +
-          '  id uuid default gen_random_uuid() primary key,\n' +
-          '  note_id uuid references public.notes on delete cascade not null,\n' +
-          '  group_id uuid references public.groups not null,\n' +
-          '  created_by uuid references public.profiles not null,\n' +
-          '  content text not null,\n' +
-          '  created_at timestamptz default now()\n' +
-          ');\n' +
-          'alter table public.note_comments enable row level security;\n' +
-          'create policy "note_comments_select" on public.note_comments for select using (group_id = public.my_group_id());\n' +
-          'create policy "note_comments_insert" on public.note_comments for insert with check (group_id = public.my_group_id() and created_by = auth.uid());\n' +
-          'create policy "note_comments_update" on public.note_comments for update using (created_by = auth.uid());\n' +
-          'create policy "note_comments_delete" on public.note_comments for delete using (created_by = auth.uid());'
-        );
-      } else {
-        alert('Could not post comment: ' + error.message);
-      }
+      alert('Could not post reply: ' + error.message);
       return;
     }
     setComments(prev => [...prev, data]);
@@ -2716,12 +2775,29 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
 
   const deleteComment = async (id) => {
     setComments(prev => prev.filter(c => c.id !== id));
-    await supabase.from('note_comments').delete().eq('id', id);
+    await supabase.from('notes').delete().eq('id', id);
   };
 
   const noteType = note.type || 'message';
-  const TYPE_TITLES = { message: 'Message', announcement: 'Announcement', quick_update: 'Quick Update', photos: 'Photos', poll: 'Poll' };
-  const modalTitle = TYPE_TITLES[noteType] || 'Post';
+  const photoCount = (noteType === 'photos' && Array.isArray(note.payload?.photos))
+    ? note.payload.photos.length
+    : 0;
+  const TYPE_TITLES = { message: 'Message', announcement: 'Urgent', quick_update: 'Reminder', photos: 'Photos', poll: 'Poll' };
+  // For a single-photo post, hide the "Photos" type label so the
+  // modal reads as just the photo + comments + tasks + author —
+  // no redundant chrome at the top.
+  const modalTitle = (noteType === 'photos' && photoCount === 1)
+    ? ''
+    : (TYPE_TITLES[noteType] || 'Post');
+  // Dynamic delete-button text — reads as the noun for what's being
+  // deleted (e.g. "Delete photo" / "Delete photos" / "Delete reminder")
+  // instead of a generic "Delete note".
+  const deleteLabel =
+    noteType === 'photos'        ? (photoCount > 1 ? 'Delete photos' : 'Delete photo') :
+    noteType === 'announcement'  ? 'Delete urgent'                                     :
+    noteType === 'quick_update'  ? 'Delete reminder'                                   :
+    noteType === 'poll'          ? 'Delete poll'                                       :
+                                   'Delete message';
 
   // ── Type-specific body rendering for the details view ─────────────
   const renderBody = () => {
@@ -2729,11 +2805,11 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
       return (
         <div className="announcement-card detail-mode">
           <div className="announcement-head">
-            <span className="announcement-siren" aria-hidden>🚨</span>
-            <span className="announcement-label">ANNOUNCEMENT</span>
+            <span className="announcement-siren" aria-hidden>💡</span>
+            <span className="announcement-label">URGENT</span>
           </div>
           <div className="announcement-text detail-text">
-            {renderWithMentions(note.content, false)}
+            {renderWithMentions(note.content, false, members)}
           </div>
         </div>
       );
@@ -2747,8 +2823,8 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
           borderRadius: 'var(--r-md)',
           fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
         }}>
-          <div className="quick-update-label" style={{ marginBottom: 6, padding: 0 }}>QUICK UPDATE</div>
-          {renderWithMentions(note.content, false)}
+          <div className="quick-update-label" style={{ marginBottom: 6, padding: 0 }}>REMINDER</div>
+          {renderWithMentions(note.content, false, members)}
         </div>
       );
     }
@@ -2758,9 +2834,15 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
         <div>
           <div className="photo-detail-grid">
             {photos.map((src, i) => (
-              <a key={i} href={src} target="_blank" rel="noopener noreferrer" className="photo-detail-cell">
+              <button
+                key={i}
+                type="button"
+                onClick={() => setZoomedPhoto(src)}
+                className="photo-detail-cell"
+                aria-label="Zoom photo"
+              >
                 <img src={src} alt="" />
-              </a>
+              </button>
             ))}
           </div>
           {note.content && (
@@ -2771,7 +2853,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
               borderRadius: 'var(--r-md)',
               fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
             }}>
-              {renderWithMentions(note.content, false)}
+              {renderWithMentions(note.content, false, members)}
             </div>
           )}
         </div>
@@ -2830,18 +2912,19 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
         borderRadius: 'var(--r-md)',
         fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
       }}>
-        {renderWithMentions(note.content, false)}
+        {renderWithMentions(note.content, false, members)}
       </div>
     );
   };
 
   // Pin button is hidden for plain messages (can't be pinned) AND for
-  // announcements (they're auto-pinned forever — exposing an unpin
-  // button would let a user hide an announcement from every view).
-  const canPin = noteType !== 'message' && noteType !== 'announcement';
+  // Urgent + Reminder (they're auto-pinned forever — exposing an
+  // unpin button would let a user hide them from every view).
+  const canPin = noteType !== 'message' && noteType !== 'announcement' && noteType !== 'quick_update';
   const canEdit = isCreator && (noteType === 'message' || noteType === 'announcement' || noteType === 'quick_update');
 
   return (
+    <>
     <Modal open={open} onClose={onClose} title={modalTitle}>
       {editing && canEdit ? (
         <div style={{ marginBottom: 14 }}>
@@ -2912,14 +2995,16 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
         </div>
       )}
 
-      {/* Comments */}
+      {/* Replies (formerly "Comments" — section header removed).
+          Replies are now plain bulletin-board posts with
+          `payload.reply_to = note.id`, so they also appear in the
+          main Home Feed. The list below shows the thread for this
+          particular post; the composer at the bottom posts a new
+          reply. */}
       <div style={{ marginBottom: 14, paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
-        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--text-muted)', marginBottom: 8 }}>
-          Comments{comments.length > 0 ? ` · ${comments.length}` : ''}
-        </div>
         {comments.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 10 }}>
-            No comments yet — be the first.
+            No replies yet — be the first.
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
@@ -2973,7 +3058,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
           <input
             value={newComment}
             onChange={e => setNewComment(e.target.value.slice(0, 300))}
-            placeholder="Add a comment…"
+            placeholder="Write a reply…"
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postComment(); } }}
             style={{
               flex: 1,
@@ -3094,10 +3179,40 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
           <button
             onClick={() => { onDelete(note.id); onClose(); }}
             className="danger-btn"
-          >Delete note</button>
+          >{deleteLabel}</button>
         )}
       </div>
     </Modal>
+
+    {/* Fullscreen photo lightbox — opens when a photo cell is clicked.
+        Click the backdrop or close button (or hit Esc) to dismiss.
+        Stays inside the React tree so data URLs render reliably (no
+        new-tab popup-blocker / data-URL restrictions). */}
+    {zoomedPhoto && (
+      <div
+        className="photo-lightbox"
+        onClick={() => setZoomedPhoto(null)}
+        role="dialog"
+        aria-label="Photo viewer"
+      >
+        <button
+          type="button"
+          className="photo-lightbox-close"
+          onClick={(e) => { e.stopPropagation(); setZoomedPhoto(null); }}
+          aria-label="Close"
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M3 3l12 12M15 3L3 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <img
+          src={zoomedPhoto}
+          alt=""
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    )}
+    </>
   );
 }
 
@@ -3173,10 +3288,10 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
     if (n.type === 'announcement') {
       return (
         <>
-          <span className="fb-bell-icon-circle" style={{ background: '#E63946', fontSize: 14 }}>🚨</span>
+          <span className="fb-bell-icon-circle" style={{ background: '#E63946', fontSize: 14 }}>💡</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="fb-bell-text">
-              <strong>{p.by_name || 'Someone'}</strong> posted an announcement
+              <strong>{p.by_name || 'Someone'}</strong> posted an Urgent
             </div>
             {p.preview && <div className="fb-bell-sub">{p.preview}</div>}
           </div>
@@ -3826,7 +3941,7 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} onVote={voteOnPoll} collapsed={collapsed.notes} onToggleCollapse={() => toggleCollapse('notes')} />
+          <NotesSection notes={notes} members={members} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} onVote={voteOnPoll} collapsed={collapsed.notes} onToggleCollapse={() => toggleCollapse('notes')} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} />
           <CalendarSection
             events={events}
@@ -3884,6 +3999,7 @@ export function MainApp({ profile, onSettings }) {
         tasks={tasks}
         myId={profile?.id}
         myGroupId={profile?.group_id}
+        members={members}
         getProfile={getProfile}
         onClose={() => setDetailNoteId(null)}
         onDelete={(id) => deleteNote(id)}
