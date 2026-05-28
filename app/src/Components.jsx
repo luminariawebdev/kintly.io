@@ -45,7 +45,7 @@ export function StickyHeader({ group = 'Park-Family', onMenu, onProfile }) {
 
 export function AnchorTabs({ active, onChange }) {
   const tabs = [
-    { id: 'notes',    label: 'Bulletin' },
+    { id: 'notes',    label: 'Home' },
     { id: 'tasks',    label: 'Tasks' },
     { id: 'calendar', label: 'Calendar' },
   ];

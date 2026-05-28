@@ -105,8 +105,15 @@ create table if not exists public.notes (
   created_by uuid references public.profiles not null,
   content    text not null,
   pinned     boolean default false,
+  type       text default 'message',
+  payload    jsonb default '{}',
   created_at timestamptz default now()
 );
+-- If upgrading from an older schema, run these:
+alter table public.notes add column if not exists type    text default 'message';
+alter table public.notes add column if not exists payload jsonb default '{}';
+-- The notes.content column needs to allow empty strings (for photos/polls):
+alter table public.notes alter column content drop not null;
 
 -- Enable RLS
 alter table public.groups   enable row level security;

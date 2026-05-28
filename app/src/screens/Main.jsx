@@ -694,84 +694,321 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
 }
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
-function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember }) {
-  // Chat order: oldest first
+// ─── Renderer for an individual feed post (type-aware) ──────────────────────
+function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, inPinned = false }) {
+  const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const type = n.type || 'message';
+  const canDelete = n.created_by === myId;
+
+  // ── Announcement: full-width red, bold/italic, no bubble ────────────────
+  if (type === 'announcement') {
+    return (
+      <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
+        <div className="announcement-card" onClick={() => onOpenNote?.(n)}>
+          {n.pinned && !inPinned && (
+            <span className="announcement-pin" title="Pinned">📌</span>
+          )}
+          <div className="announcement-head">
+            <span className="announcement-siren" aria-hidden>🚨</span>
+            <span className="announcement-label">ANNOUNCEMENT</span>
+          </div>
+          <div className="announcement-text">
+            {renderWithMentions(n.content, false)}
+          </div>
+          <div className="announcement-meta">
+            <span
+              className="member-link"
+              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+            >
+              <Dot profile={author} />
+              <span className="announcement-author">{author?.display_name}</span>
+            </span>
+            <span className="announcement-time">{when}</span>
+          </div>
+        </div>
+      </SwipeToDelete>
+    );
+  }
+
+  // ── Quick Update: normal bubble, but with red "QUICK UPDATE" label ──────
+  if (type === 'quick_update') {
+    return (
+      <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
+        <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
+          {!isMe && (
+            <div
+              className="chat-avatar"
+              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+            >
+              <Dot profile={author} />
+            </div>
+          )}
+          <div className="chat-bubble-wrap">
+            {!isMe && (
+              <div className="chat-sender" style={{ color: getColor(author?.color) }}>
+                {author?.display_name}
+              </div>
+            )}
+            <div
+              className="chat-bubble has-tail"
+              style={{ '--bubble-c': getColor(author?.color) }}
+              onClick={() => onOpenNote?.(n)}
+            >
+              {n.pinned && !inPinned && (
+                <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
+              )}
+              <div className="quick-update-label">QUICK UPDATE</div>
+              <div className="chat-text">{renderWithMentions(n.content, isMe)}</div>
+              <div className="chat-time">{when}</div>
+            </div>
+          </div>
+        </div>
+      </SwipeToDelete>
+    );
+  }
+
+  // ── Photos: image grid inside (or instead of) a bubble ──────────────────
+  if (type === 'photos') {
+    const photos = (n.payload && Array.isArray(n.payload.photos)) ? n.payload.photos : [];
+    return (
+      <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
+        <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
+          {!isMe && (
+            <div
+              className="chat-avatar"
+              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+            >
+              <Dot profile={author} />
+            </div>
+          )}
+          <div className="chat-bubble-wrap">
+            {!isMe && (
+              <div className="chat-sender" style={{ color: getColor(author?.color) }}>
+                {author?.display_name}
+              </div>
+            )}
+            <div
+              className="chat-bubble photo-bubble has-tail"
+              style={{ '--bubble-c': getColor(author?.color) }}
+              onClick={() => onOpenNote?.(n)}
+            >
+              {n.pinned && !inPinned && (
+                <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
+              )}
+              <div className={'photo-grid count-' + Math.min(photos.length, 4)}>
+                {photos.slice(0, 4).map((src, i) => (
+                  <div key={i} className="photo-cell">
+                    <img src={src} alt="" />
+                    {i === 3 && photos.length > 4 && (
+                      <div className="photo-more">+{photos.length - 4}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {n.content && (
+                <div className="chat-text" style={{ marginTop: 8 }}>{renderWithMentions(n.content, isMe)}</div>
+              )}
+              <div className="chat-time">{when}</div>
+            </div>
+          </div>
+        </div>
+      </SwipeToDelete>
+    );
+  }
+
+  // ── Poll: question + option list with circular vote buttons ─────────────
+  if (type === 'poll') {
+    const question = n.payload?.question || n.content || '';
+    const options = Array.isArray(n.payload?.options) ? n.payload.options : [];
+    const votes = n.payload?.votes && typeof n.payload.votes === 'object' ? n.payload.votes : {};
+    const myVoteId = Object.keys(votes).find(oid => Array.isArray(votes[oid]) && votes[oid].includes(myId));
+    const totalVotes = Object.values(votes).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+    return (
+      <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
+        <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
+          {!isMe && (
+            <div
+              className="chat-avatar"
+              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+            >
+              <Dot profile={author} />
+            </div>
+          )}
+          <div className="chat-bubble-wrap" style={{ maxWidth: '86%' }}>
+            {!isMe && (
+              <div className="chat-sender" style={{ color: getColor(author?.color) }}>
+                {author?.display_name}
+              </div>
+            )}
+            <div
+              className="chat-bubble poll-bubble has-tail"
+              style={{ '--bubble-c': getColor(author?.color) }}
+              onClick={(e) => {
+                // Don't pop the modal when clicking an option (handled by option click)
+                if (e.target.closest('.poll-option')) return;
+                onOpenNote?.(n);
+              }}
+            >
+              {n.pinned && !inPinned && (
+                <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
+              )}
+              <div className="poll-label">POLL</div>
+              <div className="poll-question">{question}</div>
+              <div className="poll-options">
+                {options.map(opt => {
+                  const count = Array.isArray(votes[opt.id]) ? votes[opt.id].length : 0;
+                  const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+                  const isMine = myVoteId === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      className={'poll-option' + (isMine ? ' selected' : '')}
+                      onClick={(e) => { e.stopPropagation(); onVote && onVote(n.id, opt.id); }}
+                    >
+                      <span className={'poll-radio' + (isMine ? ' checked' : '')}>
+                        {isMine && <span className="poll-radio-inner" />}
+                      </span>
+                      <span className="poll-option-text">{opt.text}</span>
+                      <span className="poll-option-count">{count}</span>
+                      <span className="poll-option-bar" style={{ width: pct + '%' }} />
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="poll-footer">
+                <span className="poll-total">{totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}</span>
+                <span className="chat-time" style={{ marginTop: 0 }}>{when}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </SwipeToDelete>
+    );
+  }
+
+  // ── Default: plain message bubble ───────────────────────────────────────
+  const prevSameAuthor = prevNote && prevNote.created_by === n.created_by && (prevNote.type || 'message') === 'message';
+  const nextSameAuthor = nextNote && nextNote.created_by === n.created_by && (nextNote.type || 'message') === 'message';
+  const showTail = !nextSameAuthor;
+  return (
+    <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
+      <div
+        className={`chat-row ${isMe ? 'me' : 'them'}`}
+        style={{ marginTop: prevSameAuthor ? 2 : 10 }}
+      >
+        {!isMe && (
+          <div
+            className="chat-avatar"
+            style={{ visibility: nextSameAuthor ? 'hidden' : 'visible' }}
+            onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+          >
+            <Dot profile={author} />
+          </div>
+        )}
+        <div className="chat-bubble-wrap">
+          {!isMe && !prevSameAuthor && (
+            <div className="chat-sender" style={{ color: getColor(author?.color) }}>
+              {author?.display_name}
+            </div>
+          )}
+          <div
+            className={`chat-bubble${showTail ? ' has-tail' : ''}`}
+            style={{ '--bubble-c': getColor(author?.color) }}
+            onClick={() => onOpenNote?.(n)}
+          >
+            <div className="chat-text">{renderWithMentions(n.content, isMe)}</div>
+            <div className="chat-time">{when}</div>
+          </div>
+        </div>
+      </div>
+    </SwipeToDelete>
+  );
+}
+
+function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote }) {
+  // Pinned items shown at the top — any type EXCEPT plain messages
+  const pinned = notes
+    .filter(n => n.pinned && (n.type || 'message') !== 'message')
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  // Main feed: oldest first
   const sorted = [...notes].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
   return (
     <section className="fb-sec" id="sec-notes">
       <div className="fb-sec-hd">
         <div>
-          <h2 className="fb-sec-title">Bulletin Board</h2>
+          <h2 className="fb-sec-title">Home Feed</h2>
         </div>
-        <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'message' : 'messages'}</div>
+        <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'post' : 'posts'}</div>
       </div>
 
+      {/* Pinned section — only shown when something is pinned */}
+      {pinned.length > 0 && (
+        <div className="pinned-section">
+          <div className="pinned-header">
+            <span className="pinned-icon">📌</span>
+            <span className="pinned-label">PINNED</span>
+            <span className="pinned-count">{pinned.length}</span>
+          </div>
+          <div className="pinned-list">
+            {pinned.map(n => {
+              const author = getProfile(n.created_by);
+              const isMe = n.created_by === myId;
+              return (
+                <FeedPost
+                  key={'pin-' + n.id}
+                  n={n}
+                  author={author}
+                  isMe={isMe}
+                  prevNote={null}
+                  nextNote={null}
+                  myId={myId}
+                  onOpenNote={onOpenNote}
+                  onDelete={onDelete}
+                  onTogglePin={onTogglePin}
+                  onShowMember={onShowMember}
+                  onVote={onVote}
+                  inPinned={true}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {sorted.length === 0 ? (
-        <div className="kbd-hint" style={{ padding: '24px 0' }}>NO MESSAGES YET — ADD ONE BELOW</div>
+        <div className="kbd-hint" style={{ padding: '24px 0' }}>NO POSTS YET — TAP "POST" BELOW</div>
       ) : (
         <div className="chat-feed">
           {sorted.map((n, i) => {
             const author = getProfile(n.created_by);
             const isMe = n.created_by === myId;
-            const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
             const prevNote = i > 0 ? sorted[i - 1] : null;
-            const sameAuthorAsPrev = prevNote && prevNote.created_by === n.created_by;
             const nextNote = i < sorted.length - 1 ? sorted[i + 1] : null;
-            const sameAuthorAsNext = nextNote && nextNote.created_by === n.created_by;
-            // Last bubble in a consecutive run gets the tail
-            const showTail = !sameAuthorAsNext;
-
             return (
-              <SwipeToDelete key={n.id} onDelete={() => onDelete(n.id)} disabled={n.created_by !== myId}>
-                <div
-                  className={`chat-row ${isMe ? 'me' : 'them'}`}
-                  style={{ marginTop: sameAuthorAsPrev ? 2 : 10 }}
-                >
-                  {/* Left avatar slot for "them" messages */}
-                  {!isMe && (
-                    <div
-                      className="chat-avatar"
-                      style={{ visibility: sameAuthorAsNext ? 'hidden' : 'visible' }}
-                      onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-                    >
-                      <Dot profile={author} />
-                    </div>
-                  )}
-
-                  <div className="chat-bubble-wrap">
-                    {/* Sender name — only for "them", only on first in a run */}
-                    {!isMe && !sameAuthorAsPrev && (
-                      <div className="chat-sender" style={{ color: getColor(author?.color) }}>
-                        {author?.display_name}
-                      </div>
-                    )}
-
-                    <div
-                      className={`chat-bubble${showTail ? ' has-tail' : ''}`}
-                      style={{ '--bubble-c': getColor(author?.color) }}
-                      onClick={() => onOpenNote?.(n)}
-                    >
-                      {n.pinned && (
-                        <button
-                          className="chat-pin"
-                          onClick={(e) => { e.stopPropagation(); onTogglePin(n.id, n.pinned); }}
-                          title="Unpin"
-                        >📌</button>
-                      )}
-                      <div className="chat-text">{renderWithMentions(n.content, isMe)}</div>
-                      <div className="chat-time">{when}</div>
-                    </div>
-                  </div>
-                </div>
-              </SwipeToDelete>
+              <FeedPost
+                key={n.id}
+                n={n}
+                author={author}
+                isMe={isMe}
+                prevNote={prevNote}
+                nextNote={nextNote}
+                myId={myId}
+                onOpenNote={onOpenNote}
+                onDelete={onDelete}
+                onTogglePin={onTogglePin}
+                onShowMember={onShowMember}
+                onVote={onVote}
+              />
             );
           })}
         </div>
       )}
 
-      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
-        <span className="plus">+</span> New message
+      <button className="fb-btn solid" onClick={onAdd} style={{ marginTop: 14 }}>
+        <span className="plus">+</span> Post
       </button>
     </section>
   );
@@ -1308,13 +1545,23 @@ function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, 
 
 // ─── Add Note Modal ───────────────────────────────────────────────────────────
 function AddNoteModal({ open, onClose, profile, members, onSave }) {
+  const [postType, setPostType] = React.useState('message');
   const [body, setBody] = React.useState('');
+  const [pinPost, setPinPost] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [makeTask, setMakeTask] = React.useState(false);
   const [taskTitle, setTaskTitle] = React.useState('');
   const [taskAssignee, setTaskAssignee] = React.useState(profile?.id || null);
   const [taskDueOpt, setTaskDueOpt] = React.useState('today');
   const [taskDueDate, setTaskDueDate] = React.useState('');
+
+  // Photo upload state
+  const [photos, setPhotos] = React.useState([]); // array of dataURLs
+  const photoInputRef = React.useRef(null);
+
+  // Poll state
+  const [pollQuestion, setPollQuestion] = React.useState('');
+  const [pollOptions, setPollOptions] = React.useState(['', '']);
 
   // @mention state
   const editorRef = React.useRef(null);
@@ -1358,16 +1605,76 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   React.useEffect(() => {
     if (open) {
       if (editorRef.current) editorRef.current.innerHTML = '';
+      setPostType('message');
       setBody('');
+      setPinPost(false);
       setMakeTask(false);
       setTaskTitle('');
       setTaskAssignee(profile?.id || null);
       setTaskDueOpt('today');
       setTaskDueDate('');
       setMentionAnchor(null);
+      setPhotos([]);
+      setPollQuestion('');
+      setPollOptions(['', '']);
       setTimeout(() => editorRef.current?.focus(), 50);
     }
   }, [open, profile?.id]);
+
+  // Photo upload helpers — turn user-selected files into compressed data URLs
+  const handlePhotoSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    // Hard cap: 10 photos per post (good for the chat feed)
+    const remaining = 10 - photos.length;
+    const toRead = files.slice(0, remaining);
+    toRead.forEach(file => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target.result;
+        // Downscale through a canvas so we don't store 10 MB photos in the DB
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1200;
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width >= height) { height = Math.round((height / width) * maxDim); width = maxDim; }
+            else { width = Math.round((width / height) * maxDim); height = maxDim; }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.82);
+          setPhotos(prev => prev.length >= 10 ? prev : [...prev, compressed]);
+        };
+        img.onerror = () => {
+          // Fallback to the raw data URL if canvas fails
+          setPhotos(prev => prev.length >= 10 ? prev : [...prev, dataUrl]);
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+    // Reset so the user can pick the same file again later
+    e.target.value = '';
+  };
+
+  const removePhoto = (idx) => {
+    setPhotos(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // Poll option helpers
+  const setPollOption = (idx, val) => {
+    setPollOptions(prev => prev.map((o, i) => i === idx ? val : o));
+  };
+  const addPollOption = () => {
+    setPollOptions(prev => prev.length < 5 ? [...prev, ''] : prev);
+  };
+  const removePollOption = (idx) => {
+    setPollOptions(prev => prev.length > 2 ? prev.filter((_, i) => i !== idx) : prev);
+  };
 
   // Keep task title auto-suggesting from the note's first line if the user hasn't typed their own
   const [titleEdited, setTitleEdited] = React.useState(false);
@@ -1485,14 +1792,45 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
 
   const save = async () => {
     const content = getEditorText().trim();
-    if (!content) { alert('Please enter a message before posting.'); return; }
-    if (makeTask && !taskTitle.trim()) { alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return; }
+    let payload = null;
+
+    // Validate per type
+    if (postType === 'message' || postType === 'announcement' || postType === 'quick_update') {
+      if (!content) { alert('Please enter a message before posting.'); return; }
+    } else if (postType === 'photos') {
+      if (photos.length === 0) { alert('Please add at least one photo.'); return; }
+      payload = { photos };
+    } else if (postType === 'poll') {
+      const q = pollQuestion.trim();
+      const opts = pollOptions.map(o => o.trim()).filter(Boolean);
+      if (!q) { alert('Please enter a poll question.'); return; }
+      if (opts.length < 2) { alert('Please add at least two answer options.'); return; }
+      payload = {
+        question: q,
+        options: opts.map((text, i) => ({ id: 'opt-' + Date.now() + '-' + i, text })),
+        votes: {},
+      };
+    }
+
+    // Tasks can be created from any post (only really makes sense for messages/quick updates, but allowed)
+    if (makeTask && !taskTitle.trim()) {
+      alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return;
+    }
+
+    // Pinning: only allowed for non-message types
+    const finalPinned = postType !== 'message' ? pinPost : false;
+
     setSaving(true);
     const taskPayload = makeTask
       ? { title: taskTitle.trim(), assigned_to: taskAssignee, due_date: getDueDate() }
       : null;
     try {
-      await onSave(content, taskPayload);
+      await onSave({
+        content: content || (postType === 'poll' ? pollQuestion.trim() : ''),
+        type: postType,
+        payload,
+        pinned: finalPinned,
+      }, taskPayload);
     } catch (e) {
       alert('Error: ' + (e?.message || String(e)));
     }
@@ -1500,9 +1838,85 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     onClose();
   };
 
+  // Post type configuration — drives the segmented control
+  const POST_TYPES = [
+    { id: 'message',      label: 'Message',     icon: '💬' },
+    { id: 'announcement', label: 'Announce',    icon: '🚨' },
+    { id: 'quick_update', label: 'Quick Update',icon: '⚡' },
+    { id: 'photos',       label: 'Photos',      icon: '📷' },
+    { id: 'poll',         label: 'Poll',        icon: '📊' },
+  ];
+
+  // Title shows the active post type
+  const typeLabels = { message: 'Message', announcement: 'Announcement', quick_update: 'Quick Update', photos: 'Photos', poll: 'Poll' };
+  const titleNode = <>New <em>{typeLabels[postType] || 'Post'}</em></>;
+
+  // Helper — render the contentEditable message editor (used by message, announcement, quick_update)
+  const renderMessageEditor = (labelText, placeholder, extraClass) => (
+    <div className="field">
+      <label>
+        {labelText}
+        {otherMembers.length > 0 && (
+          <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
+            — type @ to tag someone
+          </span>
+        )}
+      </label>
+      <div style={{ position: 'relative' }}>
+        <div
+          ref={editorRef}
+          contentEditable
+          suppressContentEditableWarning
+          data-gramm="false"
+          data-gramm_editor="false"
+          className={'mention-editor' + (extraClass ? ' ' + extraClass : '')}
+          onInput={handleInput}
+          onKeyDown={(e) => { if (e.key === 'Escape') setMentionAnchor(null); }}
+          onPaste={handlePaste}
+        />
+        {!body && (
+          <span className="mention-editor-placeholder">{placeholder}</span>
+        )}
+        {mentionAnchor !== null && mentionMatches.length > 0 && (
+          <div className="mention-picker">
+            {mentionMatches.map(m => (
+              <button
+                key={m.id}
+                className="mention-pick-item"
+                onMouseDown={(e) => { e.preventDefault(); insertMention(m); }}
+              >
+                <Dot profile={m} />
+                <span style={{ color: getColor(m.color) }}>{m.display_name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title={<>New <em>message</em></>}
+    <Modal open={open} onClose={onClose} title={titleNode}
       footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Posting…' : 'Post'}</button>}>
+
+      {/* Post type segmented control */}
+      <div className="field">
+        <label>Post type</label>
+        <div className="post-type-row">
+          {POST_TYPES.map(t => (
+            <button
+              key={t.id}
+              className={'post-type-btn' + (postType === t.id ? ' on' : '')}
+              onClick={() => setPostType(t.id)}
+              type="button"
+            >
+              <span className="post-type-icon" aria-hidden>{t.icon}</span>
+              <span className="post-type-label">{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="field">
         <label>Posting as</label>
         <div className="assignee-picker">
@@ -1513,71 +1927,173 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           </button>
         </div>
       </div>
-      <div className="field">
-        <label>
-          Message
-          {otherMembers.length > 0 && (
-            <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
-              — type @ to tag someone
-            </span>
-          )}
-        </label>
-        <div style={{ position: 'relative' }}>
-          <div
-            ref={editorRef}
-            contentEditable
-            suppressContentEditableWarning
-            data-gramm="false"
-            data-gramm_editor="false"
-            className="mention-editor"
-            onInput={handleInput}
-            onKeyDown={(e) => { if (e.key === 'Escape') setMentionAnchor(null); }}
-            onPaste={handlePaste}
-          />
-          {!body && (
-            <span className="mention-editor-placeholder">What's on your mind?</span>
-          )}
-          {/* @mention picker dropdown */}
-          {mentionAnchor !== null && mentionMatches.length > 0 && (
-            <div className="mention-picker">
-              {mentionMatches.map(m => (
-                <button
-                  key={m.id}
-                  className="mention-pick-item"
-                  onMouseDown={(e) => { e.preventDefault(); insertMention(m); }}
-                >
-                  <Dot profile={m} />
-                  <span style={{ color: getColor(m.color) }}>{m.display_name}</span>
-                </button>
+
+      {/* ── Type-specific content ───────────────────────────────────── */}
+      {postType === 'message' && renderMessageEditor('Message', "What's on your mind?")}
+
+      {postType === 'announcement' && (
+        <>
+          <div className="announcement-notice">
+            <span aria-hidden style={{ fontSize: 16 }}>🚨</span>
+            <span>Everyone in the group will get a notification.</span>
+          </div>
+          {renderMessageEditor('Announcement', 'Important news for the whole group…', 'announcement-editor')}
+        </>
+      )}
+
+      {postType === 'quick_update' && (
+        <>
+          <div className="quick-update-notice">
+            <span className="quick-update-label" style={{ display: 'inline-block', padding: 0 }}>QUICK UPDATE</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· short status, no notification</span>
+          </div>
+          {renderMessageEditor('Update', "Running 10 minutes late…")}
+        </>
+      )}
+
+      {postType === 'photos' && (
+        <>
+          <div className="field">
+            <label>Photos <span style={{ fontWeight: 400, opacity: 0.5 }}>· up to 10</span></label>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              capture="environment"
+              onChange={handlePhotoSelect}
+              style={{ display: 'none' }}
+            />
+            <button
+              type="button"
+              className="fb-btn"
+              onClick={() => photoInputRef.current?.click()}
+              style={{ marginBottom: photos.length > 0 ? 10 : 0 }}
+            >
+              <span className="plus">+</span> Add photos
+            </button>
+            {photos.length > 0 && (
+              <div className="photo-thumbs">
+                {photos.map((src, idx) => (
+                  <div key={idx} className="photo-thumb">
+                    <img src={src} alt="" />
+                    <button
+                      type="button"
+                      className="photo-thumb-remove"
+                      onClick={() => removePhoto(idx)}
+                      title="Remove photo"
+                      aria-label="Remove photo"
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {renderMessageEditor('Caption (optional)', 'Say something about these photos…')}
+        </>
+      )}
+
+      {postType === 'poll' && (
+        <>
+          <div className="field">
+            <label>Question</label>
+            <input
+              value={pollQuestion}
+              onChange={e => setPollQuestion(e.target.value.slice(0, 140))}
+              placeholder="What should we have for dinner?"
+              maxLength={140}
+            />
+          </div>
+          <div className="field">
+            <label>Answer options <span style={{ fontWeight: 400, opacity: 0.5 }}>· up to 5</span></label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {pollOptions.map((opt, idx) => (
+                <div key={idx} className="poll-option-input">
+                  <span className="poll-option-num">{idx + 1}</span>
+                  <input
+                    value={opt}
+                    onChange={e => setPollOption(idx, e.target.value.slice(0, 80))}
+                    placeholder={['Pizza', 'Tacos', 'Stir fry', 'Soup', 'Cereal'][idx] || 'Option…'}
+                    maxLength={80}
+                  />
+                  {pollOptions.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => removePollOption(idx)}
+                      className="poll-option-remove"
+                      aria-label="Remove option"
+                    >×</button>
+                  )}
+                </div>
               ))}
+              {pollOptions.length < 5 && (
+                <button
+                  type="button"
+                  className="fb-btn"
+                  onClick={addPollOption}
+                  style={{ marginTop: 2 }}
+                >
+                  <span className="plus">+</span> Add option
+                </button>
+              )}
             </div>
-          )}
+          </div>
+        </>
+      )}
+
+      {/* ── Pin checkbox — shown for everything except plain Message ── */}
+      {postType !== 'message' && (
+        <div className="field" style={{ marginTop: 4 }}>
+          <label
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '10px 12px', width: '100%',
+              background: pinPost ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
+              border: '1.5px solid var(--ink)', borderRadius: 8,
+              cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
+              color: 'var(--ink)', textAlign: 'left',
+              userSelect: 'none',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={pinPost}
+              onChange={e => setPinPost(e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
+            />
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span aria-hidden>📌</span> Pin to top of Home Feed
+            </span>
+          </label>
         </div>
-      </div>
+      )}
 
-      <div className="field" style={{ marginTop: 4 }}>
-        <label
-          style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '10px 12px', width: '100%',
-            background: makeTask ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
-            border: '1.5px solid var(--ink)', borderRadius: 8,
-            cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
-            color: 'var(--ink)', textAlign: 'left',
-            userSelect: 'none',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={makeTask}
-            onChange={e => setMakeTask(e.target.checked)}
-            style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
-          />
-          Create task from note?
-        </label>
-      </div>
+      {/* ── Create-task option (only for Message + Quick Update) ────── */}
+      {(postType === 'message' || postType === 'quick_update') && (
+        <div className="field" style={{ marginTop: 4 }}>
+          <label
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '10px 12px', width: '100%',
+              background: makeTask ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
+              border: '1.5px solid var(--ink)', borderRadius: 8,
+              cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
+              color: 'var(--ink)', textAlign: 'left',
+              userSelect: 'none',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={makeTask}
+              onChange={e => setMakeTask(e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
+            />
+            Create task from post?
+          </label>
+        </div>
+      )}
 
-      {makeTask && (
+      {makeTask && (postType === 'message' || postType === 'quick_update') && (
         <div style={{ background: 'rgba(20, 20, 20, 0.03)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
           <div className="field">
             <label>Task title</label>
@@ -1683,9 +2199,9 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
         </div>
       </div>
 
-      {/* Bulletin posts */}
+      {/* Home Feed posts */}
       <div style={{ marginBottom: 22 }}>
-        <div style={sectionLabelStyle}>Bulletin posts</div>
+        <div style={sectionLabelStyle}>Home Feed posts</div>
         {memberNotes.length === 0 ? (
           <div style={emptyStyle}>No posts yet.</div>
         ) : (
@@ -2037,7 +2553,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   );
 }
 
-function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated }) {
+function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated, onTogglePin, onVote }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
   const [savingEdit, setSavingEdit] = React.useState(false);
@@ -2131,9 +2647,128 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
     await supabase.from('note_comments').delete().eq('id', id);
   };
 
+  const noteType = note.type || 'message';
+  const TYPE_TITLES = { message: 'Message', announcement: 'Announcement', quick_update: 'Quick Update', photos: 'Photos', poll: 'Poll' };
+  const modalTitle = TYPE_TITLES[noteType] || 'Post';
+
+  // ── Type-specific body rendering for the details view ─────────────
+  const renderBody = () => {
+    if (noteType === 'announcement') {
+      return (
+        <div className="announcement-card detail-mode">
+          <div className="announcement-head">
+            <span className="announcement-siren" aria-hidden>🚨</span>
+            <span className="announcement-label">ANNOUNCEMENT</span>
+          </div>
+          <div className="announcement-text detail-text">
+            {renderWithMentions(note.content, false)}
+          </div>
+        </div>
+      );
+    }
+    if (noteType === 'quick_update') {
+      return (
+        <div style={{
+          padding: '14px 16px',
+          background: 'var(--surface-glass-strong)',
+          border: '1px solid var(--border-glass)',
+          borderRadius: 'var(--r-md)',
+          fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+        }}>
+          <div className="quick-update-label" style={{ marginBottom: 6, padding: 0 }}>QUICK UPDATE</div>
+          {renderWithMentions(note.content, false)}
+        </div>
+      );
+    }
+    if (noteType === 'photos') {
+      const photos = (note.payload && Array.isArray(note.payload.photos)) ? note.payload.photos : [];
+      return (
+        <div>
+          <div className="photo-detail-grid">
+            {photos.map((src, i) => (
+              <a key={i} href={src} target="_blank" rel="noopener noreferrer" className="photo-detail-cell">
+                <img src={src} alt="" />
+              </a>
+            ))}
+          </div>
+          {note.content && (
+            <div style={{
+              padding: '14px 16px', marginTop: 12,
+              background: 'var(--surface-glass-strong)',
+              border: '1px solid var(--border-glass)',
+              borderRadius: 'var(--r-md)',
+              fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+            }}>
+              {renderWithMentions(note.content, false)}
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (noteType === 'poll') {
+      const question = note.payload?.question || note.content || '';
+      const options = Array.isArray(note.payload?.options) ? note.payload.options : [];
+      const votes = note.payload?.votes && typeof note.payload.votes === 'object' ? note.payload.votes : {};
+      const myVoteId = Object.keys(votes).find(oid => Array.isArray(votes[oid]) && votes[oid].includes(myId));
+      const totalVotes = Object.values(votes).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+      return (
+        <div style={{
+          padding: '14px 16px',
+          background: 'var(--surface-glass-strong)',
+          border: '1px solid var(--border-glass)',
+          borderRadius: 'var(--r-md)',
+        }}>
+          <div className="poll-label" style={{ marginBottom: 6 }}>POLL</div>
+          <div className="poll-question" style={{ marginBottom: 12, fontSize: 17 }}>{question}</div>
+          <div className="poll-options detail-mode">
+            {options.map(opt => {
+              const voterIds = Array.isArray(votes[opt.id]) ? votes[opt.id] : [];
+              const count = voterIds.length;
+              const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+              const isMine = myVoteId === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  className={'poll-option' + (isMine ? ' selected' : '')}
+                  onClick={() => onVote && onVote(note.id, opt.id)}
+                  style={{ '--bubble-c': 'var(--kinnekt-purple)' }}
+                >
+                  <span className={'poll-radio' + (isMine ? ' checked' : '')}>
+                    {isMine && <span className="poll-radio-inner" />}
+                  </span>
+                  <span className="poll-option-text">{opt.text}</span>
+                  <span className="poll-option-count">{count}</span>
+                  <span className="poll-option-bar" style={{ width: pct + '%' }} />
+                </button>
+              );
+            })}
+          </div>
+          <div className="poll-footer detail-mode" style={{ marginTop: 10 }}>
+            <span className="poll-total">{totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}</span>
+          </div>
+        </div>
+      );
+    }
+    // Default — plain message
+    return (
+      <div style={{
+        padding: '14px 16px',
+        background: 'var(--surface-glass-strong)',
+        border: '1px solid var(--border-glass)',
+        borderRadius: 'var(--r-md)',
+        fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+      }}>
+        {renderWithMentions(note.content, false)}
+      </div>
+    );
+  };
+
+  const canPin = noteType !== 'message';
+  const canEdit = isCreator && (noteType === 'message' || noteType === 'announcement' || noteType === 'quick_update');
+
   return (
-    <Modal open={open} onClose={onClose} title="Note">
-      {editing ? (
+    <Modal open={open} onClose={onClose} title={modalTitle}>
+      {editing && canEdit ? (
         <div style={{ marginBottom: 14 }}>
           <textarea
             autoFocus
@@ -2164,32 +2799,41 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
         </div>
       ) : (
         <div style={{ position: 'relative', marginBottom: 14 }}>
-          <div style={{
-            padding: '14px 16px',
-            background: 'var(--surface-glass-strong)',
-            border: '1px solid var(--border-glass)',
-            borderRadius: 'var(--r-md)',
-            fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
-          }}>
-            {renderWithMentions(note.content, false)}
+          {renderBody()}
+          <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 6 }}>
+            {canPin && onTogglePin && (
+              <button
+                onClick={() => onTogglePin(note.id, note.pinned)}
+                style={{
+                  background: note.pinned ? 'rgba(106, 77, 255, 0.20)' : 'rgba(106, 77, 255, 0.10)',
+                  border: '1px solid rgba(106, 77, 255, 0.30)',
+                  color: 'var(--kinnekt-purple)',
+                  padding: '4px 10px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  cursor: 'pointer',
+                }}
+                title={note.pinned ? 'Unpin from feed' : 'Pin to top'}
+              >📌 {note.pinned ? 'Unpin' : 'Pin'}</button>
+            )}
+            {canEdit && (
+              <button
+                onClick={() => { setDraft(note.content || ''); setEditing(true); }}
+                style={{
+                  background: 'rgba(106, 77, 255, 0.10)',
+                  border: '1px solid rgba(106, 77, 255, 0.30)',
+                  color: 'var(--kinnekt-purple)',
+                  padding: '4px 10px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  cursor: 'pointer',
+                }}
+                title="Edit"
+              >Edit</button>
+            )}
           </div>
-          {isCreator && (
-            <button
-              onClick={() => { setDraft(note.content || ''); setEditing(true); }}
-              style={{
-                position: 'absolute', top: 8, right: 8,
-                background: 'rgba(106, 77, 255, 0.10)',
-                border: '1px solid rgba(106, 77, 255, 0.30)',
-                color: 'var(--kinnekt-purple)',
-                padding: '4px 10px',
-                fontSize: 11,
-                fontWeight: 600,
-                borderRadius: 999,
-                cursor: 'pointer',
-              }}
-              title="Edit note"
-            >Edit</button>
-          )}
         </div>
       )}
 
@@ -2451,6 +3095,19 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'announcement') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: '#E63946', fontSize: 14 }}>🚨</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> posted an announcement
+            </div>
+            {p.preview && <div className="fb-bell-sub">{p.preview}</div>}
+          </div>
+        </>
+      );
+    }
     return (
       <div style={{ flex: 1 }}>
         <div className="fb-bell-text">{p.text || 'Notification'}</div>
@@ -2477,7 +3134,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!id) return;
               if ((n.type === 'task_assigned' || n.type === 'task_cancelled') && onOpenTask) onOpenTask(id);
               else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
-              else if (n.type === 'note_tagged' && onOpenNote) onOpenNote(id);
+              else if ((n.type === 'note_tagged' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
             return (
               <SwipeToDelete key={n.id} onDelete={() => onDelete?.(n.id)}>
@@ -2772,20 +3429,59 @@ export function MainApp({ profile, onSettings }) {
   };
 
   // Note CRUD
-  const addNote = async (content, taskPayload) => {
-    const { data: noteRow, error: nErr } = await supabase
-      .from('notes')
-      .insert({ group_id: profile.group_id, created_by: profile.id, content })
-      .select()
-      .single();
+  // Accepts either: addNote(content, taskPayload)  — legacy signature
+  //           or: addNote({content, type, payload, pinned}, taskPayload)  — new
+  const addNote = async (arg, taskPayload) => {
+    const isObj = arg && typeof arg === 'object' && !Array.isArray(arg);
+    const content = isObj ? (arg.content || '') : (arg || '');
+    const type    = isObj ? (arg.type || 'message') : 'message';
+    const payload = isObj ? (arg.payload || null) : null;
+    const pinned  = isObj ? !!arg.pinned : false;
+
+    // Build the insert payload — strip optional columns on schema errors
+    let insertRow = {
+      group_id: profile.group_id,
+      created_by: profile.id,
+      content,
+      type,
+      payload,
+      pinned,
+    };
+    const optionalCols = ['type', 'payload', 'pinned'];
+    let noteRow = null;
+    let nErr = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      ({ data: noteRow, error: nErr } = await supabase
+        .from('notes')
+        .insert(insertRow)
+        .select()
+        .single());
+      if (!nErr) break;
+      const msg = (nErr.message || '').toLowerCase();
+      let stripped = null;
+      for (const col of optionalCols) {
+        if (insertRow[col] !== undefined && msg.includes(col)) {
+          const { [col]: _, ...rest } = insertRow;
+          insertRow = rest;
+          stripped = col;
+          break;
+        }
+      }
+      if (!stripped) break;
+    }
     if (nErr || !noteRow) {
-      alert('Could not save note: ' + (nErr?.message || 'unknown error'));
+      const m = nErr?.message || 'unknown error';
+      if (/type|payload/i.test(m)) {
+        alert('Home Feed needs a one-time database update.\n\nRun this in Supabase → SQL Editor:\n\nalter table public.notes add column if not exists type text default \'message\';\nalter table public.notes add column if not exists payload jsonb default \'{}\';');
+      } else {
+        alert('Could not save post: ' + m);
+      }
       return;
     }
     setNotes(prev => [noteRow, ...prev]);
 
     // Notify tagged members — parse @[Name] from content
-    const tagMatches = [...content.matchAll(/@\[([^\]]+)\]/g)];
+    const tagMatches = [...(content || '').matchAll(/@\[([^\]]+)\]/g)];
     if (tagMatches.length > 0) {
       const taggedIds = [...new Set(
         tagMatches
@@ -2798,6 +3494,19 @@ export function MainApp({ profile, onSettings }) {
           by_name: profile.display_name,
           by_color: profile.color,
           preview: content.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 80),
+        });
+      }
+    }
+
+    // Announcements: notify EVERY other group member with siren payload
+    if (type === 'announcement') {
+      const others = members.filter(m => m.id !== profile.id).map(m => m.id);
+      if (others.length > 0) {
+        notify(others, 'announcement', {
+          note_id: noteRow.id,
+          by_name: profile.display_name,
+          by_color: profile.color,
+          preview: (content || '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 100),
         });
       }
     }
@@ -2834,6 +3543,42 @@ export function MainApp({ profile, onSettings }) {
     }
     setTasks(prev => [taskRow, ...prev]);
   };
+
+  // Vote on a poll — updates the note's payload.votes
+  const voteOnPoll = async (noteId, optionId) => {
+    const note = notes.find(n => n.id === noteId);
+    if (!note || note.type !== 'poll') return;
+    const payload = note.payload || {};
+    const options = Array.isArray(payload.options) ? payload.options : [];
+    if (!options.some(o => o.id === optionId)) return;
+
+    const oldVotes = payload.votes && typeof payload.votes === 'object' ? payload.votes : {};
+    // Remove my vote from any existing option, then add to the new one
+    // (single-choice polls — toggle off if clicking the same option)
+    const myCurrent = Object.keys(oldVotes).find(k => Array.isArray(oldVotes[k]) && oldVotes[k].includes(profile.id));
+    const newVotes = {};
+    Object.keys(oldVotes).forEach(k => {
+      newVotes[k] = (Array.isArray(oldVotes[k]) ? oldVotes[k] : []).filter(uid => uid !== profile.id);
+    });
+    if (myCurrent !== optionId) {
+      newVotes[optionId] = [...(newVotes[optionId] || []), profile.id];
+    }
+
+    const newPayload = { ...payload, votes: newVotes };
+    // Optimistic UI
+    setNotes(prev => prev.map(n => n.id === noteId ? { ...n, payload: newPayload } : n));
+    const { error } = await supabase.from('notes').update({ payload: newPayload }).eq('id', noteId);
+    if (error) {
+      // Revert on failure
+      setNotes(prev => prev.map(n => n.id === noteId ? { ...n, payload } : n));
+      if (/payload/i.test(error.message || '')) {
+        alert('Polls need a database update.\n\nRun:\nalter table public.notes add column if not exists payload jsonb default \'{}\';');
+      } else {
+        alert('Could not save vote: ' + error.message);
+      }
+    }
+  };
+
   const deleteNote = async (id) => {
     setNotes(prev => prev.filter(n => n.id !== id));
     await supabase.from('notes').delete().eq('id', id);
@@ -2944,7 +3689,7 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} />
+          <NotesSection notes={notes} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} onVote={voteOnPoll} />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} />
           <CalendarSection
             events={events}
@@ -3006,6 +3751,8 @@ export function MainApp({ profile, onSettings }) {
         onToggleTask={toggleTask}
         onShowMember={(p) => { setDetailNoteId(null); setDetailMemberId(p.id); }}
         onNoteUpdated={(updated) => setNotes(prev => prev.map(n => n.id === updated.id ? updated : n))}
+        onTogglePin={togglePin}
+        onVote={voteOnPoll}
       />
       <TaskDetailsModal
         open={!!detailTaskId}
