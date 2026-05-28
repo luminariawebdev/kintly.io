@@ -1104,25 +1104,58 @@ html { overscroll-behavior-x: none; }
   line-height: 1.1;
 }
 
+/* ── Home Feed: outer wrapper box ───────────────────────────────
+   Sibling of the Tasks `.fb-listbox` / `.upcoming-box` — same glass
+   surface and rounded shape so the Home Feed reads as one cohesive
+   region. Horizontal padding is intentionally 0 because `.chat-row`
+   already carries its own gutter (and that padding protects the chat
+   bubble tails from being clipped). Overflow is hidden so SwipeToDelete
+   reveal areas don't bleed past the rounded corners. */
+.feed-box {
+  position: relative;
+  margin: 6px 0 18px;
+  padding: 12px 0;
+  background: var(--surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
 /* ── Home Feed: Pinned section ─────────────────────────────────── */
 /* Designed to mirror the elevated "feel" of the To-do / Upcoming box,
    but tinted purple so it visually reads as "pinned / important" without
-   being loud. Subtle glass surface + soft shadow + inset highlight. */
+   being loud. Subtle glass surface + soft shadow + inset highlight.
+   Tint is a touch stronger than before so it still pops when nested
+   inside the outer `.feed-box` glass container. */
 .pinned-section {
   position: relative;
   margin: 6px 0 22px;
   padding: 16px 16px 14px;
   background:
-    linear-gradient(180deg, rgba(106, 77, 255, 0.07), rgba(106, 77, 255, 0.02)),
+    linear-gradient(180deg, rgba(106, 77, 255, 0.11), rgba(106, 77, 255, 0.04)),
     var(--surface-glass);
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
-  border: 1px solid rgba(106, 77, 255, 0.20);
+  border: 1px solid rgba(106, 77, 255, 0.28);
   border-radius: var(--r-lg);
   box-shadow:
-    0 8px 24px rgba(106, 77, 255, 0.10),
+    0 8px 24px rgba(106, 77, 255, 0.14),
     var(--shadow-soft),
     inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+/* When the pinned card lives INSIDE the outer feed-box, give it a
+   horizontal inset so it doesn't run edge-to-edge against the box
+   border, and tighten the top margin (the feed-box already provides
+   breathing room). */
+.feed-box .pinned-section {
+  margin: 4px 12px 14px;
+}
+.feed-box .pinned-section:last-child {
+  margin-bottom: 4px;
 }
 .pinned-header {
   display: flex;
@@ -2132,8 +2165,11 @@ html { overscroll-behavior-x: none; }
   color: var(--text-muted);
 }
 .fb-bell-item {
+  position: relative;
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 12px 14px;
+  /* Extra bottom padding reserves room for the per-item delete X
+     that floats in the bottom-right corner. */
+  padding: 12px 36px 22px 14px;
   font-size: 13px;
   cursor: pointer;
   border-bottom: 1px solid var(--border-soft);
@@ -2143,6 +2179,51 @@ html { overscroll-behavior-x: none; }
 .fb-bell-item:hover { background: var(--hover-tint); }
 .fb-bell-item.unread { background: rgba(106, 77, 255, 0.07); }
 .fb-bell-item.unread:hover { background: var(--hover-tint-strong); }
+
+/* Per-notification delete: small red circle with a white × glyph,
+   pinned to the bottom-right corner of each notification row. */
+.fb-bell-item-x {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 0;
+  padding: 0;
+  background: #FF3B30;
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(255, 59, 48, 0.35);
+  transition: transform 0.15s var(--ease), background-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.fb-bell-item-x:hover {
+  background: #E03028;
+  box-shadow: 0 3px 8px rgba(255, 59, 48, 0.50);
+  transform: scale(1.05);
+}
+.fb-bell-item-x:active { transform: scale(0.92); }
+
+/* Header "Clear all" button — text style to match the existing
+   "Mark all read" link but tinted red to signal a destructive action. */
+.fb-bell-clear-all {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: #FF3B30;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+.fb-bell-clear-all:hover { color: #C72119; }
 .fb-bell-icon-circle {
   flex-shrink: 0;
   width: 32px; height: 32px;

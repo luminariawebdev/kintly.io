@@ -965,13 +965,23 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
 }
 
 function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, collapsed, onToggleCollapse }) {
-  // Pinned items shown at the top — any type EXCEPT plain messages
+  // Pinned section — shows:
+  //   • every Announcement (always pinned by design — they live only here)
+  //   • any other non-message post that the author chose to pin
   const pinned = notes
-    .filter(n => n.pinned && (n.type || 'message') !== 'message')
+    .filter(n => {
+      const type = n.type || 'message';
+      if (type === 'announcement') return true;
+      return n.pinned && type !== 'message';
+    })
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-  // Main feed: oldest first
-  const sorted = [...notes].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  // Main feed: oldest first. Announcements are explicitly excluded —
+  // they exist ONLY in the Pinned section so they don't get buried
+  // beneath the day's chatter.
+  const sorted = notes
+    .filter(n => (n.type || 'message') !== 'announcement')
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-notes">
@@ -987,68 +997,75 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
 
       {!collapsed && (<>
 
+      {/* Whole feed lives in one shaded glass box — same family as the
+          Tasks "To-do" container — so the section reads as a single
+          unified surface. Pinned is its own (slightly more saturated)
+          sub-box nested inside, so the two regions visually separate. */}
+      {(pinned.length > 0 || sorted.length > 0) ? (
+        <div className="feed-box">
+          {/* Pinned sub-section — only shown when something is pinned */}
+          {pinned.length > 0 && (
+            <div className="pinned-section">
+              <div className="pinned-header">
+                <span className="pinned-icon">📌</span>
+                <span className="pinned-label">PINNED</span>
+                <span className="pinned-count">{pinned.length}</span>
+              </div>
+              <div className="pinned-list">
+                {pinned.map(n => {
+                  const author = getProfile(n.created_by);
+                  const isMe = n.created_by === myId;
+                  return (
+                    <FeedPost
+                      key={'pin-' + n.id}
+                      n={n}
+                      author={author}
+                      isMe={isMe}
+                      prevNote={null}
+                      nextNote={null}
+                      myId={myId}
+                      onOpenNote={onOpenNote}
+                      onDelete={onDelete}
+                      onTogglePin={onTogglePin}
+                      onShowMember={onShowMember}
+                      onVote={onVote}
+                      inPinned={true}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-      {/* Pinned section — only shown when something is pinned */}
-      {pinned.length > 0 && (
-        <div className="pinned-section">
-          <div className="pinned-header">
-            <span className="pinned-icon">📌</span>
-            <span className="pinned-label">PINNED</span>
-            <span className="pinned-count">{pinned.length}</span>
-          </div>
-          <div className="pinned-list">
-            {pinned.map(n => {
-              const author = getProfile(n.created_by);
-              const isMe = n.created_by === myId;
-              return (
-                <FeedPost
-                  key={'pin-' + n.id}
-                  n={n}
-                  author={author}
-                  isMe={isMe}
-                  prevNote={null}
-                  nextNote={null}
-                  myId={myId}
-                  onOpenNote={onOpenNote}
-                  onDelete={onDelete}
-                  onTogglePin={onTogglePin}
-                  onShowMember={onShowMember}
-                  onVote={onVote}
-                  inPinned={true}
-                />
-              );
-            })}
-          </div>
+          {sorted.length > 0 && (
+            <div className="chat-feed">
+              {sorted.map((n, i) => {
+                const author = getProfile(n.created_by);
+                const isMe = n.created_by === myId;
+                const prevNote = i > 0 ? sorted[i - 1] : null;
+                const nextNote = i < sorted.length - 1 ? sorted[i + 1] : null;
+                return (
+                  <FeedPost
+                    key={n.id}
+                    n={n}
+                    author={author}
+                    isMe={isMe}
+                    prevNote={prevNote}
+                    nextNote={nextNote}
+                    myId={myId}
+                    onOpenNote={onOpenNote}
+                    onDelete={onDelete}
+                    onTogglePin={onTogglePin}
+                    onShowMember={onShowMember}
+                    onVote={onVote}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
-
-      {sorted.length === 0 ? (
-        <div className="kbd-hint" style={{ padding: '24px 0' }}>NO POSTS YET — TAP "POST" BELOW</div>
       ) : (
-        <div className="chat-feed">
-          {sorted.map((n, i) => {
-            const author = getProfile(n.created_by);
-            const isMe = n.created_by === myId;
-            const prevNote = i > 0 ? sorted[i - 1] : null;
-            const nextNote = i < sorted.length - 1 ? sorted[i + 1] : null;
-            return (
-              <FeedPost
-                key={n.id}
-                n={n}
-                author={author}
-                isMe={isMe}
-                prevNote={prevNote}
-                nextNote={nextNote}
-                myId={myId}
-                onOpenNote={onOpenNote}
-                onDelete={onDelete}
-                onTogglePin={onTogglePin}
-                onShowMember={onShowMember}
-                onVote={onVote}
-              />
-            );
-          })}
-        </div>
+        <div className="kbd-hint" style={{ padding: '24px 0' }}>NO POSTS YET — TAP "POST" BELOW</div>
       )}
 
       <button className="fb-btn solid" onClick={onAdd} style={{ marginTop: 14 }}>
@@ -1862,8 +1879,14 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return;
     }
 
-    // Pinning: only allowed for non-message types
-    const finalPinned = postType !== 'message' ? pinPost : false;
+    // Pinning rules:
+    //   announcement → ALWAYS pinned (lives only in pinned section)
+    //   message      → never pinned
+    //   everything else → honors the pin checkbox
+    const finalPinned =
+      postType === 'announcement' ? true  :
+      postType === 'message'      ? false :
+      pinPost;
 
     setSaving(true);
     const taskPayload = makeTask
@@ -2086,8 +2109,12 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
         </>
       )}
 
-      {/* ── Pin checkbox — shown for everything except plain Message ── */}
-      {postType !== 'message' && (
+      {/* ── Pin checkbox ──
+           Hidden for plain Message (messages can't be pinned).
+           Hidden for Announcement (announcements live ONLY in the pinned
+           section by design — auto-pinned at save time, never shown in
+           the main feed). Shown for Quick Update / Photos / Poll. */}
+      {postType !== 'message' && postType !== 'announcement' && (
         <div className="field" style={{ marginTop: 4 }}>
           <label
             style={{
@@ -2808,7 +2835,10 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
     );
   };
 
-  const canPin = noteType !== 'message';
+  // Pin button is hidden for plain messages (can't be pinned) AND for
+  // announcements (they're auto-pinned forever — exposing an unpin
+  // button would let a user hide an announcement from every view).
+  const canPin = noteType !== 'message' && noteType !== 'announcement';
   const canEdit = isCreator && (noteType === 'message' || noteType === 'announcement' || noteType === 'quick_update');
 
   return (
@@ -3072,7 +3102,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, getProfile, onCl
 }
 
 // ─── Notifications Menu ──────────────────────────────────────────────────────
-function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent, onOpenNote, onDelete }) {
+function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, onOpenEvent, onOpenNote, onDelete, onClearAll }) {
   const unread = notifications.filter(n => !n.read).length;
 
   const formatRelative = (iso) => {
@@ -3164,9 +3194,19 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
     <div className="fb-bell-menu" role="menu">
       <div className="fb-bell-hd">
         <span>Notifications</span>
-        {unread > 0 && (
-          <button className="fb-link" onClick={onMarkAll} style={{ fontSize: 11 }}>Mark all read</button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {unread > 0 && (
+            <button className="fb-link" onClick={onMarkAll} style={{ fontSize: 11 }}>Mark all read</button>
+          )}
+          {notifications.length > 0 && onClearAll && (
+            <button
+              type="button"
+              className="fb-bell-clear-all"
+              onClick={onClearAll}
+              title="Delete every notification"
+            >Clear all</button>
+          )}
+        </div>
       </div>
       <div className="fb-bell-list">
         {notifications.length === 0 ? (
@@ -3182,15 +3222,27 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               else if ((n.type === 'note_tagged' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
             return (
-              <SwipeToDelete key={n.id} onDelete={() => onDelete?.(n.id)}>
-                <div
-                  className={'fb-bell-item' + (n.read ? '' : ' unread')}
-                  onClick={handleClick}
-                >
-                  {renderItem(n)}
-                  <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
-                </div>
-              </SwipeToDelete>
+              <div
+                key={n.id}
+                className={'fb-bell-item' + (n.read ? '' : ' unread')}
+                onClick={handleClick}
+              >
+                {renderItem(n)}
+                <span className="fb-bell-when">{formatRelative(n.created_at)}</span>
+                {onDelete && (
+                  <button
+                    type="button"
+                    className="fb-bell-item-x"
+                    onClick={(e) => { e.stopPropagation(); onDelete(n.id); }}
+                    title="Delete notification"
+                    aria-label="Delete notification"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                      <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             );
           })
         )}
@@ -3659,6 +3711,19 @@ export function MainApp({ profile, onSettings }) {
     setNotifications(prev => prev.filter(n => n.id !== id));
     await supabase.from('notifications').delete().eq('id', id);
   };
+  const clearAllNotifications = async () => {
+    if (notifications.length === 0) return;
+    if (!window.confirm('Clear all notifications? This cannot be undone.')) return;
+    const ids = notifications.map(n => n.id);
+    // Optimistic empty so the menu feels instant.
+    setNotifications([]);
+    const { error } = await supabase.from('notifications').delete().in('id', ids);
+    if (error) {
+      // Best-effort restore — the user will see them reappear and can retry.
+      console.error('Clear all notifications failed:', error);
+      alert('Could not clear notifications: ' + error.message);
+    }
+  };
   const togglePin = async (id, pinned) => {
     setNotes(prev => prev.map(n => n.id === id ? { ...n, pinned: !pinned } : n));
     await supabase.from('notes').update({ pinned: !pinned }).eq('id', id);
@@ -3749,6 +3814,7 @@ export function MainApp({ profile, onSettings }) {
                       onOpenEvent={(id) => { setBellOpen(false); setDetailEventId(id); }}
                       onOpenNote={(id) => { setBellOpen(false); setDetailNoteId(id); }}
                       onDelete={deleteNotification}
+                      onClearAll={clearAllNotifications}
                     />
                   )}
                 </div>
