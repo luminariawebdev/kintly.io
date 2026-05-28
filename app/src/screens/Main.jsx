@@ -1741,7 +1741,6 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       if (editorRef.current) editorRef.current.innerHTML = '';
       setPostType('message');
       setBody('');
-      setPinPost(false);
       setMakeTask(false);
       setTaskTitle('');
       setTaskAssignee(profile?.id || null);
