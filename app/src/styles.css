@@ -812,11 +812,11 @@ html { overscroll-behavior-x: none; }
 .chat-row {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
   /* Horizontal padding includes room for the bubble tail and the
      SwipeToDelete overflow clip. The side avatar slot is gone — the
-     caption with avatar + name now lives BELOW the bubble. The flex
-     `gap` keeps the hover reply button from crowding the bubble. */
+     caption with avatar + name now lives BELOW the bubble. Reply is
+     gated behind a long-press (see .bubble-action-bar), so the row
+     no longer needs a sibling reply control. */
   padding: 0 14px;
 }
 
@@ -862,43 +862,98 @@ html { overscroll-behavior-x: none; }
 
 /* ── Reply button (iMessage-style) ────────────────────────────
    Sits as a sibling of the bubble at the row level — appears on
-   the side OPPOSITE the bubble owner (left of "me", right of
-   "them"), revealed on hover at full opacity. Touch devices
-   leave it permanently visible at a low opacity so it's
-   discoverable without hover. Clicking opens the post's detail
-   modal where the user can type a reply. */
-.chat-reply-btn {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--surface-glass);
-  border: 1px solid var(--border-glass);
+   long-press affordance — the reply control is now revealed
+   only after a ~450ms hold (see .bubble-action-bar below). The
+   old always-visible reply pill has been removed so a short
+   click goes straight to the post detail modal. */
+
+/* ── Floating "Reply" action bar ──────────────────────────────
+   Mounted just above a bubble (or above an announcement card)
+   the instant a long-press fires. Looks like iMessage's
+   contextual menu: dark blurred pill with a single "Reply"
+   action. Dismisses on click-outside, Escape, or after the
+   user taps Reply (which kicks off the inline composer). */
+.chat-bubble-wrap,
+.post-press-wrap {
+  position: relative;
+}
+.post-press-wrap {
+  display: block;
+  width: 100%;
+}
+.bubble-action-bar {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
+  padding: 4px;
+  background: rgba(28, 30, 48, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(10, 14, 30, 0.32),
+              0 2px 6px rgba(10, 14, 30, 0.18);
+  white-space: nowrap;
+  animation: bubble-action-in 140ms ease-out;
+  pointer-events: auto;
+}
+@keyframes bubble-action-in {
+  from { opacity: 0; transform: translate(-50%, 4px) scale(0.92); }
+  to   { opacity: 1; transform: translate(-50%, 0)    scale(1); }
+}
+.bubble-action-bar::after {
+  /* small caret pointing down at the bubble */
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(28, 30, 48, 0.94);
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.04));
+}
+.bubble-action-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  padding: 6px 14px 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
   cursor: pointer;
-  padding: 0;
-  color: var(--text-secondary);
-  opacity: 0;
-  align-self: center;
-  transition:
-    opacity 0.18s var(--ease),
-    background-color 0.18s var(--ease),
-    transform 0.18s var(--ease);
-  box-shadow: 0 2px 6px rgba(15, 30, 60, 0.10);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 120ms ease;
 }
-.chat-row:hover .chat-reply-btn {
-  opacity: 1;
+.bubble-action-btn:hover,
+.bubble-action-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+  outline: none;
 }
-.chat-reply-btn:hover {
-  background: var(--hover-tint);
-  color: var(--kinnekt-purple);
-  transform: scale(1.06);
+.bubble-action-icon {
+  font-size: 14px;
+  opacity: 0.92;
+  line-height: 1;
 }
-@media (hover: none) {
-  .chat-reply-btn { opacity: 0.42; }
-  .chat-reply-btn:active { opacity: 1; }
+
+/* Subtle "selected" highlight on the long-pressed bubble/card */
+.chat-bubble.pressed {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.55),
+              0 6px 18px rgba(99, 102, 241, 0.22);
+  transition: box-shadow 160ms ease;
+}
+.announcement-card.pressed {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.55),
+              0 6px 18px rgba(99, 102, 241, 0.22);
+  transition: box-shadow 160ms ease;
 }
 
 /* ── "↩ Replying to …" reference shown ABOVE a reply's bubble.
@@ -948,6 +1003,126 @@ html { overscroll-behavior-x: none; }
   white-space: nowrap;
   min-width: 0;
   max-width: 180px;
+}
+
+/* ── Inline Reply Composer ────────────────────────────────────
+   Slides in at the top of the feed when the user hits the ↩
+   button on any post. Mirrors iMessage's reply-context bar:
+   small header pill showing who you're replying to, then a
+   row with the input + send button. Submitting posts a regular
+   note (with payload.reply_to), so the reply lands at the top
+   of the feed automatically — no modal involved. */
+.reply-composer {
+  margin: 0 12px 14px;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(15, 18, 40, 0.10);
+  box-shadow: 0 1px 0 rgba(15, 18, 40, 0.04), 0 2px 8px rgba(15, 18, 40, 0.06);
+  animation: reply-composer-in 160ms ease-out;
+}
+@keyframes reply-composer-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.reply-composer-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid rgba(15, 18, 40, 0.06);
+  margin-bottom: 8px;
+}
+.reply-composer-arrow {
+  font-size: 14px;
+  opacity: 0.55;
+  flex: 0 0 auto;
+}
+.reply-composer-ref .dot {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+.reply-composer-ref .dot.avatar-emoji {
+  font-size: 12px;
+}
+.reply-composer-name {
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.reply-composer-snippet {
+  font-style: italic;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.reply-composer-cancel {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 999px;
+  line-height: 1;
+  flex: 0 0 auto;
+  transition: background 120ms ease, color 120ms ease;
+}
+.reply-composer-cancel:hover {
+  background: rgba(15, 18, 40, 0.06);
+  color: var(--text);
+}
+.reply-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reply-composer-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 14px;
+  border: 1px solid rgba(15, 18, 40, 0.12);
+  border-radius: 999px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text);
+  background: #fff;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.reply-composer-input:focus {
+  border-color: var(--kinnekt-indigo);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+.reply-composer-input::placeholder {
+  color: var(--text-muted);
+}
+.reply-composer-send {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--kinnekt-indigo);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.reply-composer-send:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+.reply-composer-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ── Caption shown BELOW every chat bubble ───────────────────

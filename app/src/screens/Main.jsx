@@ -754,11 +754,112 @@ function SectionToggle({ collapsed, onClick }) {
 }
 
 // ─── Renderer for an individual feed post (type-aware) ──────────────────────
-function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToNote, replyToAuthor, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, inPinned = false }) {
+function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToNote, replyToAuthor, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, onStartReply, actionBarOpen, onLongPress, onCloseActionBar, inPinned = false }) {
   const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const type = n.type || 'message';
   const canDelete = n.created_by === myId;
   const authorColor = getColor(author?.color);
+
+  // ── Long-press detection ────────────────────────────────────────────────
+  // Hold on a bubble for ~450ms → onLongPress(n) fires, which causes the
+  // parent (NotesSection) to mount the floating Reply action bar above
+  // this post. A normal short tap/click still falls through to onOpenNote
+  // (the post detail modal). Any pointer movement beyond ~10px aborts
+  // the press (so scrolling/swiping never trips it).
+  const pressTimerRef = React.useRef(null);
+  const pressStartRef = React.useRef({ x: 0, y: 0, fired: false });
+  const LONG_PRESS_MS = 450;
+  const PRESS_CANCEL_PX = 10;
+
+  const cancelLongPress = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  const handlePressDown = (e) => {
+    pressStartRef.current = {
+      x: e.clientX ?? 0,
+      y: e.clientY ?? 0,
+      fired: false,
+    };
+    cancelLongPress();
+    pressTimerRef.current = setTimeout(() => {
+      pressStartRef.current.fired = true;
+      pressTimerRef.current = null;
+      try { navigator.vibrate?.(12); } catch {}
+      onLongPress?.(n);
+    }, LONG_PRESS_MS);
+  };
+
+  const handlePressMove = (e) => {
+    if (!pressTimerRef.current) return;
+    const dx = (e.clientX ?? 0) - pressStartRef.current.x;
+    const dy = (e.clientY ?? 0) - pressStartRef.current.y;
+    if (Math.abs(dx) > PRESS_CANCEL_PX || Math.abs(dy) > PRESS_CANCEL_PX) {
+      cancelLongPress();
+    }
+  };
+
+  const handlePressEnd = () => {
+    cancelLongPress();
+  };
+
+  // Short-click handler used by every bubble — opens the detail modal,
+  // BUT suppresses the click if a long-press just fired (so the modal
+  // doesn't pop up the instant the action bar appears).
+  const handleBubbleClick = (e) => {
+    if (pressStartRef.current.fired) {
+      e.preventDefault();
+      e.stopPropagation();
+      pressStartRef.current.fired = false;
+      return;
+    }
+    onOpenNote?.(n);
+  };
+
+  // Props sprinkled onto every interactive bubble/card so long-press
+  // (and the click-after-long-press suppression) work consistently.
+  const pressHandlers = {
+    onPointerDown: handlePressDown,
+    onPointerMove: handlePressMove,
+    onPointerUp: handlePressEnd,
+    onPointerCancel: handlePressEnd,
+    onPointerLeave: handlePressEnd,
+    onContextMenu: (e) => e.preventDefault(), // block iOS callout / right-click menu
+    style: { WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' },
+  };
+
+  // Floating action bar — appears just above the bubble when this post
+  // is the long-pressed one. Single "Reply" button for now. Tapping it
+  // closes the bar and opens the inline reply composer at the top of
+  // the feed (the existing onStartReply flow).
+  const ActionBar = () => {
+    if (!actionBarOpen) return null;
+    return (
+      <div
+        className="bubble-action-bar"
+        role="menu"
+        aria-label="Message actions"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="bubble-action-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCloseActionBar?.();
+            onStartReply?.(n);
+          }}
+        >
+          <span className="bubble-action-icon" aria-hidden>↩</span>
+          <span>Reply</span>
+        </button>
+      </div>
+    );
+  };
 
   // Shared bubble caption — sits BELOW every bubble, on the same side
   // as the bubble (right for "me", left for "them"). Avatar precedes
@@ -811,51 +912,40 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     );
   };
 
-  // Hoverable iMessage-style reply affordance. Clicking it opens the
-  // post's detail modal where the user can type a reply (which posts
-  // a new message with `payload.reply_to = n.id`, threading them
-  // together).
-  const ReplyButton = () => (
-    <button
-      type="button"
-      className="chat-reply-btn"
-      onClick={(e) => { e.stopPropagation(); onOpenNote?.(n); }}
-      title="Reply"
-      aria-label="Reply to this post"
-    >
-      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-        <path d="M6 3L2 7l4 4M2 7h7a3 3 0 013 3v1" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </button>
-  );
-
   // ── Announcement: full-width red, bold/italic, no bubble ────────────────
   if (type === 'announcement') {
     return (
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
-        <div className="announcement-card" onClick={() => onOpenNote?.(n)}>
-          {n.pinned && !inPinned && (
-            <span className="announcement-pin" title="Pinned">📌</span>
-          )}
-          <div className="announcement-head">
-            <span className="announcement-siren" aria-hidden>💡</span>
-            <span className="announcement-label">URGENT</span>
-          </div>
-          <div className="announcement-text">
-            {renderWithMentions(n.content, false, members)}
-          </div>
-          <div className="announcement-meta">
-            <span
-              className="member-link"
-              onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-            >
-              <Dot profile={author} />
-              <span className="announcement-author" style={{ color: authorColor }}>
-                {author?.display_name}
+        <div className="post-press-wrap">
+          <ActionBar />
+          <div
+            className={'announcement-card' + (actionBarOpen ? ' pressed' : '')}
+            onClick={handleBubbleClick}
+            {...pressHandlers}
+          >
+            {n.pinned && !inPinned && (
+              <span className="announcement-pin" title="Pinned">📌</span>
+            )}
+            <div className="announcement-head">
+              <span className="announcement-siren" aria-hidden>🚨</span>
+              <span className="announcement-label">URGENT</span>
+            </div>
+            <div className="announcement-text">
+              {renderWithMentions(n.content, false, members)}
+            </div>
+            <div className="announcement-meta">
+              <span
+                className="member-link"
+                onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+              >
+                <Dot profile={author} />
+                <span className="announcement-author" style={{ color: authorColor }}>
+                  {author?.display_name}
+                </span>
               </span>
-            </span>
-            <span className="announcement-time">{when}</span>
+              <span className="announcement-time">{when}</span>
+            </div>
           </div>
         </div>
       </SwipeToDelete>
@@ -868,11 +958,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap">
+            <ActionBar />
             <ReplyRef />
             <div
-              className="chat-bubble has-tail"
+              className={'chat-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
-              onClick={() => onOpenNote?.(n)}
+              onClick={handleBubbleClick}
+              {...pressHandlers}
             >
               {n.pinned && !inPinned && (
                 <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
@@ -883,7 +975,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
             </div>
             <Caption />
           </div>
-          <ReplyButton />
         </div>
       </SwipeToDelete>
     );
@@ -896,11 +987,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap">
+            <ActionBar />
             <ReplyRef />
             <div
-              className="chat-bubble photo-bubble has-tail"
+              className={'chat-bubble photo-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
-              onClick={() => onOpenNote?.(n)}
+              onClick={handleBubbleClick}
+              {...pressHandlers}
             >
               {n.pinned && !inPinned && (
                 <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
@@ -928,7 +1021,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
             </div>
             <Caption />
           </div>
-          <ReplyButton />
         </div>
       </SwipeToDelete>
     );
@@ -945,15 +1037,17 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap" style={{ maxWidth: '86%' }}>
+            <ActionBar />
             <ReplyRef />
             <div
-              className="chat-bubble poll-bubble has-tail"
+              className={'chat-bubble poll-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
               onClick={(e) => {
                 // Don't pop the modal when clicking an option (handled by option click)
                 if (e.target.closest('.poll-option')) return;
-                onOpenNote?.(n);
+                handleBubbleClick(e);
               }}
+              {...pressHandlers}
             >
               {n.pinned && !inPinned && (
                 <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
@@ -988,7 +1082,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
             </div>
             <Caption />
           </div>
-          <ReplyButton />
         </div>
       </SwipeToDelete>
     );
@@ -1002,24 +1095,140 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
       <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
         <div className="chat-bubble-wrap">
+          <ActionBar />
           <ReplyRef />
           <div
-            className="chat-bubble has-tail"
+            className={'chat-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
             style={{ '--bubble-c': authorColor }}
-            onClick={() => onOpenNote?.(n)}
+            onClick={handleBubbleClick}
+            {...pressHandlers}
           >
             <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
             <div className="chat-time">{when}</div>
           </div>
           <Caption />
         </div>
-        <ReplyButton />
       </div>
     </SwipeToDelete>
   );
 }
 
+// ─── Inline Reply Composer ────────────────────────────────────────────────────
+// Renders at the top of the home feed when the user clicks the ↩ button on
+// any post. Mirrors iMessage's reply-context bar: shows who you're replying
+// to + a snippet of their message, plus an input + send. Submitting calls
+// onSubmit(content) which posts a regular note with payload.reply_to set —
+// the new reply then appears at the top of the feed automatically.
+function ReplyComposer({ target, targetAuthor, onCancel, onSubmit }) {
+  const [text, setText] = React.useState('');
+  const [sending, setSending] = React.useState(false);
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // Autofocus the input the instant the composer mounts
+    inputRef.current?.focus();
+  }, []);
+
+  const color = getColor(targetAuthor?.color);
+  const refType = target.type || 'message';
+  let snippet = '';
+  if (refType === 'photos') {
+    const count = Array.isArray(target.payload?.photos) ? target.payload.photos.length : 0;
+    snippet = count > 1 ? `${count} photos` : 'photo';
+  } else if (refType === 'poll') {
+    snippet = target.payload?.question || 'poll';
+  } else {
+    snippet = (target.content || '').slice(0, 80);
+  }
+
+  const submit = async () => {
+    const t = text.trim();
+    if (!t) return;
+    setSending(true);
+    try { await onSubmit(t); }
+    finally { setSending(false); }
+  };
+
+  return (
+    <div className="reply-composer">
+      <div className="reply-composer-ref">
+        <span className="reply-composer-arrow" aria-hidden>↩</span>
+        <Dot profile={targetAuthor} />
+        <span className="reply-composer-name" style={{ color }}>
+          {targetAuthor?.display_name || 'Unknown'}
+        </span>
+        {snippet && <span className="reply-composer-snippet">{snippet}</span>}
+        <button
+          type="button"
+          className="reply-composer-cancel"
+          onClick={onCancel}
+          aria-label="Cancel reply"
+          title="Cancel reply"
+        >✕</button>
+      </div>
+      <div className="reply-composer-row">
+        <input
+          ref={inputRef}
+          className="reply-composer-input"
+          type="text"
+          placeholder={`Reply to ${targetAuthor?.display_name || 'message'}…`}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+            if (e.key === 'Escape') onCancel();
+          }}
+          disabled={sending}
+        />
+        <button
+          type="button"
+          className="reply-composer-send"
+          onClick={submit}
+          disabled={!text.trim() || sending}
+        >
+          {sending ? '…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, collapsed, onToggleCollapse }) {
+  // Inline reply state — long-pressing a post and then tapping the
+  // floating "Reply" pill stashes the target here, which makes the
+  // ReplyComposer slide in at the top of the feed (no modal). The
+  // composer submits a regular note with payload.reply_to = target.id,
+  // so the reply lands at the top of the feed with the "↩ Replying
+  // to …" pill above it.
+  const [replyingTo, setReplyingTo] = React.useState(null);
+
+  // Long-press action-bar state — the note currently showing its
+  // floating "Reply" pill. Only one post can have the bar open at a
+  // time. Tap-outside or Escape dismisses it.
+  const [actionBarFor, setActionBarFor] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!actionBarFor) return;
+    const onDocDown = (e) => {
+      // Clicks inside the bar (or on the bubble currently long-pressed)
+      // are handled by their own onClick handlers, so any click that
+      // doesn't hit something we care about should close the bar.
+      if (e.target.closest && e.target.closest('.bubble-action-bar')) return;
+      setActionBarFor(null);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setActionBarFor(null);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    document.addEventListener('touchstart', onDocDown, { passive: true });
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocDown);
+      document.removeEventListener('touchstart', onDocDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [actionBarFor]);
+
   // Pinned section — shows:
   //   • every Urgent (announcement) — auto-pinned, lives only here
   //   • every Reminder (quick_update) — auto-pinned, lives only here
@@ -1060,8 +1269,24 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
           Tasks "To-do" container — so the section reads as a single
           unified surface. Pinned is its own (slightly more saturated)
           sub-box nested inside, so the two regions visually separate. */}
-      {(pinned.length > 0 || sorted.length > 0) ? (
+      {(pinned.length > 0 || sorted.length > 0 || replyingTo) ? (
         <div className="feed-box">
+          {/* Inline reply composer — slides in at the top of the feed
+              when the user clicks ↩ on any post. Submits a normal note
+              with payload.reply_to so the reply appears in the main
+              feed (newest-first → top) with the threading reference. */}
+          {replyingTo && (
+            <ReplyComposer
+              target={replyingTo}
+              targetAuthor={getProfile(replyingTo.created_by)}
+              onCancel={() => setReplyingTo(null)}
+              onSubmit={async (content) => {
+                await onReply?.(replyingTo.id, content);
+                setReplyingTo(null);
+              }}
+            />
+          )}
+
           {/* Pinned sub-section — only shown when something is pinned */}
           {pinned.length > 0 && (
             <div className="pinned-section">
@@ -1089,6 +1314,10 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
                       onTogglePin={onTogglePin}
                       onShowMember={onShowMember}
                       onVote={onVote}
+                      onStartReply={setReplyingTo}
+                      actionBarOpen={actionBarFor?.id === n.id}
+                      onLongPress={(note) => setActionBarFor(note)}
+                      onCloseActionBar={() => setActionBarFor(null)}
                       inPinned={true}
                     />
                   );
@@ -1131,6 +1360,10 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
                     onTogglePin={onTogglePin}
                     onShowMember={onShowMember}
                     onVote={onVote}
+                    onStartReply={setReplyingTo}
+                    actionBarOpen={actionBarFor?.id === n.id}
+                    onLongPress={(note) => setActionBarFor(note)}
+                    onCloseActionBar={() => setActionBarFor(null)}
                   />
                 );
               })}
@@ -1985,7 +2218,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   //   'quick_update' → "Reminder" (bell)
   const POST_TYPES = [
     { id: 'message',      label: 'Message',  icon: '💬' },
-    { id: 'announcement', label: 'Urgent',   icon: '💡' },
+    { id: 'announcement', label: 'Urgent',   icon: '🚨' },
     { id: 'quick_update', label: 'Reminder', icon: '🔔' },
     { id: 'photos',       label: 'Photos',   icon: '📷' },
     { id: 'poll',         label: 'Poll',     icon: '📊' },
@@ -2078,7 +2311,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       {postType === 'announcement' && (
         <>
           <div className="announcement-notice">
-            <span aria-hidden style={{ fontSize: 16 }}>💡</span>
+            <span aria-hidden style={{ fontSize: 16 }}>🚨</span>
             <span>Everyone in the group will get a notification.</span>
           </div>
           {renderMessageEditor('Urgent', 'Important news for the whole group…', 'announcement-editor')}
@@ -2804,7 +3037,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
       return (
         <div className="announcement-card detail-mode">
           <div className="announcement-head">
-            <span className="announcement-siren" aria-hidden>💡</span>
+            <span className="announcement-siren" aria-hidden>🚨</span>
             <span className="announcement-label">URGENT</span>
           </div>
           <div className="announcement-text detail-text">
@@ -3287,7 +3520,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
     if (n.type === 'announcement') {
       return (
         <>
-          <span className="fb-bell-icon-circle" style={{ background: '#E63946', fontSize: 14 }}>💡</span>
+          <span className="fb-bell-icon-circle" style={{ background: '#E63946', fontSize: 14 }}>🚨</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="fb-bell-text">
               <strong>{p.by_name || 'Someone'}</strong> posted an Urgent
@@ -3940,7 +4173,28 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} members={members} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} onVote={voteOnPoll} collapsed={collapsed.notes} onToggleCollapse={() => toggleCollapse('notes')} />
+          <NotesSection
+            notes={notes}
+            members={members}
+            getProfile={getProfile}
+            myId={profile?.id}
+            onAdd={() => setModal('note')}
+            onDelete={deleteNote}
+            onTogglePin={togglePin}
+            onOpenNote={(n) => setDetailNoteId(n.id)}
+            onShowMember={(p) => setDetailMemberId(p.id)}
+            onVote={voteOnPoll}
+            onReply={async (replyToId, content) => {
+              await addNote({
+                content,
+                type: 'message',
+                payload: { reply_to: replyToId },
+                pinned: false,
+              });
+            }}
+            collapsed={collapsed.notes}
+            onToggleCollapse={() => toggleCollapse('notes')}
+          />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} />
           <CalendarSection
             events={events}
