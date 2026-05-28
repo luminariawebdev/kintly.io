@@ -1048,18 +1048,32 @@ html { overscroll-behavior-x: none; }
 }
 
 /* ── Home Feed: Pinned section ─────────────────────────────────── */
+/* Designed to mirror the elevated "feel" of the To-do / Upcoming box,
+   but tinted purple so it visually reads as "pinned / important" without
+   being loud. Subtle glass surface + soft shadow + inset highlight. */
 .pinned-section {
-  margin: 6px 0 18px;
-  padding: 14px 14px 12px;
-  background: linear-gradient(180deg, rgba(106, 77, 255, 0.08), rgba(106, 77, 255, 0.02));
-  border: 1.5px dashed rgba(106, 77, 255, 0.35);
+  position: relative;
+  margin: 6px 0 22px;
+  padding: 16px 16px 14px;
+  background:
+    linear-gradient(180deg, rgba(106, 77, 255, 0.07), rgba(106, 77, 255, 0.02)),
+    var(--surface-glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(106, 77, 255, 0.20);
   border-radius: var(--r-lg);
+  box-shadow:
+    0 8px 24px rgba(106, 77, 255, 0.10),
+    var(--shadow-soft),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 .pinned-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(106, 77, 255, 0.14);
 }
 .pinned-icon { font-size: 14px; }
 .pinned-label {
@@ -1074,10 +1088,11 @@ html { overscroll-behavior-x: none; }
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   font-weight: 700;
-  color: var(--kinnekt-purple);
-  background: rgba(106, 77, 255, 0.10);
-  padding: 2px 8px;
+  color: #FFFFFF;
+  background: var(--kinnekt-purple);
+  padding: 2px 9px;
   border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(106, 77, 255, 0.30);
 }
 .pinned-list {
   display: flex;
