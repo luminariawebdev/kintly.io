@@ -806,9 +806,14 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     cancelLongPress();
   };
 
-  // Short-click handler used by every bubble — opens the detail modal,
-  // BUT suppresses the click if a long-press just fired (so the modal
-  // doesn't pop up the instant the action bar appears).
+  // Short-click handler used by every bubble:
+  //   • If a long-press just fired → suppress (so the action-bar
+  //     pop doesn't immediately race a modal open).
+  //   • If this post is a plain Message → no-op. Messages are the
+  //     only type with NO detail modal; the only way to interact
+  //     with one is long-press → reply.
+  //   • Everything else (Urgent / Reminder / Photos / Poll) → open
+  //     the detail modal as before.
   const handleBubbleClick = (e) => {
     if (pressStartRef.current.fired) {
       e.preventDefault();
@@ -816,6 +821,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       pressStartRef.current.fired = false;
       return;
     }
+    if (type === 'message') return;
     onOpenNote?.(n);
   };
 
