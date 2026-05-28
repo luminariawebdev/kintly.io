@@ -442,7 +442,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
 }
 
 // ─── Tasks Section ────────────────────────────────────────────────────────────
-function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete, onShowTask }) {
+function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete, onShowTask, collapsed, onToggleCollapse }) {
   const [filter, setFilter] = React.useState('today');
   const [showDone, setShowDone] = React.useState(false);
 
@@ -473,14 +473,18 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
   const openCount = tasks.filter(t => !t.completed).length;
 
   return (
-    <section className="fb-sec" id="sec-tasks">
+    <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-tasks">
       <div className="fb-sec-hd">
         <div>
           <h2 className="fb-sec-title">Tasks</h2>
         </div>
-        <div className="fb-sec-meta">{openCount} open</div>
+        <div className="fb-sec-hd-right">
+          <div className="fb-sec-meta">{openCount} open</div>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
+        </div>
       </div>
 
+      {!collapsed && (<>
       <div className="fb-chips">
         {[['today', 'Today'], ['week', 'This week'], ['all', 'All']].map(([k, label]) => (
           <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
@@ -552,12 +556,13 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
           )}
         </div>
       )}
+      </>)}
     </section>
   );
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick, onDelete, onShowMonth, onShowEvent }) {
+function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
@@ -589,20 +594,24 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
   const goToday = () => { setCalYear(now.getFullYear()); setCalMonth(now.getMonth()); };
 
   return (
-    <section className="fb-sec" id="sec-calendar">
+    <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-calendar">
       <div className="fb-sec-hd">
         <div>
           <h2 className="fb-sec-title">Calendar</h2>
         </div>
-        <button
-          className="copy-btn"
-          onClick={() => onShowMonth?.({ monthName: MONTH_NAMES[calMonth], year: calYear, events: monthEvents })}
-          title="View all events this month"
-        >
-          {monthEvents.length} {monthEvents.length === 1 ? 'event' : 'events'}
-        </button>
+        <div className="fb-sec-hd-right">
+          <button
+            className="copy-btn"
+            onClick={() => onShowMonth?.({ monthName: MONTH_NAMES[calMonth], year: calYear, events: monthEvents })}
+            title="View all events this month"
+          >
+            {monthEvents.length} {monthEvents.length === 1 ? 'event' : 'events'}
+          </button>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
+        </div>
       </div>
 
+      {!collapsed && (<>
       <div className="cal-bar">
         <button className="cal-nav" aria-label="Previous month" onClick={prevMonth}>‹</button>
         <div className="mo">{MONTH_NAMES[calMonth]} {calYear}</div>
@@ -689,11 +698,40 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
           </div>
         </div>
       )}
+      </>)}
     </section>
   );
 }
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
+// Collapse / expand chevron used in every section header.
+// `collapsed` is the section's current state — false = expanded (arrow ▾),
+// true = collapsed (arrow flipped to ▸). Clicking fires onClick, which lives
+// in MainApp and does the state flip + scroll-to-next-section.
+function SectionToggle({ collapsed, onClick }) {
+  return (
+    <button
+      type="button"
+      className={'fb-sec-toggle' + (collapsed ? ' collapsed' : '')}
+      onClick={onClick}
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? 'Expand section' : 'Collapse section and jump to next'}
+      title={collapsed ? 'Expand' : 'Collapse'}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <path
+          d="M3 5l4 4 4-4"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 // ─── Renderer for an individual feed post (type-aware) ──────────────────────
 function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, inPinned = false }) {
   const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -926,7 +964,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, onOpenNote, onDel
   );
 }
 
-function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote }) {
+function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, collapsed, onToggleCollapse }) {
   // Pinned items shown at the top — any type EXCEPT plain messages
   const pinned = notes
     .filter(n => n.pinned && (n.type || 'message') !== 'message')
@@ -936,13 +974,19 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
   const sorted = [...notes].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
   return (
-    <section className="fb-sec" id="sec-notes">
+    <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-notes">
       <div className="fb-sec-hd">
         <div>
           <h2 className="fb-sec-title">Home Feed</h2>
         </div>
-        <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'post' : 'posts'}</div>
+        <div className="fb-sec-hd-right">
+          <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'post' : 'posts'}</div>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
+        </div>
       </div>
+
+      {!collapsed && (<>
+
 
       {/* Pinned section — only shown when something is pinned */}
       {pinned.length > 0 && (
@@ -1010,6 +1054,7 @@ function NotesSection({ notes, getProfile, myId, onAdd, onDelete, onTogglePin, o
       <button className="fb-btn solid" onClick={onAdd} style={{ marginTop: 14 }}>
         <span className="plus">+</span> Post
       </button>
+      </>)}
     </section>
   );
 }
@@ -3175,6 +3220,33 @@ export function MainApp({ profile, onSettings }) {
   const [loading, setLoading] = React.useState(true);
   const scrollRef = React.useRef(null);
 
+  // Per-section collapse state. Clicking the chevron in a section header
+  // collapses that section's body and (if there's a next section) smooth-
+  // scrolls to it — a quick way to walk Home Feed → Tasks → Calendar.
+  const [collapsed, setCollapsed] = React.useState({
+    notes: false, tasks: false, calendar: false,
+  });
+  const SECTION_ORDER = ['notes', 'tasks', 'calendar'];
+  const toggleCollapse = (id) => {
+    const wasCollapsed = collapsed[id];
+    setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
+    // Wait two frames so React commits the state change and the browser
+    // re-flows the layout (collapsed body removes its height) before we
+    // compute the scroll target.
+    const scrollAfterLayout = (target) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollToSec(target)));
+    };
+    if (wasCollapsed) {
+      // Expanding — bring this section to the top of the viewport.
+      scrollAfterLayout(id);
+    } else {
+      // Collapsing — jump to the next section if there is one.
+      const i = SECTION_ORDER.indexOf(id);
+      const next = SECTION_ORDER[i + 1];
+      if (next) scrollAfterLayout(next);
+    }
+  };
+
   React.useEffect(() => {
     if (!profile?.group_id) return;
     Promise.all([
@@ -3652,7 +3724,6 @@ export function MainApp({ profile, onSettings }) {
               <KinnektLogo size={54} />
               <span className="fb-brand-text">Kinnekt</span>
             </div>
-            <div style={{position:'absolute',top:4,right:4,width:16,height:16,borderRadius:'50%',background:'red',zIndex:9999}} />
             <div className="fb-stickyhead-right">
               <div className="fb-head-top">
                 <div className="fb-bell-wrap" ref={bellMenuRef}>
@@ -3689,8 +3760,8 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <NotesSection notes={notes} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} onVote={voteOnPoll} />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} />
+          <NotesSection notes={notes} getProfile={getProfile} myId={profile?.id} onAdd={() => setModal('note')} onDelete={deleteNote} onTogglePin={togglePin} onOpenNote={(n) => setDetailNoteId(n.id)} onShowMember={(p) => setDetailMemberId(p.id)} onVote={voteOnPoll} collapsed={collapsed.notes} onToggleCollapse={() => toggleCollapse('notes')} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} />
           <CalendarSection
             events={events}
             members={members}
@@ -3701,6 +3772,8 @@ export function MainApp({ profile, onSettings }) {
             onDelete={deleteEvent}
             onShowMonth={(payload) => setMonthModalData(payload)}
             onShowEvent={(ev) => setDetailEventId(ev.id)}
+            collapsed={collapsed.calendar}
+            onToggleCollapse={() => toggleCollapse('calendar')}
           />
         </div>
       </div>

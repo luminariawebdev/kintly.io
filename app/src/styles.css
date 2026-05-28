@@ -378,6 +378,63 @@ html { overscroll-behavior-x: none; }
   font-weight: 500;
 }
 
+/* Right-hand cluster in section header — holds the meta text + the
+   collapse chevron, kept vertically centered against each other. */
+.fb-sec-hd-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Collapse / expand chevron button shown in every section header.
+   Default state = expanded (chevron points down ▾). When the section
+   is collapsed the chevron rotates -90° so it points right ▸. */
+.fb-sec-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-glass);
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: var(--shadow-soft);
+  transition:
+    transform 0.22s var(--ease),
+    background-color 0.22s var(--ease),
+    border-color 0.22s var(--ease),
+    box-shadow 0.22s var(--ease),
+    color 0.22s var(--ease);
+}
+.fb-sec-toggle:hover {
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-medium);
+}
+.fb-sec-toggle:active { transform: translateY(0) scale(0.96); }
+.fb-sec-toggle svg {
+  transition: transform 0.22s var(--ease);
+}
+.fb-sec-toggle.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* Collapsed sections shrink their bottom padding so three collapsed
+   headers don't leave a giant empty column underneath. */
+.fb-sec.collapsed {
+  padding-bottom: 24px;
+}
+.fb-sec.collapsed .fb-sec-hd {
+  margin-bottom: 0;
+}
+
 /* ── Filter chips ────────────────────────────────────────────── */
 .fb-chips {
   display: flex; gap: 8px; margin: 10px 0 18px;
@@ -2017,18 +2074,22 @@ html { overscroll-behavior-x: none; }
 .fb-bell:hover { transform: translateY(-1px); background: var(--hover-tint); border-color: var(--hover-border); box-shadow: var(--shadow-medium); }
 .fb-bell.has-unread { color: var(--kinnekt-purple); }
 .fb-bell-badge {
+  /* Classic iOS-style notification badge: solid red circle, white digit.
+     Deliberately NOT styled like the rest of the app (no glass, no brand
+     gradient) so it reads instantly as "unread count, look here". */
   position: absolute;
   top: -3px; right: -3px;
   min-width: 18px; height: 18px; padding: 0 5px;
   border-radius: var(--r-pill);
-  background: var(--brand-grad);
+  background: #FF3B30;
   color: #FFFFFF;
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 10px;
   font-weight: 700;
+  line-height: 1;
   display: flex; align-items: center; justify-content: center;
   border: 1.5px solid var(--surface-primary);
-  box-shadow: 0 4px 10px rgba(106, 77, 255, 0.30);
+  box-shadow: 0 2px 6px rgba(255, 59, 48, 0.40);
 }
 
 .fb-bell-menu {
@@ -2141,3 +2202,73 @@ html { overscroll-behavior-x: none; }
 .dot.xl.avatar-emoji  { font-size: 32px; }
 .fb-prof.has-avatar { background-color: transparent; background-repeat: no-repeat; }
 .fb-prof.has-emoji   { font-size: 36px; line-height: 1; }
+
+/* ────────────────────────────────────────────────────────────
+   Mobile: collapse the desktop "iPhone mock" chrome and let
+   the app fill the entire viewport. Without this, the 402×874
+   fixed-size frame is taller than a phone viewport, gets
+   vertically centered, and pushes the sticky header + tabs
+   above the visible area with no way to scroll up to them.
+   ──────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* App-shell: kill the padding & vertical centering so the frame
+     anchors to the top-left and stretches edge-to-edge. The inline
+     styles in App.jsx set padding:24 + alignItems:center — override. */
+  .app-shell {
+    padding: 0 !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+  }
+
+  /* iPhone frame: fill the viewport, drop the rounded corners &
+     drop shadow (those are the desktop "device on a desk" look). */
+  .ios-device {
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: 100vw !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Hide the simulated iOS chrome on a real phone — the real OS
+     supplies its own status bar, notch/dynamic island, and home
+     indicator. Keeping the mock ones double-stacks them and steals
+     header space. */
+  .ios-island,
+  .ios-statusbar-wrap,
+  .ios-home-indicator {
+    display: none !important;
+  }
+
+  /* Re-tune the sticky header's top padding: with the fake status
+     bar hidden, the 54px reserved for it is too much. Use the OS
+     safe-area inset so it sits flush under any real notch. */
+  .fb-stickyhead {
+    padding-top: max(12px, env(safe-area-inset-top, 0px)) !important;
+  }
+
+  /* Notifications dropdown: by default the menu is positioned inside
+     .fb-bell-wrap (a 38px-wide button container pinned to the right
+     edge of the header). When the menu's max-width (320px) doesn't
+     fit between the bell and the left edge of the viewport, it gets
+     clipped by .fb-scroll's overflow-x:hidden.
+
+     Mobile fix: drop the bell-wrap's `position: relative` so the menu's
+     absolute positioning falls through to the next positioned ancestor
+     (.fb-stickyhead, which is sticky → counts as positioned). The menu
+     can then anchor against the full-width header with safe insets on
+     both sides. */
+  .fb-bell-wrap {
+    position: static !important;
+  }
+  .fb-bell-menu {
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+}
