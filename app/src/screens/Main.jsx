@@ -496,12 +496,12 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-tasks">
       <div className="fb-sec-hd">
-        <div>
+        <div className="fb-sec-hd-left">
           <h2 className="fb-sec-title">Tasks</h2>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
         <div className="fb-sec-hd-right">
           <div className="fb-sec-meta">{openCount} open</div>
-          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
       </div>
 
@@ -617,8 +617,9 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-calendar">
       <div className="fb-sec-hd">
-        <div>
+        <div className="fb-sec-hd-left">
           <h2 className="fb-sec-title">Calendar</h2>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
         <div className="fb-sec-hd-right">
           <button
@@ -628,7 +629,6 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
           >
             {monthEvents.length} {monthEvents.length === 1 ? 'event' : 'events'}
           </button>
-          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
       </div>
 
@@ -827,6 +827,11 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
 
   // Props sprinkled onto every interactive bubble/card so long-press
   // (and the click-after-long-press suppression) work consistently.
+  // NOTE: deliberately no `style` here — the bubble's own style sets
+  // the `--bubble-c` color variable, and JSX `{...spread}` style would
+  // *replace* it (React doesn't merge style props). The user-select /
+  // touch-callout suppression lives in CSS instead — see
+  // `.chat-bubble, .announcement-card` in styles.css.
   const pressHandlers = {
     onPointerDown: handlePressDown,
     onPointerMove: handlePressMove,
@@ -834,7 +839,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     onPointerCancel: handlePressEnd,
     onPointerLeave: handlePressEnd,
     onContextMenu: (e) => e.preventDefault(), // block iOS callout / right-click menu
-    style: { WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' },
   };
 
   // Floating action bar — appears just above the bubble when this post
@@ -929,9 +933,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
             onClick={handleBubbleClick}
             {...pressHandlers}
           >
-            {n.pinned && !inPinned && (
-              <span className="announcement-pin" title="Pinned">📌</span>
-            )}
             <div className="announcement-head">
               <span className="announcement-siren" aria-hidden>🚨</span>
               <span className="announcement-label">URGENT</span>
@@ -972,9 +973,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               onClick={handleBubbleClick}
               {...pressHandlers}
             >
-              {n.pinned && !inPinned && (
-                <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
-              )}
               <div className="quick-update-label">REMINDER</div>
               <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
               <div className="chat-time">{when}</div>
@@ -1001,9 +999,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               onClick={handleBubbleClick}
               {...pressHandlers}
             >
-              {n.pinned && !inPinned && (
-                <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
-              )}
               <div className={'photo-grid count-' + Math.min(photos.length, 4)}>
                 {photos.length > 1 && (
                   <span className="photo-count-badge" aria-hidden>
@@ -1055,9 +1050,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               }}
               {...pressHandlers}
             >
-              {n.pinned && !inPinned && (
-                <span className="chat-pin" title="Pinned" style={{ pointerEvents: 'none' }}>📌</span>
-              )}
               <div className="poll-label">POLL</div>
               <div className="poll-question">{question}</div>
               <div className="poll-options">
@@ -1213,6 +1205,18 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
   // time. Tap-outside or Escape dismisses it.
   const [actionBarFor, setActionBarFor] = React.useState(null);
 
+  // Pagination — both lists use the same "load more / see less"
+  // pattern: render the first N items, then a pill at the bottom
+  // grows or resets the cap. Keeping the pinned section compact by
+  // default (only 2 items) so urgent/reminder posts don't dominate
+  // the feed before the user opts in.
+  const FEED_INITIAL   = 7;
+  const FEED_STEP      = 10;
+  const PINNED_INITIAL = 2;
+  const PINNED_STEP    = 5;
+  const [feedLimit,   setFeedLimit]   = React.useState(FEED_INITIAL);
+  const [pinnedLimit, setPinnedLimit] = React.useState(PINNED_INITIAL);
+
   React.useEffect(() => {
     if (!actionBarFor) return;
     const onDocDown = (e) => {
@@ -1247,25 +1251,36 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
     })
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-  // Main feed: NEWEST first (top). Urgent + Reminder are explicitly
-  // excluded — they exist ONLY in the Pinned section so they don't
-  // get buried beneath the day's chatter.
+  // Main feed: NEWEST first (top). Anything in the Pinned section is
+  // explicitly excluded — pinned items live ONLY in pinned so they
+  // never appear in two places. (Urgent/Reminder are always pinned,
+  // and manually-pinned posts also drop out of the main feed.)
   const sorted = notes
     .filter(n => {
       const type = n.type || 'message';
-      return type !== 'announcement' && type !== 'quick_update';
+      if (type === 'announcement' || type === 'quick_update') return false;
+      if (n.pinned && type !== 'message') return false; // manually-pinned non-messages
+      return true;
     })
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  // Slice both lists to their current limits — the "load more" pill
+  // bumps the limit by *_STEP each click; the "see less" pill resets
+  // it back to *_INITIAL.
+  const visiblePinned = pinned.slice(0, pinnedLimit);
+  const pinnedHidden  = Math.max(0, pinned.length - visiblePinned.length);
+  const visibleSorted = sorted.slice(0, feedLimit);
+  const hiddenCount   = Math.max(0, sorted.length - visibleSorted.length);
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-notes">
       <div className="fb-sec-hd">
-        <div>
+        <div className="fb-sec-hd-left">
           <h2 className="fb-sec-title">Home Feed</h2>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
         <div className="fb-sec-hd-right">
           <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'post' : 'posts'}</div>
-          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
       </div>
 
@@ -1293,7 +1308,9 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
             />
           )}
 
-          {/* Pinned sub-section — only shown when something is pinned */}
+          {/* Pinned sub-section — only shown when something is pinned.
+              Renders the first PINNED_INITIAL items; the pills below
+              expand / reset the count. */}
           {pinned.length > 0 && (
             <div className="pinned-section">
               <div className="pinned-header">
@@ -1302,7 +1319,7 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
                 <span className="pinned-count">{pinned.length}</span>
               </div>
               <div className="pinned-list">
-                {pinned.map(n => {
+                {visiblePinned.map(n => {
                   const author = getProfile(n.created_by);
                   const isMe = n.created_by === myId;
                   return (
@@ -1329,16 +1346,54 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
                   );
                 })}
               </div>
+              {(pinnedHidden > 0 || pinnedLimit > PINNED_INITIAL) && (
+                <div className="feed-more-row">
+                  {pinnedHidden > 0 && (
+                    <button
+                      type="button"
+                      className="feed-more-pill"
+                      onClick={() => setPinnedLimit(l => l + PINNED_STEP)}
+                      aria-label={`Load ${Math.min(PINNED_STEP, pinnedHidden)} more pinned posts`}
+                    >
+                      <span className="feed-more-arrow" aria-hidden>
+                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                          <path d="M7 3v8m0 0l-3.5-3.5M7 11l3.5-3.5"
+                                stroke="currentColor" strokeWidth="1.8"
+                                fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                      <span className="feed-more-text">load more pinned</span>
+                    </button>
+                  )}
+                  {pinnedLimit > PINNED_INITIAL && (
+                    <button
+                      type="button"
+                      className="feed-more-pill feed-less-pill"
+                      onClick={() => setPinnedLimit(PINNED_INITIAL)}
+                      aria-label="Collapse pinned list"
+                    >
+                      <span className="feed-more-arrow" aria-hidden>
+                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                          <path d="M7 11V3m0 0l-3.5 3.5M7 3l3.5 3.5"
+                                stroke="currentColor" strokeWidth="1.8"
+                                fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                      <span className="feed-more-text">see less</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {sorted.length > 0 && (
+          {visibleSorted.length > 0 && (
             <div className="chat-feed">
-              {sorted.map((n, i) => {
+              {visibleSorted.map((n, i) => {
                 const author = getProfile(n.created_by);
                 const isMe = n.created_by === myId;
-                const prevNote = i > 0 ? sorted[i - 1] : null;
-                const nextNote = i < sorted.length - 1 ? sorted[i + 1] : null;
+                const prevNote = i > 0 ? visibleSorted[i - 1] : null;
+                const nextNote = i < visibleSorted.length - 1 ? visibleSorted[i + 1] : null;
                 // Resolve the post being replied-to (if this post is
                 // itself a reply) so FeedPost can render a small
                 // "↩ Replying to …" link above the bubble.
@@ -1373,6 +1428,48 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
                   />
                 );
               })}
+            </div>
+          )}
+
+          {/* "↓ load more messages" / "↑ see less" pills — load-more
+              shown when older posts are hidden; see-less shown once
+              the user has clicked load-more at least once. */}
+          {(hiddenCount > 0 || feedLimit > FEED_INITIAL) && (
+            <div className="feed-more-row">
+              {hiddenCount > 0 && (
+                <button
+                  type="button"
+                  className="feed-more-pill"
+                  onClick={() => setFeedLimit(l => l + FEED_STEP)}
+                  aria-label={`Load ${Math.min(FEED_STEP, hiddenCount)} more messages`}
+                >
+                  <span className="feed-more-arrow" aria-hidden>
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                      <path d="M7 3v8m0 0l-3.5-3.5M7 11l3.5-3.5"
+                            stroke="currentColor" strokeWidth="1.8"
+                            fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </span>
+                  <span className="feed-more-text">load more messages</span>
+                </button>
+              )}
+              {feedLimit > FEED_INITIAL && (
+                <button
+                  type="button"
+                  className="feed-more-pill feed-less-pill"
+                  onClick={() => setFeedLimit(FEED_INITIAL)}
+                  aria-label="Collapse the feed back to the most recent messages"
+                >
+                  <span className="feed-more-arrow" aria-hidden>
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                      <path d="M7 11V3m0 0l-3.5 3.5M7 3l3.5 3.5"
+                            stroke="currentColor" strokeWidth="1.8"
+                            fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </span>
+                  <span className="feed-more-text">see less</span>
+                </button>
+              )}
             </div>
           )}
         </div>

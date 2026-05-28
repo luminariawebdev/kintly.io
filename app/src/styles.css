@@ -378,8 +378,18 @@ html { overscroll-behavior-x: none; }
   font-weight: 500;
 }
 
-/* Right-hand cluster in section header — holds the meta text + the
-   collapse chevron, kept vertically centered against each other. */
+/* Left-hand cluster — section title with its collapse chevron snug
+   against it. Bottom-aligned so the chevron sits at the baseline of
+   the large display title (matches the row's `align-items: flex-end`). */
+.fb-sec-hd-left {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Right-hand cluster in section header — now just holds the meta
+   text (count chip), kept vertically centered. */
 .fb-sec-hd-right {
   display: flex;
   align-items: center;
@@ -1165,6 +1175,19 @@ html { overscroll-behavior-x: none; }
   max-width: 100%;
   transition: filter 0.15s;
   -webkit-tap-highlight-color: transparent;
+  /* Suppress iOS long-press callout and text selection so our own
+     long-press → action-bar gesture isn't fighting the OS. Previously
+     these lived in an inline style on the bubble, but inline style
+     would clobber `--bubble-c` (the author's profile color), so they
+     belong in CSS. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.announcement-card {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .chat-bubble:active { filter: brightness(0.92); }
 
@@ -1435,8 +1458,10 @@ html { overscroll-behavior-x: none; }
    inside the outer `.feed-box` glass container. */
 .pinned-section {
   position: relative;
-  margin: 6px 0 22px;
-  padding: 16px 16px 14px;
+  margin: 6px 0 18px;
+  /* Tighter padding so the pinned area takes less vertical space —
+     it's a compact summary, not the main reading surface. */
+  padding: 10px 12px 8px;
   background:
     linear-gradient(180deg, rgba(106, 77, 255, 0.11), rgba(106, 77, 255, 0.04)),
     var(--surface-glass);
@@ -1464,8 +1489,8 @@ html { overscroll-behavior-x: none; }
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 7px;
   border-bottom: 1px solid rgba(106, 77, 255, 0.14);
 }
 .pinned-icon { font-size: 14px; }
@@ -1490,8 +1515,75 @@ html { overscroll-behavior-x: none; }
 .pinned-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
+
+/* ── "Load more" / "See less" pills ───────────────────────────
+   Used by both the pinned section and the main feed. Each section
+   renders a small row containing one or both pills:
+     • "load more pinned" / "load more messages" — only when there
+       are still items beyond the current visible cap.
+     • "see less" — only after the user has expanded past the
+       initial cap; clicking resets to the initial count.
+   Visual: circular purple chip with a directional arrow + the
+   short lowercase label on a glass background. */
+.feed-more-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 10px auto 4px;
+}
+.feed-more-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 6px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(15, 18, 40, 0.10);
+  border-radius: 999px;
+  color: var(--text-secondary, #4a5072);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(15, 18, 40, 0.04), 0 2px 8px rgba(15, 18, 40, 0.06);
+  transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+.feed-more-pill:hover {
+  /* Match the rest of the app's pill/button hover — light purple
+     gradient tint, faint purple border, soft medium shadow. */
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-medium);
+  color: var(--text-primary);
+}
+.feed-more-pill:active {
+  transform: translateY(0);
+}
+.feed-more-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--kinnekt-purple, #6A4DFF);
+  color: #fff;
+  flex: 0 0 auto;
+  box-shadow: 0 2px 6px rgba(106, 77, 255, 0.32);
+}
+.feed-more-text {
+  white-space: nowrap;
+}
+
+/* "See less" variant — same purple chip as load-more so the two
+   pills feel like a matched pair (only the arrow direction
+   differentiates them). */
 
 /* ── Announcement card (red, bold, no bubble) ──────────────────── */
 .announcement-card {
