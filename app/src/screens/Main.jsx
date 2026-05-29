@@ -18,6 +18,26 @@ const COLOR_MAP = {
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
+// Carries the logged-in user's profile id through the whole tree so
+// any byline / chip / reference can swap "their name" for the word
+// "you" without prop-drilling `myId` everywhere. Set by MainApp via
+// <MyIdContext.Provider> and read by <MemberName>.
+const MyIdContext = React.createContext(null);
+
+// Format an "HH:MM" 24-hour time string for display as 12-hour
+// w/ AM/PM. Returns '' for empty / invalid input so the caller can
+// show its own placeholder ("Pick a time").
+const formatTime12 = (v) => {
+  if (!v || !/^\d{1,2}:\d{2}$/.test(v)) return '';
+  const [hStr, mStr] = v.split(':');
+  let h = Number(hStr);
+  const m = Number(mStr);
+  const period = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2, '0')} ${period}`;
+};
+
 // Render text with @[Name] mentions highlighted as styled spans.
 // `members` is an optional array of profiles used to look up each
 // mentioned user — if found, the mention chip is prefixed with that
@@ -48,7 +68,7 @@ function renderWithMentions(text, isMe, members) {
           {isEmojiAvatar && (
             <span className="mention-emoji" aria-hidden>{avatar}</span>
           )}
-          @{name}
+          {name}
         </span>
       );
     }
@@ -327,6 +347,38 @@ function Dot({ profile, size = '' }) {
   );
 }
 
+/**
+ * Renders a person's name as a third-person byline (e.g. next to the
+ * profile dot in an event row or post caption). When that person is
+ * the logged-in user, swaps the displayed text to "you" rendered in
+ * the current user's profile color (via the global `--me-color` CSS
+ * variable that MainApp keeps in sync). So a row that would have
+ * read "🌸 mom" reads as "🌸 you" when mom is logged in — matching
+ * the styling of the small "you" badge used elsewhere.
+ *
+ * The caller's `style` prop is preserved, but `color` is overridden
+ * in the me-case so the text stays in `--me-color` even when the
+ * caller passes an author-color override (which already equals
+ * `--me-color` in that branch — this just makes the intent explicit).
+ */
+function MemberName({ profile, isMe, style, className }) {
+  const ctxMyId = React.useContext(MyIdContext);
+  if (!profile) return null;
+  // Caller can force the decision with `isMe`, but in most spots we
+  // just look at the global MyIdContext so the helper "just works"
+  // without prop-drilling.
+  const me = isMe ?? (ctxMyId && profile.id === ctxMyId);
+  if (me) {
+    // The `.me-name` class supplies the profile-color treatment, but
+    // a parent context can override the color via CSS specificity —
+    // e.g. `.pick.on .me-name` flips to white so the text reads on
+    // the brand-gradient picker background.
+    const cls = ['me-name', className].filter(Boolean).join(' ');
+    return <span className={cls} style={style}>you</span>;
+  }
+  return <span className={className} style={style}>{profile.display_name}</span>;
+}
+
 function ProfileButton({ profile, onClick }) {
   const avatar = profile?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
@@ -463,8 +515,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
 }
 
 // ─── Tasks Section ────────────────────────────────────────────────────────────
-function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete, onShowTask, collapsed, onToggleCollapse }) {
-  const [filter, setFilter] = React.useState('today');
+function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
   const [showDone, setShowDone] = React.useState(false);
 
   const filtered = tasks.filter(t => {
@@ -507,7 +558,7 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
 
       {!collapsed && (<>
       <div className="fb-chips">
-        {[['today', 'Today'], ['week', 'This week'], ['all', 'All']].map(([k, label]) => (
+        {[['week', 'This week'], ['all', 'All']].map(([k, label]) => (
           <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
         ))}
       </div>
@@ -677,7 +728,7 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
       <div className="evt-legend">
         {members.map(m => (
           <span key={m.id} className="lg-item">
-            <Dot profile={m} /> {m.display_name}
+            <Dot profile={m} /> <MemberName profile={m} isMe={m.id === myId} />
           </span>
         ))}
       </div>
@@ -705,11 +756,11 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
                     <span className="d">{d.getDate()}</span>
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div className="ti">{e.title}</div>
+                    <div className="ti">{renderWithMentions(e.title, false, members)}</div>
                     <div className="sub">
                       {e.start_time && <span>{fmtTime(e.start_time)}{e.end_time ? `–${fmtTime(e.end_time)}` : ''}</span>}
                       {e.start_time && <span>·</span>}
-                      {p && <><Dot profile={p} /><span>{p.display_name}</span></>}
+                      {p && <><Dot profile={p} /><MemberName profile={p} isMe={p.id === myId} /></>}
                     </div>
                   </div>
                 </div>
@@ -876,22 +927,44 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
   // the name; name is colored to the author's profile color. Tapping
   // the caption opens the member detail sheet (same as tapping the
   // old side avatar did).
-  const Caption = () => (
-    <div
-      className="chat-caption"
-      onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-    >
-      <Dot profile={author} />
-      <span className="chat-caption-name" style={{ color: authorColor }}>
-        {author?.display_name}
-      </span>
-    </div>
-  );
+  //
+  // Streaking: when the same author sends multiple posts in a row,
+  // only the EARLIEST (oldest) of the streak shows the caption.
+  // The feed is sorted newest-first, so the oldest of a streak is
+  // the BOTTOM-most one visually. We check `nextNote` (the message
+  // directly BELOW this one in display = older in time): if it's
+  // by the same author, this bubble has a continuation below it
+  // and the caption should appear there instead. Pinned posts pass
+  // nextNote=null, so each pinned bubble keeps its own caption.
+  const Caption = () => {
+    if (nextNote && nextNote.created_by === n.created_by) return null;
+    return (
+      <div
+        className="chat-caption"
+        onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+      >
+        <Dot profile={author} />
+        {isMe ? (
+          <span className="chat-caption-name" style={{ color: 'var(--me-color)' }}>you</span>
+        ) : (
+          <span className="chat-caption-name" style={{ color: authorColor }}>
+            {author?.display_name}
+          </span>
+        )}
+      </div>
+    );
+  };
 
   // "↩ Replying to …" header — rendered above the bubble when this
   // post is a reply to another post. Clicking it opens the original
   // post's detail modal so the user can see the full context.
-  const ReplyRef = () => {
+  // The reply bubble owns all reply UI. <ReplyInset /> renders as a
+  // DOM child of the chat-bubble div (the responder's bubble) — a
+  // white pill quoting the original post: row 1 is [emoji + name],
+  // row 2 is a snippet of the original message. Clicking opens the
+  // original's detail modal. Returns null for non-reply posts so
+  // non-reply bubbles are untouched.
+  const ReplyInset = () => {
     if (!replyToNote) return null;
     const refColor = getColor(replyToAuthor?.color);
     const refType = replyToNote.type || 'message';
@@ -903,21 +976,28 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     } else if (refType === 'poll') {
       snippet = replyToNote.payload?.question || 'poll';
     } else {
-      snippet = (replyToNote.content || '').slice(0, 80);
+      snippet = (replyToNote.content || '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 120);
     }
     return (
       <button
         type="button"
-        className="chat-reply-ref"
+        className="chat-bubble-reply-inset"
         onClick={(e) => { e.stopPropagation(); onOpenNote?.(replyToNote); }}
         title="Show original post"
       >
-        <span className="chat-reply-ref-arrow" aria-hidden>↩</span>
-        <Dot profile={replyToAuthor} />
-        <span className="chat-reply-ref-name" style={{ color: refColor }}>
-          {replyToAuthor?.display_name || 'Unknown'}
+        <span className="chat-bubble-reply-line">
+          <Dot profile={replyToAuthor} />
+          {replyToAuthor && replyToAuthor.id === myId ? (
+            <span className="chat-bubble-reply-name" style={{ color: 'var(--me-color)' }}>you</span>
+          ) : (
+            <span className="chat-bubble-reply-name" style={{ color: refColor }}>
+              {replyToAuthor?.display_name || 'Unknown'}
+            </span>
+          )}
         </span>
-        {snippet && <span className="chat-reply-ref-snippet">{snippet}</span>}
+        {snippet && (
+          <span className="chat-bubble-reply-snippet">{snippet}</span>
+        )}
       </button>
     );
   };
@@ -947,9 +1027,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
               >
                 <Dot profile={author} />
-                <span className="announcement-author" style={{ color: authorColor }}>
-                  {author?.display_name}
-                </span>
+                {isMe ? (
+                  <span className="announcement-author" style={{ color: 'var(--me-color)' }}>you</span>
+                ) : (
+                  <span className="announcement-author" style={{ color: authorColor }}>
+                    {author?.display_name}
+                  </span>
+                )}
               </span>
               <span className="announcement-time">{when}</span>
             </div>
@@ -966,13 +1050,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap">
             <ActionBar />
-            <ReplyRef />
             <div
               className={'chat-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
               onClick={handleBubbleClick}
               {...pressHandlers}
             >
+              <ReplyInset />
               <div className="quick-update-label">REMINDER</div>
               <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
               <div className="chat-time">{when}</div>
@@ -992,13 +1076,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap">
             <ActionBar />
-            <ReplyRef />
             <div
               className={'chat-bubble photo-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
               onClick={handleBubbleClick}
               {...pressHandlers}
             >
+              <ReplyInset />
               <div className={'photo-grid count-' + Math.min(photos.length, 4)}>
                 {photos.length > 1 && (
                   <span className="photo-count-badge" aria-hidden>
@@ -1039,7 +1123,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap" style={{ maxWidth: '86%' }}>
             <ActionBar />
-            <ReplyRef />
             <div
               className={'chat-bubble poll-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
@@ -1050,6 +1133,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               }}
               {...pressHandlers}
             >
+              <ReplyInset />
               <div className="poll-label">POLL</div>
               <div className="poll-question">{question}</div>
               <div className="poll-options">
@@ -1094,13 +1178,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
         <div className="chat-bubble-wrap">
           <ActionBar />
-          <ReplyRef />
           <div
             className={'chat-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
             style={{ '--bubble-c': authorColor }}
             onClick={handleBubbleClick}
             {...pressHandlers}
           >
+            <ReplyInset />
             <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
             <div className="chat-time">{when}</div>
           </div>
@@ -1117,7 +1201,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
 // to + a snippet of their message, plus an input + send. Submitting calls
 // onSubmit(content) which posts a regular note with payload.reply_to set —
 // the new reply then appears at the top of the feed automatically.
-function ReplyComposer({ target, targetAuthor, onCancel, onSubmit }) {
+function ReplyComposer({ target, targetAuthor, myId, onCancel, onSubmit }) {
   const [text, setText] = React.useState('');
   const [sending, setSending] = React.useState(false);
   const inputRef = React.useRef(null);
@@ -1152,9 +1236,13 @@ function ReplyComposer({ target, targetAuthor, onCancel, onSubmit }) {
       <div className="reply-composer-ref">
         <span className="reply-composer-arrow" aria-hidden>↩</span>
         <Dot profile={targetAuthor} />
-        <span className="reply-composer-name" style={{ color }}>
-          {targetAuthor?.display_name || 'Unknown'}
-        </span>
+        {targetAuthor && targetAuthor.id === myId ? (
+          <span className="reply-composer-name" style={{ color: 'var(--me-color)' }}>you</span>
+        ) : (
+          <span className="reply-composer-name" style={{ color }}>
+            {targetAuthor?.display_name || 'Unknown'}
+          </span>
+        )}
         {snippet && <span className="reply-composer-snippet">{snippet}</span>}
         <button
           type="button"
@@ -1300,6 +1388,7 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
             <ReplyComposer
               target={replyingTo}
               targetAuthor={getProfile(replyingTo.created_by)}
+              myId={myId}
               onCancel={() => setReplyingTo(null)}
               onSubmit={async (content) => {
                 await onReply?.(replyingTo.id, content);
@@ -1485,6 +1574,210 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
   );
 }
 
+// ─── Date Picker Modal ────────────────────────────────────────────────────────
+// Full-size calendar grid date picker, sized like the rest of the
+// app's modals so the day cells are large thumb targets — replaces
+// the cramped native browser <input type="date"> popup that triggers
+// when you tap a date field on mobile.
+function DatePickerModal({ open, value, title, onClose, onPick, minDate }) {
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const todayObj  = React.useMemo(() => new Date(), []);
+  const todayIso  = todayObj.toISOString().slice(0, 10);
+  const initial   = value ? new Date(value + 'T00:00:00') : todayObj;
+  const [viewMonth, setViewMonth] = React.useState(initial.getMonth());
+  const [viewYear,  setViewYear]  = React.useState(initial.getFullYear());
+
+  // Re-anchor to the current value each time the picker opens
+  React.useEffect(() => {
+    if (!open) return;
+    const d = value ? new Date(value + 'T00:00:00') : todayObj;
+    setViewMonth(d.getMonth());
+    setViewYear(d.getFullYear());
+  }, [open, value, todayObj]);
+
+  if (!open) return null;
+
+  const firstDow      = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth   = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const prev = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
+    else setViewMonth(m => m - 1);
+  };
+  const next = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
+    else setViewMonth(m => m + 1);
+  };
+  const pad = n => String(n).padStart(2, '0');
+  const isoFor = (d) => `${viewYear}-${pad(viewMonth + 1)}-${pad(d)}`;
+  const pick = (iso) => { onPick(iso); onClose(); };
+
+  // 6 × 7 grid (always 42 cells so the modal height doesn't jump)
+  const cells = [];
+  for (let i = 0; i < firstDow;    i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length < 42) cells.push(null);
+
+  return (
+    <Modal open={open} onClose={onClose} title={title || 'Pick a date'}>
+      <div className="dp-month-nav">
+        <button type="button" className="dp-nav-btn" onClick={prev} aria-label="Previous month">‹</button>
+        <div className="dp-month-label">{MONTHS[viewMonth]} {viewYear}</div>
+        <button type="button" className="dp-nav-btn" onClick={next} aria-label="Next month">›</button>
+      </div>
+      <div className="dp-week-labels" aria-hidden>
+        {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => <div key={d}>{d}</div>)}
+      </div>
+      <div className="dp-grid">
+        {cells.map((d, i) => {
+          if (d === null) return <div key={i} className="dp-cell empty" aria-hidden />;
+          const iso        = isoFor(d);
+          const isToday    = iso === todayIso;
+          const isSelected = iso === value;
+          const disabled   = !!minDate && iso < minDate;
+          return (
+            <button
+              key={i}
+              type="button"
+              className={
+                'dp-cell' +
+                (isToday    ? ' today'    : '') +
+                (isSelected ? ' selected' : '') +
+                (disabled   ? ' disabled' : '')
+              }
+              disabled={disabled}
+              onClick={() => pick(iso)}
+              aria-label={iso}
+              aria-current={isToday ? 'date' : undefined}
+              aria-pressed={isSelected}
+            >
+              {d}
+            </button>
+          );
+        })}
+      </div>
+      <div className="dp-actions">
+        <button type="button" className="dp-shortcut" onClick={() => pick(todayIso)}>Today</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Time Picker Modal ────────────────────────────────────────────────────────
+// iOS-style three-wheel time picker (hour | minute | AM/PM) that
+// replaces the native <input type="time"> popups. Each wheel is a
+// vertical scroll-snap column with momentum scrolling, a highlighted
+// band marks the centred (= selected) row, and the edges fade out.
+// Time is stored as "HH:MM" in 24-hour format so it round-trips
+// cleanly with the rest of the app, but the picker UI is 12-hour.
+function TimePickerModal({ open, value, title, onClose, onPick }) {
+  const HOURS    = React.useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), []);          // 1..12
+  const MINUTES  = React.useMemo(() => Array.from({ length: 12 }, (_, i) => i * 5), []);          // 0,5,…,55
+  const PERIODS  = React.useMemo(() => ['AM', 'PM'], []);
+  const ITEM_H   = 48;  // px per row — generous tap target
+  const SPACER_H = ITEM_H * 2;  // 2 rows above / below the selected band
+
+  // Parse "HH:MM" 24h → 12h parts (snaps minutes to nearest 5)
+  const parse = React.useCallback((v) => {
+    if (!v || !/^\d{1,2}:\d{2}$/.test(v)) {
+      return { hour12: 9, minute: 0, period: 'AM' };
+    }
+    const [h, m] = v.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    let hour12 = h % 12;
+    if (hour12 === 0) hour12 = 12;
+    const minute = (Math.round(m / 5) * 5) % 60;
+    return { hour12, minute, period };
+  }, []);
+
+  const [hour,   setHour]   = React.useState(9);
+  const [minute, setMinute] = React.useState(0);
+  const [period, setPeriod] = React.useState('AM');
+
+  const hourRef   = React.useRef(null);
+  const minuteRef = React.useRef(null);
+  const periodRef = React.useRef(null);
+
+  // Re-seed + scroll-position-restore each time the picker opens
+  React.useEffect(() => {
+    if (!open) return;
+    const init = parse(value);
+    setHour(init.hour12);
+    setMinute(init.minute);
+    setPeriod(init.period);
+    // Wait one paint so refs + scroll-snap are mounted, then jump
+    // each column to its current value (no animation on initial set).
+    requestAnimationFrame(() => {
+      const hi = HOURS.indexOf(init.hour12);
+      const mi = MINUTES.indexOf(init.minute);
+      const pi = PERIODS.indexOf(init.period);
+      if (hourRef.current   && hi >= 0) hourRef.current.scrollTop   = hi * ITEM_H;
+      if (minuteRef.current && mi >= 0) minuteRef.current.scrollTop = mi * ITEM_H;
+      if (periodRef.current && pi >= 0) periodRef.current.scrollTop = pi * ITEM_H;
+    });
+  }, [open, value, HOURS, MINUTES, PERIODS, parse]);
+
+  if (!open) return null;
+
+  const onWheelScroll = (ref, items, setter) => () => {
+    if (!ref.current) return;
+    const idx = Math.round(ref.current.scrollTop / ITEM_H);
+    const clamped = Math.max(0, Math.min(items.length - 1, idx));
+    setter(items[clamped]);
+  };
+
+  const confirm = () => {
+    let h = hour;
+    if (period === 'AM') { if (h === 12) h = 0; }
+    else                 { if (h !== 12) h += 12; }
+    const iso = `${String(h).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    onPick(iso);
+    onClose();
+  };
+
+  const renderColumn = (ref, items, current, setter, formatter) => (
+    <div
+      className="tp-column"
+      ref={ref}
+      onScroll={onWheelScroll(ref, items, setter)}
+      role="listbox"
+    >
+      <div className="tp-spacer" style={{ height: SPACER_H }} aria-hidden />
+      {items.map(item => (
+        <div
+          key={item}
+          className={'tp-item' + (item === current ? ' on' : '')}
+          role="option"
+          aria-selected={item === current}
+          onClick={() => {
+            const idx = items.indexOf(item);
+            if (ref.current) ref.current.scrollTo({ top: idx * ITEM_H, behavior: 'smooth' });
+          }}
+        >
+          {formatter(item)}
+        </div>
+      ))}
+      <div className="tp-spacer" style={{ height: SPACER_H }} aria-hidden />
+    </div>
+  );
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title || 'Pick a time'}
+      footer={<button className="fb-btn solid" onClick={confirm}>Done</button>}
+    >
+      <div className="tp-wheels" aria-label="Time">
+        <div className="tp-band" aria-hidden />
+        {renderColumn(hourRef,   HOURS,   hour,   setHour,   v => String(v))}
+        <div className="tp-sep">:</div>
+        {renderColumn(minuteRef, MINUTES, minute, setMinute, v => String(v).padStart(2, '0'))}
+        {renderColumn(periodRef, PERIODS, period, setPeriod, v => v)}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Add Task Modal ───────────────────────────────────────────────────────────
 function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const [title, setTitle] = React.useState('');
@@ -1496,6 +1789,9 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly
   const [repeatTime, setRepeatTime] = React.useState('');     // HH:MM
   const [saving, setSaving] = React.useState(false);
+  // Custom date / time picker open state (replaces native popups).
+  const [dueDateOpen,    setDueDateOpen]    = React.useState(false);
+  const [repeatTimeOpen, setRepeatTimeOpen] = React.useState(false);
 
   const getDueDate = () => {
     const d = new Date();
@@ -1581,8 +1877,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
           {members.map(m => (
             <button key={m.id} className={'pick' + (assignee === m.id ? ' on' : '')} onClick={() => setAssignee(m.id)} style={assignee === m.id ? { '--pick-c': getColor(m.color) } : {}}>
               <Dot profile={m} />
-              <span>{m.display_name}</span>
-              {m.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+              <MemberName profile={m} isMe={m.id === myId} />
             </button>
           ))}
           <button className={'pick unassign' + (assignee === null ? ' on' : '')} onClick={() => setAssignee(null)}>Unassigned</button>
@@ -1596,7 +1891,20 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
           ))}
         </div>
         {dueOpt === 'pick' && (
-          <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={{ marginTop: 8, width: '100%' }} />
+          <button
+            type="button"
+            onClick={() => setDueDateOpen(true)}
+            className="dp-trigger"
+            style={{ marginTop: 8 }}
+          >
+            <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              {dueDate
+                ? new Date(dueDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
+                : 'Pick a date'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
         )}
       </div>
 
@@ -1636,10 +1944,35 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
               At time <span style={{ fontWeight: 400, opacity: 0.6 }}>· optional</span>
             </div>
-            <input type="time" value={repeatTime} onChange={e => setRepeatTime(e.target.value)} style={{ width: '100%' }} />
+            <button
+              type="button"
+              onClick={() => setRepeatTimeOpen(true)}
+              className="dp-trigger"
+            >
+              <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+              <span style={{ flex: 1, textAlign: 'left' }}>
+                {formatTime12(repeatTime) || 'Pick a time'}
+              </span>
+              <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+            </button>
           </div>
         )}
       </div>
+
+      <DatePickerModal
+        open={dueDateOpen}
+        value={dueDate}
+        title="Due date"
+        onClose={() => setDueDateOpen(false)}
+        onPick={(iso) => setDueDate(iso)}
+      />
+      <TimePickerModal
+        open={repeatTimeOpen}
+        value={repeatTime}
+        title="Repeat at"
+        onClose={() => setRepeatTimeOpen(false)}
+        onPick={(t) => setRepeatTime(t)}
+      />
     </Modal>
   );
 }
@@ -1655,6 +1988,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
   const [endTime, setEndTime] = React.useState('');
   const [attendees, setAttendees] = React.useState([]);
   const [saving, setSaving] = React.useState(false);
+  // Custom date / time picker open state (replaces native popups).
+  const [dateOpen,  setDateOpen]  = React.useState(false);
+  const [startOpen, setStartOpen] = React.useState(false);
+  const [endOpen,   setEndOpen]   = React.useState(false);
 
   // Each time the modal opens, reset state
   React.useEffect(() => {
@@ -1718,16 +2055,48 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
       </div>
       <div className="field">
         <label>Date</label>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} />
+        <button
+          type="button"
+          onClick={() => setDateOpen(true)}
+          className="dp-trigger"
+        >
+          <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+          <span style={{ flex: 1, textAlign: 'left' }}>
+            {date
+              ? new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
+              : 'Pick a date'}
+          </span>
+          <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+        </button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="field">
           <label>Starts</label>
-          <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
+          <button
+            type="button"
+            onClick={() => setStartOpen(true)}
+            className="dp-trigger"
+          >
+            <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              {formatTime12(startTime) || 'Start'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
         </div>
         <div className="field">
           <label>Ends</label>
-          <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
+          <button
+            type="button"
+            onClick={() => setEndOpen(true)}
+            className="dp-trigger"
+          >
+            <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              {formatTime12(endTime) || 'End'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
         </div>
       </div>
       <div className="field">
@@ -1741,12 +2110,33 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
               style={attendees.includes(m.id) ? { '--pick-c': getColor(m.color) } : {}}
             >
               <Dot profile={m} />
-              <span>{m.display_name}</span>
-              {m.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+              <MemberName profile={m} isMe={m.id === myId} />
             </button>
           ))}
         </div>
       </div>
+
+      <DatePickerModal
+        open={dateOpen}
+        value={date}
+        title="Event date"
+        onClose={() => setDateOpen(false)}
+        onPick={(iso) => setDate(iso)}
+      />
+      <TimePickerModal
+        open={startOpen}
+        value={startTime}
+        title="Start time"
+        onClose={() => setStartOpen(false)}
+        onPick={(t) => setStartTime(t)}
+      />
+      <TimePickerModal
+        open={endOpen}
+        value={endTime}
+        title="End time"
+        onClose={() => setEndOpen(false)}
+        onPick={(t) => setEndTime(t)}
+      />
     </Modal>
   );
 }
@@ -1760,7 +2150,7 @@ function fmtTime(t) {
   return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
 }
 
-function EventCard({ event, getProfile, myId, onDelete, onClick }) {
+function EventCard({ event, members, getProfile, myId, onDelete, onClick }) {
   const p = getProfile(event.created_by);
   const color = getColor(p?.color || event.color);
   const timeStr = event.start_time
@@ -1778,14 +2168,16 @@ function EventCard({ event, getProfile, myId, onDelete, onClick }) {
         cursor: onClick ? 'pointer' : 'default',
       }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{event.title}</div>
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+          {renderWithMentions(event.title, false, members)}
+        </div>
         <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--mute)', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span>{timeStr}</span>
           {p && (
             <>
               <span>·</span>
               <Dot profile={p} />
-              <span>{p.display_name}</span>
+              <MemberName profile={p} isMe={p.id === myId} />
             </>
           )}
         </div>
@@ -1807,7 +2199,7 @@ function EventCard({ event, getProfile, myId, onDelete, onClick }) {
 }
 
 // ─── Event Details Modal (single event) ───────────────────────────────────────
-function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, onShowMember }) {
+function EventDetailsModal({ open, event, members, getProfile, myId, onClose, onDelete, onShowMember }) {
   if (!open || !event) return null;
   const p = getProfile(event.created_by);
   const color = getColor(p?.color || event.color);
@@ -1826,7 +2218,9 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
         padding: '4px 0 4px 14px',
         marginBottom: 14,
       }}>
-        <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15, marginBottom: 8 }}>{event.title}</div>
+        <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15, marginBottom: 8 }}>
+          {renderWithMentions(event.title, false, members)}
+        </div>
         <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--mute)', letterSpacing: '0.04em' }}>
           {longDate}
         </div>
@@ -1855,7 +2249,9 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
       {event.description && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>Description</label>
-          <div style={{ fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{event.description}</div>
+          <div style={{ fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+            {renderWithMentions(event.description, false, members)}
+          </div>
         </div>
       )}
 
@@ -1884,8 +2280,7 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
                   }}
                 >
                   <Dot profile={ap} />
-                  <span>{ap?.display_name || 'Unknown'}</span>
-                  {uid === myId && <span className="userbadge"><span className="you">you</span></span>}
+                  {ap ? <MemberName profile={ap} isMe={uid === myId} /> : <span>Unknown</span>}
                 </span>
               );
             })}
@@ -1907,8 +2302,7 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
               style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
             >
               <Dot profile={p} />
-              <span>{p.display_name}</span>
-              {p.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+              <MemberName profile={p} isMe={p.id === myId} />
             </span>
           ) : (
             <span>Unknown</span>
@@ -1928,7 +2322,7 @@ function EventDetailsModal({ open, event, getProfile, myId, onClose, onDelete, o
   );
 }
 
-function DayDetailsModal({ open, date, events, getProfile, myId, onClose, onAddEvent, onDelete, onShowEvent }) {
+function DayDetailsModal({ open, date, events, members, getProfile, myId, onClose, onAddEvent, onDelete, onShowEvent }) {
   if (!open || !date) return null;
   const [y, m, d] = date.split('-').map(Number);
   const jsDate = new Date(y, m - 1, d);
@@ -1955,6 +2349,7 @@ function DayDetailsModal({ open, date, events, getProfile, myId, onClose, onAddE
             <EventCard
               key={e.id}
               event={e}
+              members={members}
               getProfile={getProfile}
               myId={myId}
               onDelete={onDelete}
@@ -1968,7 +2363,7 @@ function DayDetailsModal({ open, date, events, getProfile, myId, onClose, onAddE
 }
 
 // ─── Month Events Modal ───────────────────────────────────────────────────────
-function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, myId, onDelete, onShowEvent }) {
+function MonthEventsModal({ open, onClose, monthName, year, events, members, getProfile, myId, onDelete, onShowEvent }) {
   if (!open) return null;
 
   // Group events by ISO date and sort dates ascending
@@ -1998,6 +2393,7 @@ function MonthEventsModal({ open, onClose, monthName, year, events, getProfile, 
                     <EventCard
                       key={e.id}
                       event={e}
+                      members={members}
                       getProfile={getProfile}
                       myId={myId}
                       onDelete={onDelete}
@@ -2022,8 +2418,33 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   const [makeTask, setMakeTask] = React.useState(false);
   const [taskTitle, setTaskTitle] = React.useState('');
   const [taskAssignee, setTaskAssignee] = React.useState(profile?.id || null);
+  // Flag tracks whether the user has manually picked an assignee.
+  // Once true, the auto-suggest-from-@mention effect stops touching it.
+  const [assigneeEdited, setAssigneeEdited] = React.useState(false);
   const [taskDueOpt, setTaskDueOpt] = React.useState('today');
   const [taskDueDate, setTaskDueDate] = React.useState('');
+
+  // ── Calendar-event creation (Urgent + Reminder posts) ─────────────
+  // Same pattern as task creation — opt-in checkbox, inline editor.
+  // On save, the new event is inserted into the events table with a
+  // note_id reference to this post (with a graceful fallback if the
+  // events table doesn't have that column yet).
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const [makeEvent,      setMakeEvent]      = React.useState(false);
+  const [eventTitle,     setEventTitle]     = React.useState('');
+  const [eventDate,      setEventDate]      = React.useState(todayIso);
+  const [eventStartTime, setEventStartTime] = React.useState('');
+  const [eventEndTime,   setEventEndTime]   = React.useState('');
+  const [eventLocation,  setEventLocation]  = React.useState('');
+  // Event attendee picker — defaults to "everyone in the group".
+  // The user can deselect anyone they don't want included.
+  const [eventAttendees, setEventAttendees] = React.useState([]);
+  // Open/close state for the large custom date / time pickers that
+  // replace the cramped native <input type="date|time"> popups.
+  const [datePickerOpen,         setDatePickerOpen]         = React.useState(false);
+  const [taskDatePickerOpen,     setTaskDatePickerOpen]     = React.useState(false);
+  const [startTimePickerOpen,    setStartTimePickerOpen]    = React.useState(false);
+  const [endTimePickerOpen,      setEndTimePickerOpen]      = React.useState(false);
 
   // Photo upload state
   const [photos, setPhotos] = React.useState([]); // array of dataURLs
@@ -2080,8 +2501,18 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       setMakeTask(false);
       setTaskTitle('');
       setTaskAssignee(profile?.id || null);
+      setAssigneeEdited(false);
       setTaskDueOpt('today');
       setTaskDueDate('');
+      setMakeEvent(false);
+      setEventTitle('');
+      setEventTitleEdited(false);
+      setEventDate(todayIso);
+      setEventStartTime('');
+      setEventEndTime('');
+      setEventLocation('');
+      setEventAttendees((members || []).map(m => m.id));
+      setTitleEdited(false);
       setMentionAnchor(null);
       setPhotos([]);
       setPollQuestion('');
@@ -2145,14 +2576,38 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     setPollOptions(prev => prev.length > 2 ? prev.filter((_, i) => i !== idx) : prev);
   };
 
-  // Keep task title auto-suggesting from the note's first line if the user hasn't typed their own
-  const [titleEdited, setTitleEdited] = React.useState(false);
+  // Keep task title + event title auto-suggesting from the post's
+  // first line until the user types their own. Each has its own
+  // "edited" flag so editing the event title doesn't pin the task
+  // title (and vice versa).
+  const [titleEdited,      setTitleEdited]      = React.useState(false);
+  const [eventTitleEdited, setEventTitleEdited] = React.useState(false);
   React.useEffect(() => {
-    if (!titleEdited) {
-      const firstLine = body.split('\n')[0].trim().slice(0, 100);
-      setTaskTitle(firstLine);
+    const firstLine = body.split('\n')[0].trim().slice(0, 100);
+    if (!titleEdited)      setTaskTitle(firstLine);
+    if (!eventTitleEdited) setEventTitle(firstLine);
+  }, [body, titleEdited, eventTitleEdited]);
+
+  // Auto-assign the linked task to the FIRST @mentioned person in
+  // the post body (unless the user has manually picked someone). So
+  // posting "@[Kyle] please buy milk" with "Create task from post?"
+  // ticked → the task is assigned to Kyle, not the poster.
+  React.useEffect(() => {
+    if (assigneeEdited) return;
+    const match = body.match(/@\[([^\]]+)\]/);
+    if (!match) {
+      // No @mention → fall back to the poster as the default
+      if (taskAssignee !== (profile?.id || null)) {
+        setTaskAssignee(profile?.id || null);
+      }
+      return;
     }
-  }, [body, titleEdited]);
+    const tagged = (members || []).find(m => m.display_name === match[1]);
+    if (tagged && tagged.id !== taskAssignee) {
+      setTaskAssignee(tagged.id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body, assigneeEdited, members, profile?.id]);
 
   // @mention detection on every input in the contentEditable editor
   const handleInput = () => {
@@ -2281,9 +2736,14 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       };
     }
 
-    // Tasks can be created from any post (only really makes sense for messages/quick updates, but allowed)
+    // Tasks can be created from any text post (Message / Urgent / Reminder)
     if (makeTask && !taskTitle.trim()) {
-      alert('Task title is empty. Either uncheck "Create task from note?" or enter a title.'); return;
+      alert('Task title is empty. Either uncheck "Create task from post?" or enter a title.'); return;
+    }
+    // Calendar events from Urgent / Reminder posts — both title and
+    // date are required when the checkbox is on.
+    if (makeEvent && (!eventTitle.trim() || !eventDate)) {
+      alert('Event needs a title and a date. Either uncheck "Create event from post?" or fill those in.'); return;
     }
 
     // Pinning rules (the manual "Pin to top" checkbox was removed):
@@ -2300,13 +2760,26 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     const taskPayload = makeTask
       ? { title: taskTitle.trim(), assigned_to: taskAssignee, due_date: getDueDate() }
       : null;
+    // Attendees come from the picker (default = everyone in the
+    // group, but the user can deselect anyone they want excluded).
+    const eventPayload = makeEvent
+      ? {
+          title:       eventTitle.trim(),
+          date:        eventDate,
+          start_time:  eventStartTime || null,
+          end_time:    eventEndTime   || null,
+          location:    eventLocation.trim() || null,
+          description: null,
+          attendees:   eventAttendees,
+        }
+      : null;
     try {
       await onSave({
         content: content || (postType === 'poll' ? pollQuestion.trim() : ''),
         type: postType,
         payload,
         pinned: finalPinned,
-      }, taskPayload);
+      }, taskPayload, eventPayload);
     } catch (e) {
       alert('Error: ' + (e?.message || String(e)));
     }
@@ -2402,8 +2875,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
         <div className="assignee-picker">
           <button className="pick on" style={{ '--pick-c': getColor(profile?.color) }}>
             <Dot profile={profile} />
-            <span>{profile?.display_name}</span>
-            <span className="userbadge"><span className="you">you</span></span>
+            <MemberName profile={profile} isMe={true} />
           </button>
         </div>
       </div>
@@ -2414,8 +2886,11 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       {postType === 'announcement' && (
         <>
           <div className="announcement-notice">
-            <span aria-hidden style={{ fontSize: 16 }}>🚨</span>
+            <span aria-hidden style={{ fontSize: 14 }}>🚨</span>
             <span>Everyone in the group will get a notification.</span>
+          </div>
+          <div className="quick-update-notice">
+            <span>Auto-pinned to the top of the Home Feed.</span>
           </div>
           {renderMessageEditor('Urgent', 'Important news for the whole group…', 'announcement-editor')}
         </>
@@ -2424,8 +2899,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       {postType === 'quick_update' && (
         <>
           <div className="quick-update-notice">
-            <span className="quick-update-label" style={{ display: 'inline-block', padding: 0 }}>REMINDER</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· auto-pinned to the top of the Home Feed</span>
+            <span>Auto-pinned to the top of the Home Feed.</span>
           </div>
           {renderMessageEditor('Reminder', 'Don’t forget to…')}
         </>
@@ -2525,8 +2999,8 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           Urgent + Reminder posts auto-pin, and everything else can be
           pinned later from the post-detail modal. */}
 
-      {/* ── Create-task option (only for Message + Reminder) ────── */}
-      {(postType === 'message' || postType === 'quick_update') && (
+      {/* ── Create-task option (Message + Urgent + Reminder) ─────── */}
+      {(postType === 'message' || postType === 'quick_update' || postType === 'announcement') && (
         <div className="field" style={{ marginTop: 4 }}>
           <label
             style={{
@@ -2545,12 +3019,12 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
               onChange={e => setMakeTask(e.target.checked)}
               style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
             />
-            Create task from post?
+            <span className="cfp-text">Create task from post?</span>
           </label>
         </div>
       )}
 
-      {makeTask && (postType === 'message' || postType === 'quick_update') && (
+      {makeTask && (postType === 'message' || postType === 'quick_update' || postType === 'announcement') && (
         <div style={{ background: 'rgba(20, 20, 20, 0.03)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
           <div className="field">
             <label>Task title</label>
@@ -2564,13 +3038,12 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
             <label>Assign to</label>
             <div className="assignee-picker">
               {(members || []).map(m => (
-                <button key={m.id} className={'pick' + (taskAssignee === m.id ? ' on' : '')} onClick={() => setTaskAssignee(m.id)} style={taskAssignee === m.id ? { '--pick-c': getColor(m.color) } : {}}>
+                <button key={m.id} className={'pick' + (taskAssignee === m.id ? ' on' : '')} onClick={() => { setTaskAssignee(m.id); setAssigneeEdited(true); }} style={taskAssignee === m.id ? { '--pick-c': getColor(m.color) } : {}}>
                   <Dot profile={m} />
-                  <span>{m.display_name}</span>
-                  {m.id === profile?.id && <span className="userbadge"><span className="you">you</span></span>}
+                  <MemberName profile={m} isMe={m.id === profile?.id} />
                 </button>
               ))}
-              <button className={'pick unassign' + (taskAssignee === null ? ' on' : '')} onClick={() => setTaskAssignee(null)}>Unassigned</button>
+              <button className={'pick unassign' + (taskAssignee === null ? ' on' : '')} onClick={() => { setTaskAssignee(null); setAssigneeEdited(true); }}>Unassigned</button>
             </div>
           </div>
           <div className="field" style={{ marginBottom: 0 }}>
@@ -2581,11 +3054,169 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
               ))}
             </div>
             {taskDueOpt === 'pick' && (
-              <input type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} style={{ marginTop: 8, width: '100%' }} />
+              <button
+                type="button"
+                onClick={() => setTaskDatePickerOpen(true)}
+                className="dp-trigger"
+                style={{ marginTop: 8 }}
+              >
+                <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+                <span style={{ flex: 1, textAlign: 'left' }}>
+                  {taskDueDate
+                    ? new Date(taskDueDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
+                    : 'Pick a date'}
+                </span>
+                <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+              </button>
             )}
           </div>
         </div>
       )}
+
+      {/* ── Create-event option (Urgent + Reminder only) ─────────── */}
+      {(postType === 'announcement' || postType === 'quick_update') && (
+        <div className="field" style={{ marginTop: 4 }}>
+          <label
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '10px 12px', width: '100%',
+              background: makeEvent ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
+              border: '1.5px solid var(--ink)', borderRadius: 8,
+              cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
+              color: 'var(--ink)', textAlign: 'left',
+              userSelect: 'none',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={makeEvent}
+              onChange={e => setMakeEvent(e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#141414', margin: 0, cursor: 'pointer' }}
+            />
+            <span className="cfp-text">Create event from post?</span>
+          </label>
+        </div>
+      )}
+
+      {makeEvent && (postType === 'announcement' || postType === 'quick_update') && (
+        <div style={{ background: 'rgba(20, 20, 20, 0.03)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
+          <div className="field">
+            <label>Event title</label>
+            <input
+              value={eventTitle}
+              onChange={e => { setEventTitle(e.target.value); setEventTitleEdited(true); }}
+              placeholder="e.g. Soccer practice"
+            />
+          </div>
+          <div className="field">
+            <label>Date</label>
+            <button
+              type="button"
+              onClick={() => setDatePickerOpen(true)}
+              className="dp-trigger"
+            >
+              <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+              <span style={{ flex: 1, textAlign: 'left' }}>
+                {eventDate
+                  ? new Date(eventDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
+                  : 'Pick a date'}
+              </span>
+              <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+            </button>
+          </div>
+          <div className="field">
+            <label>Time <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setStartTimePickerOpen(true)}
+                className="dp-trigger"
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+                <span style={{ flex: 1, textAlign: 'left' }}>
+                  {formatTime12(eventStartTime) || 'Start'}
+                </span>
+                <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+              </button>
+              <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>→</span>
+              <button
+                type="button"
+                onClick={() => setEndTimePickerOpen(true)}
+                className="dp-trigger"
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+                <span style={{ flex: 1, textAlign: 'left' }}>
+                  {formatTime12(eventEndTime) || 'End'}
+                </span>
+                <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+              </button>
+            </div>
+          </div>
+          <div className="field">
+            <label>Location <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+            <input
+              value={eventLocation}
+              onChange={e => setEventLocation(e.target.value)}
+              placeholder="Where?"
+            />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>Attendees <span style={{ fontWeight: 400, opacity: 0.5 }}>· defaults to everyone</span></label>
+            <div className="assignee-picker">
+              {(members || []).map(m => {
+                const on = eventAttendees.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    className={'pick' + (on ? ' on' : '')}
+                    onClick={() => setEventAttendees(prev =>
+                      prev.includes(m.id) ? prev.filter(x => x !== m.id) : [...prev, m.id]
+                    )}
+                    style={on ? { '--pick-c': getColor(m.color) } : {}}
+                  >
+                    <Dot profile={m} />
+                    <MemberName profile={m} isMe={m.id === profile?.id} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Large custom date / time pickers — overlay the composer
+          modal at the same size, so cells / wheels are easy to tap
+          on mobile. */}
+      <DatePickerModal
+        open={datePickerOpen}
+        value={eventDate}
+        title="Event date"
+        onClose={() => setDatePickerOpen(false)}
+        onPick={(iso) => setEventDate(iso)}
+      />
+      <DatePickerModal
+        open={taskDatePickerOpen}
+        value={taskDueDate}
+        title="Task due date"
+        onClose={() => setTaskDatePickerOpen(false)}
+        onPick={(iso) => setTaskDueDate(iso)}
+      />
+      <TimePickerModal
+        open={startTimePickerOpen}
+        value={eventStartTime}
+        title="Start time"
+        onClose={() => setStartTimePickerOpen(false)}
+        onPick={(t) => setEventStartTime(t)}
+      />
+      <TimePickerModal
+        open={endTimePickerOpen}
+        value={eventEndTime}
+        title="End time"
+        onClose={() => setEndTimePickerOpen(false)}
+        onPick={(t) => setEventEndTime(t)}
+      />
     </Modal>
   );
 }
@@ -2917,8 +3548,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
               >
                 <Dot profile={assignee} />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{assignee.display_name}</span>
-                {assignee.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+                <MemberName profile={assignee} isMe={assignee.id === myId} style={{ fontWeight: 600, fontSize: 14 }} />
               </span>
             ) : (
               <span style={{ fontSize: 14, color: 'var(--text-muted)', fontStyle: 'italic' }}>Unassigned</span>
@@ -2935,8 +3565,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
               >
                 <Dot profile={creator} />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{creator.display_name}</span>
-                {creator.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+                <MemberName profile={creator} isMe={creator.id === myId} style={{ fontWeight: 600, fontSize: 14 }} />
               </span>
             ) : (
               <span style={{ fontSize: 14 }}>Unknown</span>
@@ -3010,7 +3639,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   );
 }
 
-function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated, onTogglePin, onVote }) {
+function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members, getProfile, onClose, onDelete, onToggleTask, onShowMember, onNoteUpdated, onTogglePin, onVote, onShowEvent, notify, me }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
   const [savingEdit, setSavingEdit] = React.useState(false);
@@ -3065,6 +3694,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
   const author = getProfile(note.created_by);
   const when = new Date(note.created_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const linked = (tasks || []).filter(t => t.note_id === note.id);
+  const linkedEvents = (events || []).filter(e => e.note_id === note.id);
   const isCreator = note.created_by === myId;
 
   const saveEdit = async () => {
@@ -3106,6 +3736,18 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
     }
     setComments(prev => [...prev, data]);
     setNewComment('');
+
+    // Notify the original post's author so the reply lands in their
+    // bell. Skip if the post is mine (no point self-notifying).
+    const ownerId = note.created_by;
+    if (notify && me && ownerId && ownerId !== myId) {
+      notify([ownerId], 'note_replied', {
+        note_id: note.id,
+        by_name: me.display_name,
+        by_color: me.color,
+        preview: text.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 80),
+      });
+    }
   };
 
   const deleteComment = async (id) => {
@@ -3366,8 +4008,11 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: cAuthor ? 'pointer' : 'default' }}
                     >
                       <Dot profile={cAuthor} />
-                      <span style={{ fontWeight: 600, fontSize: 12 }}>{cAuthor?.display_name || 'Unknown'}</span>
-                      {c.created_by === myId && <span className="userbadge"><span className="you">you</span></span>}
+                      {cAuthor ? (
+                        <MemberName profile={cAuthor} isMe={c.created_by === myId} style={{ fontWeight: 600, fontSize: 12 }} />
+                      ) : (
+                        <span style={{ fontWeight: 600, fontSize: 12 }}>Unknown</span>
+                      )}
                     </span>
                     <span style={{ marginLeft: 'auto', fontSize: 10, fontStyle: 'italic', color: 'var(--text-muted)' }}>{cWhen}</span>
                   </div>
@@ -3467,7 +4112,7 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
                     </div>
                     <div style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', color: 'var(--mute)', display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
                       {assn ? (
-                        <><Dot profile={assn} /><span>{assn.display_name}</span></>
+                        <><Dot profile={assn} /><MemberName profile={assn} isMe={assn.id === myId} /></>
                       ) : (
                         <span style={{ opacity: 0.6 }}>Unassigned</span>
                       )}
@@ -3480,6 +4125,72 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
                     </div>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Linked calendar event(s) — populated when an Urgent or
+          Reminder post had "Create event from post?" ticked. The
+          card mirrors the linked-task card's visual treatment, but
+          uses event-shaped fields (date, time, attendees). */}
+      <div style={{ borderTop: '1px dashed rgba(20, 20, 20, 0.2)', paddingTop: 14, marginTop: 14 }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--mute)', marginBottom: 8 }}>
+          Linked event{linkedEvents.length === 1 ? '' : 's'}
+        </div>
+        {linkedEvents.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--mute)', fontStyle: 'italic' }}>
+            No event linked to this post.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {linkedEvents.map(ev => {
+              const evAuthor = getProfile(ev.created_by);
+              const evColor = getColor(evAuthor?.color);
+              const dateStr = ev.date
+                ? new Date(ev.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                : '';
+              const timeStr =
+                ev.start_time && ev.end_time
+                  ? `${ev.start_time}–${ev.end_time}`
+                  : ev.start_time || '';
+              return (
+                <button
+                  key={ev.id}
+                  type="button"
+                  onClick={() => onShowEvent?.(ev)}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                    padding: '10px 12px',
+                    background: 'var(--paper)',
+                    border: '1.5px solid var(--ink)', borderRadius: 10,
+                    borderLeft: `6px solid ${evColor}`,
+                    cursor: 'pointer', textAlign: 'left',
+                    font: 'inherit',
+                    width: '100%',
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 22, height: 22, borderRadius: '50%',
+                      background: evColor, color: '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 12, flexShrink: 0, marginTop: 1,
+                    }}
+                  >📅</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, wordBreak: 'break-word' }}>
+                      {renderWithMentions(ev.title, false, members)}
+                    </div>
+                    <div style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', color: 'var(--mute)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                      {dateStr && <span>{dateStr}</span>}
+                      {timeStr && (<><span>·</span><span>{timeStr}</span></>)}
+                      {ev.location && (<><span>·</span><span>{ev.location}</span></>)}
+                    </div>
+                  </div>
+                </button>
               );
             })}
           </div>
@@ -3505,8 +4216,11 @@ function NoteDetailsModal({ open, note, tasks, myId, myGroupId, members, getProf
             style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: author ? 'pointer' : 'default' }}
           >
             <Dot profile={author} />
-            <span style={{ fontWeight: 600, fontSize: 14 }}>{author?.display_name || 'Unknown'}</span>
-            {author?.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+            {author ? (
+              <MemberName profile={author} isMe={author.id === myId} style={{ fontWeight: 600, fontSize: 14 }} />
+            ) : (
+              <span style={{ fontWeight: 600, fontSize: 14 }}>Unknown</span>
+            )}
           </span>
           <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginTop: 4 }}>{when}</div>
         </div>
@@ -3620,6 +4334,19 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'note_replied') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color), fontWeight: 800, fontSize: 14 }}>↰</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> replied to your post
+            </div>
+            {p.preview && <div className="fb-bell-sub">{p.preview}</div>}
+          </div>
+        </>
+      );
+    }
     if (n.type === 'announcement') {
       return (
         <>
@@ -3669,7 +4396,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!id) return;
               if ((n.type === 'task_assigned' || n.type === 'task_cancelled') && onOpenTask) onOpenTask(id);
               else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
-              else if ((n.type === 'note_tagged' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
+              else if ((n.type === 'note_tagged' || n.type === 'note_replied' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
             return (
               <div
@@ -3714,6 +4441,11 @@ export function MainApp({ profile, onSettings }) {
   const [detailMemberId, setDetailMemberId] = React.useState(null);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
+  // Lifted from TasksSection so addNote can auto-switch the filter
+  // when a created-from-post task lands outside the current view
+  // (e.g. user picks a far-future due date while the filter is
+  // "This week"). Default = 'week'; the only other option is 'all'.
+  const [tasksFilter, setTasksFilter] = React.useState('week');
   const [events, setEvents] = React.useState([]);
   const [notes, setNotes] = React.useState([]);
   const [notifications, setNotifications] = React.useState([]);
@@ -3721,6 +4453,17 @@ export function MainApp({ profile, onSettings }) {
   const bellMenuRef = React.useRef(null);
   const [loading, setLoading] = React.useState(true);
   const scrollRef = React.useRef(null);
+
+  // Publish the logged-in user's profile color as a global CSS
+  // variable (`--me-color`) on the document root, so any element can
+  // reference it without prop-drilling. Used by the small "you" badge
+  // — the gradient text was unreadable on colored chip backgrounds
+  // (e.g. the "Posting as" pill), so the badge now renders the word
+  // "you" in the current user's profile color instead.
+  React.useEffect(() => {
+    const c = getColor(profile?.color);
+    if (c) document.documentElement.style.setProperty('--me-color', c);
+  }, [profile?.color]);
 
   // Per-section collapse state. Clicking the chevron in a section header
   // collapses that section's body and (if there's a next section) smooth-
@@ -4003,9 +4746,12 @@ export function MainApp({ profile, onSettings }) {
   };
 
   // Note CRUD
-  // Accepts either: addNote(content, taskPayload)  — legacy signature
-  //           or: addNote({content, type, payload, pinned}, taskPayload)  — new
-  const addNote = async (arg, taskPayload) => {
+  // Accepts either: addNote(content, taskPayload)                            — legacy signature
+  //           or: addNote({content, type, payload, pinned}, taskPayload)     — multi-output
+  //           or: addNote({content, type, payload, pinned}, taskPayload, eventPayload)
+  // `eventPayload`, when provided, also inserts a row into events with a
+  // note_id reference (with a graceful fallback if that column is missing).
+  const addNote = async (arg, taskPayload, eventPayload) => {
     const isObj = arg && typeof arg === 'object' && !Array.isArray(arg);
     const content = isObj ? (arg.content || '') : (arg || '');
     const type    = isObj ? (arg.type || 'message') : 'message';
@@ -4072,6 +4818,23 @@ export function MainApp({ profile, onSettings }) {
       }
     }
 
+    // Replies → notify the original note's author so they see "X
+    // replied to your post" in the bell. Clicking opens the original
+    // (which shows the full comment thread including this reply).
+    const replyToId = payload?.reply_to;
+    if (replyToId) {
+      const original = notes.find(n => n.id === replyToId);
+      const ownerId = original?.created_by;
+      if (ownerId && ownerId !== profile.id) {
+        notify([ownerId], 'note_replied', {
+          note_id: replyToId,
+          by_name: profile.display_name,
+          by_color: profile.color,
+          preview: content.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 80),
+        });
+      }
+    }
+
     // Announcements: notify EVERY other group member with siren payload
     if (type === 'announcement') {
       const others = members.filter(m => m.id !== profile.id).map(m => m.id);
@@ -4085,37 +4848,111 @@ export function MainApp({ profile, onSettings }) {
       }
     }
 
-    if (!taskPayload || !taskPayload.title) return;
-
-    const basePayload = {
-      group_id: profile.group_id,
-      created_by: profile.id,
-      assigned_to: taskPayload.assigned_to,
-      due_date: taskPayload.due_date,
-      title: taskPayload.title,
-    };
-
-    // Try with note_id first; fall back to a plain insert if the
-    // note_id column doesn't exist or any other note_id-related issue.
-    let { data: taskRow, error: tErr } = await supabase
-      .from('tasks')
-      .insert({ ...basePayload, note_id: noteRow.id })
-      .select()
-      .single();
-
-    if (tErr) {
-      ({ data: taskRow, error: tErr } = await supabase
+    // ── Linked task creation (Message + Urgent + Reminder posts) ───
+    // Only runs when the composer ticked "Create task from post?".
+    // Note: this used to be an early-return guard, but we now have a
+    // second output (event creation) below, so we need to fall
+    // through when there's no task payload.
+    if (taskPayload && taskPayload.title) {
+      const basePayload = {
+        group_id: profile.group_id,
+        created_by: profile.id,
+        assigned_to: taskPayload.assigned_to,
+        due_date: taskPayload.due_date,
+        title: taskPayload.title,
+      };
+      // Try with note_id first; fall back to a plain insert if the
+      // note_id column doesn't exist or any other note_id issue.
+      let { data: taskRow, error: tErr } = await supabase
         .from('tasks')
-        .insert(basePayload)
+        .insert({ ...basePayload, note_id: noteRow.id })
         .select()
-        .single());
+        .single();
+      if (tErr) {
+        ({ data: taskRow, error: tErr } = await supabase
+          .from('tasks')
+          .insert(basePayload)
+          .select()
+          .single());
+      }
+      if (tErr || !taskRow) {
+        alert('Post saved but task could not be created: ' + (tErr?.message || 'no row returned'));
+      } else {
+        setTasks(prev => [taskRow, ...prev]);
+        // Make sure the new task is actually visible — "This week"
+        // hides anything due more than 7 days out. If the new task
+        // is further than that, bump the filter to "All".
+        if (taskRow.due_date) {
+          const todayMs = new Date().setHours(0, 0, 0, 0);
+          const dueMs   = new Date(taskRow.due_date + 'T00:00:00').getTime();
+          const diff    = Math.round((dueMs - todayMs) / 86400000);
+          if (diff > 7 && tasksFilter !== 'all') {
+            setTasksFilter('all');
+          }
+        }
+        // Notify the assignee (if it's someone other than the poster)
+        // so the task shows up in their bell — mirrors what the
+        // standalone Add Task modal already does.
+        if (taskRow.assigned_to && taskRow.assigned_to !== profile.id) {
+          notify([taskRow.assigned_to], 'task_assigned', {
+            task_id:    taskRow.id,
+            task_title: taskRow.title,
+            due_date:   taskRow.due_date,
+            by_name:    profile.display_name,
+            by_color:   profile.color,
+          });
+        }
+      }
     }
 
-    if (tErr || !taskRow) {
-      alert('Note saved but task could not be created: ' + (tErr?.message || 'no row returned'));
-      return;
+    // ── Linked event creation (Urgent + Reminder posts) ────────────
+    // Same pattern as the linked-task branch above: build a base
+    // events row, try with note_id first, fall back to a plain insert
+    // if the events table doesn't have that column. Then notify
+    // attendees (everyone but the creator) so they see the new event.
+    if (eventPayload && eventPayload.title) {
+      const baseEvent = {
+        group_id:    profile.group_id,
+        created_by:  profile.id,
+        color:       profile.color || 'coral',
+        title:       eventPayload.title,
+        date:        eventPayload.date,
+        start_time:  eventPayload.start_time,
+        end_time:    eventPayload.end_time,
+        location:    eventPayload.location,
+        description: eventPayload.description ?? null,
+        attendees:   eventPayload.attendees   || [],
+      };
+      let { data: evRow, error: evErr } = await supabase
+        .from('events')
+        .insert({ ...baseEvent, note_id: noteRow.id })
+        .select()
+        .single();
+      if (evErr) {
+        // Likely cause: events table lacks a note_id column. Retry without it.
+        ({ data: evRow, error: evErr } = await supabase
+          .from('events')
+          .insert(baseEvent)
+          .select()
+          .single());
+      }
+      if (evErr || !evRow) {
+        alert('Post saved but event could not be created: ' + (evErr?.message || 'no row returned'));
+        return;
+      }
+      setEvents(prev => [...prev, evRow].sort((a, b) => a.date.localeCompare(b.date)));
+      const attendeeIds = (evRow.attendees || []).filter(id => id !== profile.id);
+      if (attendeeIds.length > 0) {
+        notify(attendeeIds, 'event_invited', {
+          event_id:    evRow.id,
+          event_title: evRow.title,
+          event_date:  evRow.date,
+          start_time:  evRow.start_time,
+          by_name:     profile.display_name,
+          by_color:    profile.color,
+        });
+      }
     }
-    setTasks(prev => [taskRow, ...prev]);
   };
 
   // Vote on a poll — updates the note's payload.votes
@@ -4231,6 +5068,7 @@ export function MainApp({ profile, onSettings }) {
   }
 
   return (
+    <MyIdContext.Provider value={profile?.id || null}>
     <div className="fb-screen">
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
@@ -4298,7 +5136,7 @@ export function MainApp({ profile, onSettings }) {
             collapsed={collapsed.notes}
             onToggleCollapse={() => toggleCollapse('notes')}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} filter={tasksFilter} setFilter={setTasksFilter} />
           <CalendarSection
             events={events}
             members={members}
@@ -4322,6 +5160,7 @@ export function MainApp({ profile, onSettings }) {
         open={!!dayDetailsDate}
         date={dayDetailsDate}
         events={events}
+        members={members}
         getProfile={getProfile}
         myId={profile?.id}
         onClose={() => setDayDetailsDate(null)}
@@ -4335,6 +5174,7 @@ export function MainApp({ profile, onSettings }) {
         monthName={monthModalData?.monthName}
         year={monthModalData?.year}
         events={monthModalData?.events || []}
+        members={members}
         getProfile={getProfile}
         myId={profile?.id}
         onDelete={(id) => { deleteEvent(id); setMonthModalData(d => d ? { ...d, events: d.events.filter(e => e.id !== id) } : d); }}
@@ -4343,6 +5183,7 @@ export function MainApp({ profile, onSettings }) {
       <EventDetailsModal
         open={!!detailEventId}
         event={events.find(e => e.id === detailEventId) || null}
+        members={members}
         getProfile={getProfile}
         myId={profile?.id}
         onClose={() => setDetailEventId(null)}
@@ -4353,6 +5194,7 @@ export function MainApp({ profile, onSettings }) {
         open={!!detailNoteId}
         note={notes.find(n => n.id === detailNoteId) || null}
         tasks={tasks}
+        events={events}
         myId={profile?.id}
         myGroupId={profile?.group_id}
         members={members}
@@ -4361,9 +5203,12 @@ export function MainApp({ profile, onSettings }) {
         onDelete={(id) => deleteNote(id)}
         onToggleTask={toggleTask}
         onShowMember={(p) => { setDetailNoteId(null); setDetailMemberId(p.id); }}
+        onShowEvent={(e) => { setDetailNoteId(null); setDetailEventId(e.id); }}
         onNoteUpdated={(updated) => setNotes(prev => prev.map(n => n.id === updated.id ? updated : n))}
         onTogglePin={togglePin}
         onVote={voteOnPoll}
+        notify={notify}
+        me={profile}
       />
       <TaskDetailsModal
         open={!!detailTaskId}
@@ -4390,5 +5235,6 @@ export function MainApp({ profile, onSettings }) {
         onShowEvent={(e) => { setDetailMemberId(null); setDetailEventId(e.id); }}
       />
     </div>
+    </MyIdContext.Provider>
   );
 }

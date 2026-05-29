@@ -363,14 +363,39 @@ html { overscroll-behavior-x: none; }
   gap: 12px;
 }
 .fb-sec-title {
-  font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
-  font-size: 36px; line-height: 1.05;
-  letter-spacing: -0.03em;
+  font-family: 'Fredoka', 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 38px; line-height: 1.05;
+  letter-spacing: -0.01em;
   margin: 0;
-  font-weight: 700;
-  color: var(--text-primary);
+  font-weight: 600;
+  text-transform: lowercase;
+  /* Friendly cool gradient — purple → blue → mint — matches the
+     vibe in the second reference screenshot ("event"). The gradient
+     is clipped to the text and the fill is transparent so the
+     gradient shows through. */
+  background: linear-gradient(135deg, #6A4DFF 0%, #2D9CFF 50%, #3DD9C5 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 .fb-sec-title em { font-weight: 700; font-style: normal; background: var(--brand-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+
+/* "Create task from post?" / "Create event from post?" toggle labels.
+   Matches the section-header treatment: Fredoka, lowercase, and the
+   same purple → blue → mint gradient clipped to the text. */
+.cfp-text {
+  font-family: 'Fredoka', 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+  background: linear-gradient(135deg, #6A4DFF 0%, #2D9CFF 50%, #3DD9C5 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
 .fb-sec-meta {
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 11px; color: var(--text-muted);
@@ -541,11 +566,16 @@ html { overscroll-behavior-x: none; }
   margin-left: 4px;
 }
 .userbadge .nm { font-weight: 600; }
+/* The little "you" badge is only ever shown next to the logged-in
+   user's name, so its color is set from a global CSS variable
+   (`--me-color`) that MainApp keeps in sync with the current user's
+   profile color. Previously this used `--brand-grad` clipped to text,
+   which was unreadable on the colored "Posting as" pill. Fallback to
+   the brand purple for the brief moment before the profile loads. */
 .userbadge .you {
-  background: var(--brand-grad);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--me-color, var(--kinnekt-purple));
+  -webkit-text-fill-color: var(--me-color, var(--kinnekt-purple));
+  font-weight: 700;
 }
 
 /* ── Task list ───────────────────────────────────────────────── */
@@ -968,53 +998,60 @@ html { overscroll-behavior-x: none; }
 
 /* ── "↩ Replying to …" reference shown ABOVE a reply's bubble.
    Clicking opens the original post's detail modal. */
-.chat-reply-ref {
+/* ── Reply indicator (lives INSIDE the responder bubble) ────────
+   .chat-bubble-reply-inset — white pill at the top of the bubble
+   that quotes the original post. Two rows:
+     row 1 — [emoji] [name of the original author]
+     row 2 — snippet of the original message
+   Clicking opens the original post's detail modal. */
+.chat-bubble-reply-inset {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 5px 10px 6px 10px;
+  background: #FFFFFF;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 11px;
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: filter 0.18s var(--ease);
+  max-width: 100%;
+  text-align: left;
+}
+.chat-bubble-reply-inset:hover { filter: brightness(0.97); }
+.chat-bubble-reply-line {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 100%;
-  margin-bottom: 4px;
-  padding: 3px 9px;
-  background: var(--surface-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: 999px;
-  font: inherit;
-  font-size: 11px;
-  color: var(--text-muted);
-  cursor: pointer;
-  text-align: left;
-  box-shadow: 0 1px 3px rgba(15, 30, 60, 0.06);
-  -webkit-tap-highlight-color: transparent;
-  transition: background-color 0.18s var(--ease);
 }
-.chat-reply-ref:hover { background: var(--hover-tint); }
-.chat-reply-ref-arrow {
-  font-size: 12px;
-  line-height: 1;
-  opacity: 0.7;
-}
-.chat-reply-ref .dot {
+.chat-bubble-reply-inset .dot {
   width: 14px;
   height: 14px;
 }
-.chat-reply-ref .dot.avatar-emoji {
+.chat-bubble-reply-inset .dot.avatar-emoji {
   font-size: 11px;
 }
-.chat-reply-ref-name {
+.chat-bubble-reply-name {
   font-weight: 700;
   font-size: 11px;
   white-space: nowrap;
 }
-.chat-reply-ref-snippet {
-  font-style: italic;
-  opacity: 0.78;
+.chat-bubble-reply-snippet {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  max-width: 180px;
+  word-break: break-word;
+  max-width: 100%;
 }
-
 /* ── Inline Reply Composer ────────────────────────────────────
    Slides in at the top of the feed when the user hits the ↩
    button on any post. Mirrors iMessage's reply-context bar:
@@ -1140,12 +1177,21 @@ html { overscroll-behavior-x: none; }
    The wrap container (`.chat-bubble-wrap`) is aligned right for
    "me" rows and left for "them" rows, so the caption naturally
    tucks under the bubble on the correct side. */
+/* Wrapped in a white pill so the emoji + name stay readable even
+   when the bubble above is in the author's profile color (otherwise
+   a same-colored name would visually disappear against the bubble).
+   The pill sits below the bubble; the name text inside is still
+   colored to the author's profile color, just now over a white bg. */
 .chat-caption {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-top: 5px;
-  padding: 0 4px;
+  padding: 3px 10px 3px 5px;
+  background: #FFFFFF;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(15, 30, 60, 0.06);
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -1272,14 +1318,15 @@ html { overscroll-behavior-x: none; }
 .mention-tag {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 5px;
   font-weight: 700;
-  border-radius: 6px;
-  padding: 1px 6px;
+  border-radius: 999px;
+  padding: 1px 9px 1px 6px;
   white-space: nowrap;
-  background: rgba(255, 255, 255, 0.92);
+  background: #FFFFFF;
+  border: 1px solid var(--border-soft);
   color: var(--mention-c, var(--kinnekt-indigo));
-  box-shadow: 0 1px 2px rgba(15, 30, 60, 0.08);
+  box-shadow: 0 1px 3px rgba(15, 30, 60, 0.06);
 }
 .mention-emoji {
   font-size: 0.95em;
@@ -1659,16 +1706,18 @@ html { overscroll-behavior-x: none; }
   opacity: 0.85;
 }
 
-/* Notice box at the top of the announcement composer */
+/* Notice box at the top of the announcement composer. Sized to
+   match the `.quick-update-notice` directly below it so the two
+   stacked red pills line up visually. */
 .announcement-notice {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  margin-bottom: 14px;
-  background: rgba(230, 57, 70, 0.08);
-  border: 1.5px solid rgba(230, 57, 70, 0.30);
-  border-radius: 10px;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: rgba(230, 57, 70, 0.06);
+  border: 1px solid rgba(230, 57, 70, 0.20);
+  border-radius: 8px;
   font-size: 12px;
   color: #E63946;
   font-weight: 600;
@@ -1702,6 +1751,9 @@ html { overscroll-behavior-x: none; }
   background: rgba(230, 57, 70, 0.06);
   border: 1px solid rgba(230, 57, 70, 0.20);
   border-radius: 8px;
+  font-size: 12px;
+  color: #E63946;
+  font-weight: 600;
 }
 .quick-update-notice .quick-update-label {
   background: transparent;
@@ -2247,6 +2299,21 @@ html { overscroll-behavior-x: none; }
   box-shadow: 0 10px 24px rgba(106, 77, 255, 0.38);
 }
 .pick.on .userbadge .you { -webkit-text-fill-color: #FFFFFF; color: #FFFFFF; background: none; }
+
+/* `.me-name` is rendered by the <MemberName> helper whenever a
+   byline refers to the logged-in user — it swaps the displayed
+   text to "you" and colors it in the user's profile color so it
+   still feels personal. Inside a selected picker chip the bg is
+   the brand gradient, so we flip to white for contrast. */
+.me-name {
+  color: var(--me-color, var(--kinnekt-purple));
+  -webkit-text-fill-color: var(--me-color, var(--kinnekt-purple));
+  font-weight: 700;
+}
+.pick.on .me-name {
+  color: #FFFFFF;
+  -webkit-text-fill-color: #FFFFFF;
+}
 .pick.unassign { font-style: italic; color: var(--text-muted); }
 .pick.unassign.on { color: #FFFFFF; font-style: normal; }
 
@@ -2870,4 +2937,283 @@ html { overscroll-behavior-x: none; }
     max-width: none !important;
     min-width: 0 !important;
   }
+}
+
+/* ────────────────────────────────────────────────────────────
+   Date Picker Modal — large, thumb-friendly calendar grid
+   ──────────────────────────────────────────────────────────── */
+
+/* Trigger button that replaces the cramped native <input type="date">.
+   Looks like an input field but opens the full-size DatePickerModal. */
+.dp-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1.5px solid var(--ink, #141414);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.dp-trigger:hover {
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+  box-shadow: var(--shadow-soft);
+}
+
+/* Month nav strip: prev arrow ・ Month Year ・ next arrow */
+.dp-month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.dp-month-label {
+  font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.dp-nav-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink, #141414);
+  background: var(--surface-glass, rgba(255, 255, 255, 0.85));
+  font-family: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 2px;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+.dp-nav-btn:hover {
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+  transform: translateY(-1px);
+}
+.dp-nav-btn:active {
+  transform: translateY(0);
+}
+
+/* Day-of-week header row */
+.dp-week-labels {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* 6 × 7 day grid */
+.dp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.dp-cell {
+  aspect-ratio: 1 / 1;
+  min-height: 44px; /* iOS recommended tap target */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 80ms ease;
+}
+.dp-cell.empty {
+  cursor: default;
+  pointer-events: none;
+}
+.dp-cell:not(.empty):hover {
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+}
+.dp-cell:not(.empty):active {
+  transform: scale(0.94);
+}
+.dp-cell.today {
+  font-weight: 700;
+  color: var(--kinnekt-purple);
+  border-color: rgba(106, 77, 255, 0.30);
+}
+.dp-cell.selected {
+  background: var(--kinnekt-purple);
+  color: #fff;
+  border-color: var(--kinnekt-purple);
+  box-shadow: 0 4px 12px rgba(106, 77, 255, 0.32);
+}
+.dp-cell.selected:hover {
+  background: var(--kinnekt-purple);
+  border-color: var(--kinnekt-purple);
+}
+.dp-cell.disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+/* Footer shortcut row ("Today" jump button) */
+.dp-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft, rgba(15, 18, 40, 0.08));
+}
+.dp-shortcut {
+  padding: 10px 22px;
+  border: 1.5px solid var(--ink, #141414);
+  border-radius: 999px;
+  background: var(--surface-glass);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+.dp-shortcut:hover {
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+  transform: translateY(-1px);
+}
+.dp-shortcut:active {
+  transform: translateY(0);
+}
+
+/* ────────────────────────────────────────────────────────────
+   Time Picker Modal — iOS-style three-wheel time selector
+   ──────────────────────────────────────────────────────────── */
+
+.tp-wheels {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 8px;
+}
+
+/* Horizontal selection band that marks the centred "selected" row.
+   Sits behind the wheels (z-index: 0) with the columns above
+   (z-index: 1) so it reads as a tinted lane across all three. */
+.tp-band {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 48px;
+  background:
+    linear-gradient(135deg, rgba(106, 77, 255, 0.10), rgba(45, 156, 255, 0.08) 50%, rgba(61, 217, 197, 0.08));
+  border-top:    1px solid rgba(106, 77, 255, 0.22);
+  border-bottom: 1px solid rgba(106, 77, 255, 0.22);
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Each wheel — a vertical scroll-snap column. Scrollbars hidden,
+   momentum scrolling enabled, edges faded via a mask so the band
+   reads as a focal point. */
+.tp-column {
+  position: relative;
+  z-index: 1;
+  height: 240px;          /* 5 × 48 = full 5 visible rows */
+  width: 68px;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  /* Fade the top and bottom rows so only the centred ~3 read
+     full-strength — gives the picker that iOS depth. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.4) 12%,
+    #000 35%,
+    #000 65%,
+    rgba(0, 0, 0, 0.4) 88%,
+    transparent 100%
+  );
+          mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.4) 12%,
+    #000 35%,
+    #000 65%,
+    rgba(0, 0, 0, 0.4) 88%,
+    transparent 100%
+  );
+}
+.tp-column::-webkit-scrollbar { display: none; }
+
+/* Each row inside a wheel */
+.tp-item {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text-muted);
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color 140ms ease, font-weight 140ms ease, transform 140ms ease;
+}
+.tp-item.on {
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+/* Colon separator between hour and minute wheels */
+.tp-sep {
+  align-self: center;
+  font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding: 0 4px 4px;
+  line-height: 1;
+  position: relative;
+  z-index: 2;
+}
+
+@media (max-width: 480px) {
+  /* Slightly smaller on tight mobile widths so all three wheels +
+     the separator fit comfortably without horizontal scroll. */
+  .tp-column { width: 60px; }
+  .tp-item   { font-size: 17px; }
+  .tp-item.on { font-size: 21px; }
 }
