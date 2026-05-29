@@ -448,6 +448,95 @@ function buildCalendar(year, month) {
   return cells;
 }
 
+// Expand recurring events into their visible instances within a date
+// window. Each instance shares the master row's `id`, so RSVPs and
+// detail-modal lookups still hit the master row. The instance carries
+// its own `date` (the occurrence date) so calendar grid + Upcoming
+// list place it on the right day, plus an `_occDate` marker so the
+// detail modal can show "occurrence date" vs "first started on" if
+// needed. Non-recurring events pass through 1:1.
+//
+// Rules (mirrors task recurrence shape):
+//   freq='daily'   — every day from start_date onward
+//   freq='weekly'  — every selected weekday on/after start_date
+//   freq='monthly' — same day-of-month every month
+//   freq='custom'  — every selected weekday (same as weekly, just
+//                    enters via a different picker UI)
+//
+// The window keeps the work bounded — we expand from `windowStart`
+// (typically 60 days back) to `windowEnd` (typically 180 days fwd).
+function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
+  if (!Array.isArray(rawEvents)) return [];
+  const out = [];
+  const startMs = windowStart.getTime();
+  const endMs   = windowEnd.getTime();
+  // Helper: ISO yyyy-mm-dd in *local* time (avoids the UTC date-drift
+  // bug where new Date('2026-05-15').toISOString() can produce
+  // '2026-05-14' depending on timezone).
+  const toIso = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  for (const e of rawEvents) {
+    const r = e.recurrence;
+    if (!r || !r.freq || r.freq === 'none') {
+      out.push(e);
+      continue;
+    }
+    // Anchor: the original event date is the FIRST occurrence. Don't
+    // emit any instance before it (a weekly-Wednesday event starting
+    // on the 14th shouldn't show on the previous Wednesday).
+    const [ay, am, ad] = (e.date || '').split('-').map(Number);
+    if (!ay) { out.push(e); continue; }
+    const anchor = new Date(ay, am - 1, ad);
+    const anchorMs = anchor.getTime();
+    const scanStart = new Date(Math.max(startMs, anchorMs));
+    scanStart.setHours(0, 0, 0, 0);
+
+    if (r.freq === 'daily') {
+      let cur = new Date(scanStart);
+      while (cur.getTime() <= endMs) {
+        out.push({ ...e, date: toIso(cur), _occDate: toIso(cur), _isRecurrence: true });
+        cur.setDate(cur.getDate() + 1);
+      }
+      continue;
+    }
+    if (r.freq === 'weekly' || r.freq === 'custom') {
+      const days = Array.isArray(r.days) && r.days.length > 0
+        ? r.days
+        : [anchor.getDay()]; // fall back to original weekday if no days set
+      let cur = new Date(scanStart);
+      while (cur.getTime() <= endMs) {
+        if (days.includes(cur.getDay())) {
+          out.push({ ...e, date: toIso(cur), _occDate: toIso(cur), _isRecurrence: true });
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+      continue;
+    }
+    if (r.freq === 'monthly') {
+      let cur = new Date(scanStart);
+      cur.setDate(anchor.getDate());
+      // If we jumped past scanStart by setting the day, walk back one month
+      if (cur.getTime() < scanStart.getTime()) cur.setMonth(cur.getMonth() + 1);
+      while (cur.getTime() <= endMs) {
+        // Guard for months without the anchor day (e.g. Feb 30 → skip)
+        if (cur.getDate() === anchor.getDate()) {
+          out.push({ ...e, date: toIso(cur), _occDate: toIso(cur), _isRecurrence: true });
+        }
+        cur.setMonth(cur.getMonth() + 1);
+        cur.setDate(anchor.getDate());
+      }
+      continue;
+    }
+    // Unknown freq — render as one-off
+    out.push(e);
+  }
+  return out;
+}
+
 // ─── Task Row ────────────────────────────────────────────────────────────────
 function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
   const color = getColor(assignee?.color);
@@ -644,7 +733,18 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
   const todayD = now.getDate();
   const isCurrentMonth = calYear === now.getFullYear() && calMonth === now.getMonth();
 
-  const monthEvents = events.filter(e => {
+  // Expand any recurring events into their visible instances within a
+  // 1-year window centered on today. Each instance carries the same
+  // `id` as its master so EventDetailsModal lookups + RSVPs still hit
+  // a single row. The window is wide enough that scrolling the
+  // calendar a few months either way still shows occurrences.
+  const expanded = React.useMemo(() => {
+    const start = new Date(); start.setHours(0,0,0,0); start.setMonth(start.getMonth() - 6);
+    const end   = new Date(); end.setHours(0,0,0,0);   end.setMonth(end.getMonth() + 12);
+    return expandRecurringEvents(events, start, end);
+  }, [events]);
+
+  const monthEvents = expanded.filter(e => {
     const d = new Date(e.date + 'T00:00:00');
     return d.getFullYear() === calYear && d.getMonth() === calMonth;
   });
@@ -656,8 +756,9 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
     eventsByDay[day].push(e);
   });
 
-  const upcoming = events
+  const upcoming = expanded
     .filter(e => new Date(e.date + 'T00:00:00') >= new Date(new Date().setHours(0,0,0,0)))
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '99').localeCompare(b.start_time || '99'))
     .slice(0, 5);
 
   const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -714,8 +815,12 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
               <span className="num">{c.d}</span>
               {evs.slice(0, 2).map(e => {
                 const p = getProfile(e.created_by);
+                // Recurring instances share an event id across dates, so
+                // include the occurrence date in the key to keep React's
+                // reconciler from collapsing two chips on the same day.
+                const key = `${e.id}::${e._occDate || e.date}`;
                 return (
-                  <div key={e.id} className="evt-chip" style={{ background: getColor(p?.color || e.color), fontSize: 9, padding: '1px 3px', borderRadius: 3, color: '#fff', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', marginTop: 1, cursor: 'pointer' }} title={e.title}>
+                  <div key={key} className="evt-chip" style={{ background: getColor(p?.color || e.color), fontSize: 9, padding: '1px 3px', borderRadius: 3, color: '#fff', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', marginTop: 1, cursor: 'pointer' }} title={e.title}>
                     {e.title}
                   </div>
                 );
@@ -745,8 +850,9 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
             {upcoming.map(e => {
               const p = getProfile(e.created_by);
               const d = new Date(e.date + 'T00:00:00');
+              const key = `${e.id}::${e._occDate || e.date}`;
               return (
-                <SwipeToDelete key={e.id} onDelete={() => onDelete(e.id)} disabled={e.created_by !== myId}>
+                <SwipeToDelete key={key} onDelete={() => onDelete(e.id)} disabled={e.created_by !== myId}>
                 <div
                   className="upcoming-row"
                   style={{ borderLeft: `5px solid ${getColor(p?.color || e.color)}`, cursor: 'pointer' }}
@@ -757,7 +863,10 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
                     <span className="d">{d.getDate()}</span>
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div className="ti">{renderWithMentions(e.title, false, members)}</div>
+                    <div className="ti">
+                      {renderWithMentions(e.title, false, members)}
+                      {e._isRecurrence && <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text-muted)' }} title="Recurring">↻</span>}
+                    </div>
                     <div className="sub">
                       {e.start_time && <span>{fmtTime(e.start_time)}{e.end_time ? `–${fmtTime(e.end_time)}` : ''}</span>}
                       {e.start_time && <span>·</span>}
@@ -809,8 +918,23 @@ function SectionToggle({ collapsed, onClick }) {
 function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToNote, replyToAuthor, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, onStartReply, actionBarOpen, onLongPress, onCloseActionBar, inPinned = false }) {
   const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const type = n.type || 'message';
-  const canDelete = n.created_by === myId;
+  const isDeleted = !!(n.payload && n.payload.deleted);
+  const canDelete = n.created_by === myId && !isDeleted;
   const authorColor = getColor(author?.color);
+
+  // ── Soft-deleted tombstone ──────────────────────────────────────────────
+  // Replaces the entire bubble with a small italic "deleted" line in the
+  // date-style font. The note row is kept (reply chains still resolve to
+  // the deleted post — its quote pill just says "deleted"), but every
+  // interaction (long-press, swipe-to-delete, modal open) is suppressed
+  // so the tombstone behaves like a passive marker.
+  if (isDeleted) {
+    return (
+      <div className={`chat-row ${isMe ? 'me' : 'them'}`}>
+        <div className="feed-deleted" aria-label="Deleted post">deleted</div>
+      </div>
+    );
+  }
 
   // ── Long-press detection ────────────────────────────────────────────────
   // Hold on a bubble for ~450ms → onLongPress(n) fires, which causes the
@@ -894,9 +1018,10 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
   };
 
   // Floating action bar — appears just above the bubble when this post
-  // is the long-pressed one. Single "Reply" button for now. Tapping it
-  // closes the bar and opens the inline reply composer at the top of
-  // the feed (the existing onStartReply flow).
+  // is the long-pressed one. Always shows "Reply"; shows "Delete" when
+  // the viewer is the post's author (same gate as the swipe-to-delete
+  // affordance). Tapping Delete soft-deletes the post — the row stays
+  // in the feed as a "deleted" tombstone so reply chains still resolve.
   const ActionBar = () => {
     if (!actionBarOpen) return null;
     return (
@@ -919,6 +1044,20 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
           <span className="bubble-action-icon" aria-hidden>↩</span>
           <span>Reply</span>
         </button>
+        {canDelete && (
+          <button
+            type="button"
+            className="bubble-action-btn bubble-action-delete"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCloseActionBar?.();
+              onDelete?.(n.id);
+            }}
+          >
+            <span className="bubble-action-icon" aria-hidden>🗑</span>
+            <span>Delete</span>
+          </button>
+        )}
       </div>
     );
   };
@@ -969,8 +1108,11 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     if (!replyToNote) return null;
     const refColor = getColor(replyToAuthor?.color);
     const refType = replyToNote.type || 'message';
+    const refDeleted = !!(replyToNote.payload && replyToNote.payload.deleted);
     let snippet = '';
-    if (refType === 'photos') {
+    if (refDeleted) {
+      snippet = '(deleted)';
+    } else if (refType === 'photos') {
       const count = Array.isArray(replyToNote.payload?.photos)
         ? replyToNote.payload.photos.length : 0;
       snippet = count > 1 ? `${count} photos` : 'photo';
@@ -2022,6 +2164,12 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
   const [attendees, setAttendees] = React.useState([]);
+  // Recurrence — same shape used by tasks. `repeatFreq` defaults to
+  // 'none' (one-off event). For 'weekly' and 'custom', `repeatDays`
+  // is the set of weekdays the event repeats on (0=Sun..6=Sat). For
+  // 'daily' and 'monthly' the days list is unused.
+  const [repeatFreq, setRepeatFreq] = React.useState('none');
+  const [repeatDays, setRepeatDays] = React.useState([]);
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
   const [dateOpen,  setDateOpen]  = React.useState(false);
@@ -2033,12 +2181,25 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
     if (open) {
       setDate(initialDate || today);
       setAttendees([]);
+      setRepeatFreq('none');
+      setRepeatDays([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialDate]);
 
   const toggleAttendee = (id) => {
     setAttendees(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleRepeatDay = (d) => {
+    setRepeatDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  };
+
+  const getRecurrence = () => {
+    if (repeatFreq === 'none') return null;
+    const r = { freq: repeatFreq };
+    if (repeatFreq === 'weekly' || repeatFreq === 'custom') r.days = repeatDays.slice().sort();
+    return r;
   };
 
   const save = async () => {
@@ -2052,8 +2213,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
       start_time: startTime || null,
       end_time: endTime || null,
       attendees,
+      recurrence: getRecurrence(),
     });
     setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
+    setRepeatFreq('none'); setRepeatDays([]);
     setSaving(false);
     onClose();
   };
@@ -2151,6 +2314,75 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
         </div>
       </div>
 
+      {/* Repeat — same recurrence model used by tasks. When set, the
+          calendar grid + upcoming list will expand this event into
+          multiple instances per the rule (every day / every chosen
+          weekday / once per month / custom day-of-week list). */}
+      <div className="field">
+        <label>Repeat</label>
+        <div className="date-row">
+          {[
+            ['none',    "Doesn't repeat"],
+            ['daily',   'Daily'],
+            ['weekly',  'Weekly'],
+            ['monthly', 'Monthly'],
+            ['custom',  'Custom'],
+          ].map(([k, lbl]) => (
+            <button key={k} className={'pick' + (repeatFreq === k ? ' on' : '')} onClick={() => setRepeatFreq(k)}>{lbl}</button>
+          ))}
+        </div>
+
+        {repeatFreq === 'weekly' && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              On these days
+            </div>
+            <div className="date-row">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, i) => (
+                <button
+                  key={day}
+                  className={'pick' + (repeatDays.includes(i) ? ' on' : '')}
+                  onClick={() => toggleRepeatDay(i)}
+                  style={{ minWidth: 0, padding: '8px 10px' }}
+                >{day}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {repeatFreq === 'custom' && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              Repeat on
+            </div>
+            <div className="day-check-list">
+              {[
+                [1, 'Monday'],
+                [2, 'Tuesday'],
+                [3, 'Wednesday'],
+                [4, 'Thursday'],
+                [5, 'Friday'],
+                [6, 'Saturday'],
+                [0, 'Sunday'],
+              ].map(([idx, name]) => {
+                const selected = repeatDays.includes(idx);
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={'day-check-row' + (selected ? ' on' : '')}
+                    onClick={() => toggleRepeatDay(idx)}
+                  >
+                    <span className="day-check-box" aria-hidden>{selected ? '✓' : ''}</span>
+                    <span className="day-check-name">{name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
       <DatePickerModal
         open={dateOpen}
         value={date}
@@ -2233,8 +2465,30 @@ function EventCard({ event, members, getProfile, myId, onDelete, onClick }) {
   );
 }
 
+// Format a recurrence rule (same shape used by tasks + events) into a
+// short human label like "Repeats every week on Mon, Wed". Returns
+// null when there's no recurrence so callers can skip the row.
+function formatEventRecurrence(r) {
+  if (!r || !r.freq || r.freq === 'none') return null;
+  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  if (r.freq === 'daily')   return 'Repeats every day';
+  if (r.freq === 'monthly') return 'Repeats every month';
+  if (r.freq === 'weekly' || r.freq === 'custom') {
+    const days = Array.isArray(r.days) ? r.days.slice().sort() : [];
+    if (days.length === 0) return r.freq === 'weekly' ? 'Repeats weekly' : 'Repeats on custom days';
+    return `Repeats every week on ${days.map(i => DAY_NAMES[i]).join(', ')}`;
+  }
+  return 'Repeats';
+}
+
 // ─── Event Details Modal (single event) ───────────────────────────────────────
-function EventDetailsModal({ open, event, members, getProfile, myId, onClose, onDelete, onShowMember }) {
+function EventDetailsModal({
+  open, event, members, getProfile, myId, onClose, onDelete, onShowMember,
+  // New for RSVP + linked tasks. Backwards-compatible — older callers
+  // that don't pass these just won't see those features. The MainApp
+  // wires them up; standalone places like screens-tests can omit.
+  tasks = [], onSetRsvp, onAddLinkedTask, onToggleTask, onOpenTask,
+}) {
   if (!open || !event) return null;
   const p = getProfile(event.created_by);
   const color = getColor(p?.color || event.color);
@@ -2246,6 +2500,44 @@ function EventDetailsModal({ open, event, members, getProfile, myId, onClose, on
     : 'All day';
   const mapsUrl = event.location ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}` : null;
 
+  // RSVP state
+  const rsvps = (event.rsvps && typeof event.rsvps === 'object') ? event.rsvps : {};
+  const myRsvp = rsvps[myId] || null;
+  const rsvpLabel = (v) => ({ yes: 'Going', maybe: 'Maybe', no: "Can't go" })[v] || null;
+  const rsvpEmoji = (v) => ({ yes: '✅', maybe: '🤔', no: '❌' })[v] || null;
+  const rsvpColor = (v) => ({ yes: '#2DC653', maybe: '#FFB100', no: '#E63946' })[v] || 'var(--text-muted)';
+  // The RSVP block is visible to anyone in the group — even non-
+  // attendees might want to opt in / decline a wider family event.
+  const canRsvp = !!onSetRsvp && !!myId;
+
+  // Recurrence label
+  const recLabel = formatEventRecurrence(event.recurrence);
+
+  // Linked tasks — tasks whose `event_id` points at this master event.
+  // Sorted: incomplete first, then by due date.
+  const linkedTasks = Array.isArray(tasks)
+    ? tasks.filter(t => t.event_id === event.id && !t.cancelled_at)
+    : [];
+  linkedTasks.sort((a, b) => {
+    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+    return (a.due_date || '').localeCompare(b.due_date || '');
+  });
+
+  // Inline new-linked-task composer
+  const [newTaskTitle, setNewTaskTitle] = React.useState('');
+  const [addingTask, setAddingTask] = React.useState(false);
+  const handleAddLinkedTask = async () => {
+    const t = newTaskTitle.trim();
+    if (!t || !onAddLinkedTask) return;
+    setAddingTask(true);
+    try {
+      await onAddLinkedTask(event.id, t);
+      setNewTaskTitle('');
+    } finally {
+      setAddingTask(false);
+    }
+  };
+
   return (
     <Modal open={open} onClose={onClose} title="Event">
       <div style={{
@@ -2253,8 +2545,11 @@ function EventDetailsModal({ open, event, members, getProfile, myId, onClose, on
         padding: '4px 0 4px 14px',
         marginBottom: 14,
       }}>
-        <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15, marginBottom: 8 }}>
-          {renderWithMentions(event.title, false, members)}
+        <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>{renderWithMentions(event.title, false, members)}</span>
+          {recLabel && (
+            <span title={recLabel} style={{ fontSize: 14, color: 'var(--text-muted)', fontWeight: 500 }}>↻</span>
+          )}
         </div>
         <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--mute)', letterSpacing: '0.04em' }}>
           {longDate}
@@ -2262,7 +2557,44 @@ function EventDetailsModal({ open, event, members, getProfile, myId, onClose, on
         <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--mute)', letterSpacing: '0.04em', marginTop: 2 }}>
           {timeStr}
         </div>
+        {recLabel && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span aria-hidden>↻</span>
+            <span>{recLabel}</span>
+          </div>
+        )}
       </div>
+
+      {/* RSVP block — three buttons stacked horizontally. The current
+          selection gets a filled background + colored border. Tapping
+          the same button again clears the RSVP (returns to "no
+          response"). All three call onSetRsvp(eventId, status). */}
+      {canRsvp && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Your RSVP</label>
+          <div className="rsvp-row">
+            {[
+              ['yes',   'Going',     '✅'],
+              ['maybe', 'Maybe',     '🤔'],
+              ['no',    "Can't go",  '❌'],
+            ].map(([val, lbl, emoji]) => {
+              const on = myRsvp === val;
+              return (
+                <button
+                  key={val}
+                  type="button"
+                  className={'rsvp-btn rsvp-' + val + (on ? ' on' : '')}
+                  onClick={() => onSetRsvp(event.id, on ? null : val)}
+                  aria-pressed={on}
+                >
+                  <span aria-hidden>{emoji}</span>
+                  <span>{lbl}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {event.location && (
         <div className="field" style={{ marginBottom: 14 }}>
@@ -2290,32 +2622,94 @@ function EventDetailsModal({ open, event, members, getProfile, myId, onClose, on
         </div>
       )}
 
+      {/* Linked tasks — to-dos tied to this event (e.g. "bring napkins"
+          for a dinner). Tapping the row opens the task detail; tapping
+          the checkbox toggles completion. The inline composer at the
+          bottom creates a new task with `event_id = event.id`. */}
+      {onAddLinkedTask && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Linked tasks</label>
+          {linkedTasks.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+              {linkedTasks.map(t => {
+                const assn = getProfile(t.assigned_to);
+                const canToggle = !t.cancelled_at && (!t.assigned_to || t.assigned_to === myId);
+                return (
+                  <div
+                    key={t.id}
+                    className="linked-task-row"
+                    onClick={() => onOpenTask?.(t)}
+                  >
+                    <button
+                      type="button"
+                      className={'linked-task-check' + (t.completed ? ' on' : '')}
+                      onClick={(e) => { e.stopPropagation(); if (canToggle && onToggleTask) onToggleTask(t.id); }}
+                      disabled={!canToggle}
+                      aria-label={t.completed ? 'Mark incomplete' : 'Mark complete'}
+                    >{t.completed ? '✓' : ''}</button>
+                    <span
+                      className="linked-task-title"
+                      style={{ textDecoration: t.completed ? 'line-through' : 'none', opacity: t.completed ? 0.55 : 1 }}
+                    >{t.title}</span>
+                    {assn && (
+                      <span className="linked-task-assn">
+                        <Dot profile={assn} />
+                        <MemberName profile={assn} isMe={assn.id === myId} />
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--mute)', fontStyle: 'italic', marginBottom: 8 }}>
+              No tasks linked yet.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={newTaskTitle}
+              onChange={e => setNewTaskTitle(e.target.value.slice(0, 200))}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddLinkedTask(); } }}
+              placeholder="Add a task for this event…"
+              maxLength={200}
+              style={{ flex: 1, fontFamily: 'inherit', fontSize: 13, padding: '8px 12px', border: '1px solid var(--border-glass)', borderRadius: 999, background: 'var(--surface-glass)', color: 'var(--ink)', outline: 'none', minWidth: 0 }}
+              disabled={addingTask}
+            />
+            <button
+              onClick={handleAddLinkedTask}
+              disabled={!newTaskTitle.trim() || addingTask}
+              className="fb-btn solid"
+              style={{ width: 'auto', padding: '8px 16px', fontSize: 13, opacity: (!newTaskTitle.trim() || addingTask) ? 0.5 : 1 }}
+            >{addingTask ? '…' : 'Add'}</button>
+          </div>
+        </div>
+      )}
+
       <div className="field" style={{ marginBottom: 14 }}>
         <label>Attendees</label>
         {Array.isArray(event.attendees) && event.attendees.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {event.attendees.map(uid => {
               const ap = getProfile(uid);
+              const r = rsvps[uid];
               return (
                 <span
                   key={uid}
-                  className="member-link"
+                  className="member-chip"
                   onClick={() => ap && onShowMember && onShowMember(ap)}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '6px 12px',
-                    background: 'var(--surface-glass)',
-                    backdropFilter: 'blur(14px)',
-                    WebkitBackdropFilter: 'blur(14px)',
-                    border: '1px solid var(--border-glass)',
-                    borderRadius: '999px',
-                    fontSize: 13,
-                    fontWeight: 500,
-                    cursor: ap ? 'pointer' : 'default',
-                  }}
+                  style={ap ? undefined : { cursor: 'default' }}
+                  title={r ? rsvpLabel(r) : 'No response yet'}
                 >
                   <Dot profile={ap} />
                   {ap ? <MemberName profile={ap} isMe={uid === myId} /> : <span>Unknown</span>}
+                  {r && (
+                    <span
+                      className="rsvp-pip"
+                      aria-label={rsvpLabel(r)}
+                      style={{ color: rsvpColor(r) }}
+                    >{rsvpEmoji(r)}</span>
+                  )}
                 </span>
               );
             })}
@@ -2332,9 +2726,8 @@ function EventDetailsModal({ open, event, members, getProfile, myId, onClose, on
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
           {p ? (
             <span
-              className="member-link"
+              className="member-chip"
               onClick={() => onShowMember && onShowMember(p)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
             >
               <Dot profile={p} />
               <MemberName profile={p} isMe={p.id === myId} />
@@ -2350,7 +2743,7 @@ function EventDetailsModal({ open, event, members, getProfile, myId, onClose, on
           <button
             onClick={() => { onDelete(event.id); onClose(); }}
             className="danger-btn"
-          >Delete event</button>
+          >Delete event{event.recurrence && event.recurrence.freq !== 'none' ? ' series' : ''}</button>
         </div>
       )}
     </Modal>
@@ -3586,12 +3979,12 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
             </div>
             {assignee ? (
               <span
-                className="member-link"
+                className="member-chip"
                 onClick={() => onShowMember && onShowMember(assignee)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                style={{ fontSize: 14 }}
               >
                 <Dot profile={assignee} />
-                <MemberName profile={assignee} isMe={assignee.id === myId} style={{ fontWeight: 600, fontSize: 14 }} />
+                <MemberName profile={assignee} isMe={assignee.id === myId} style={{ fontWeight: 600 }} />
               </span>
             ) : (
               <span style={{ fontSize: 14, color: 'var(--text-muted)', fontStyle: 'italic' }}>Unassigned</span>
@@ -3603,12 +3996,12 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
             </div>
             {creator ? (
               <span
-                className="member-link"
+                className="member-chip"
                 onClick={() => onShowMember && onShowMember(creator)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                style={{ fontSize: 14 }}
               >
                 <Dot profile={creator} />
-                <MemberName profile={creator} isMe={creator.id === myId} style={{ fontWeight: 600, fontSize: 14 }} />
+                <MemberName profile={creator} isMe={creator.id === myId} style={{ fontWeight: 600 }} />
               </span>
             ) : (
               <span style={{ fontSize: 14 }}>Unknown</span>
@@ -3793,9 +4186,38 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
     }
   };
 
+  // Comments are stored as `notes` rows (replies — `payload.reply_to`
+  // points back at the parent post), which means the same comment is
+  // *also* visible in the main Home Feed. To keep behavior consistent
+  // across both surfaces, the × button performs the same soft-delete
+  // the feed uses: clear content, set `payload.deleted = true`, and
+  // unpin. The row stays so reply chains still resolve; the feed
+  // renders it as a "deleted" tombstone.
   const deleteComment = async (id) => {
-    setComments(prev => prev.filter(c => c.id !== id));
-    await supabase.from('notes').delete().eq('id', id);
+    const current = comments.find(c => c.id === id);
+    if (!current) return;
+    const newPayload = {
+      ...(current.payload || {}),
+      deleted: true,
+      deleted_at: new Date().toISOString(),
+    };
+    setComments(prev => prev.map(c => c.id === id
+      ? { ...c, content: '', pinned: false, payload: newPayload }
+      : c
+    ));
+    const { error } = await supabase
+      .from('notes')
+      .update({ content: '', pinned: false, payload: newPayload })
+      .eq('id', id);
+    if (error) {
+      setComments(prev => prev.map(c => c.id === id ? current : c));
+      alert('Could not delete reply: ' + error.message);
+      return;
+    }
+    // Propagate the soft-delete to the parent feed's notes list so the
+    // home feed shows the tombstone immediately (otherwise the feed
+    // would still hold the original content until next fetch).
+    onNoteUpdated?.({ ...current, content: '', pinned: false, payload: newPayload });
   };
 
   const noteType = note.type || 'message';
@@ -4031,7 +4453,19 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
             {comments.map(c => {
               const cAuthor = getProfile(c.created_by);
               const cWhen = new Date(c.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-              const canDeleteComment = c.created_by === myId || isCreator;
+              const cDeleted = !!(c.payload && c.payload.deleted);
+              // Once deleted, even the post owner can't "re-delete" — the
+              // tombstone is the terminal state.
+              const canDeleteComment = !cDeleted && (c.created_by === myId || isCreator);
+              if (cDeleted) {
+                return (
+                  <div
+                    key={c.id}
+                    className="feed-deleted"
+                    aria-label="Deleted reply"
+                  >deleted</div>
+                );
+              }
               return (
                 <div
                   key={c.id}
@@ -4046,15 +4480,15 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                     <span
-                      className="member-link"
+                      className="member-chip"
                       onClick={() => cAuthor && onShowMember && onShowMember(cAuthor)}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: cAuthor ? 'pointer' : 'default' }}
+                      style={{ fontSize: 12, padding: '4px 10px', ...(cAuthor ? null : { cursor: 'default' }) }}
                     >
                       <Dot profile={cAuthor} />
                       {cAuthor ? (
-                        <MemberName profile={cAuthor} isMe={c.created_by === myId} style={{ fontWeight: 600, fontSize: 12 }} />
+                        <MemberName profile={cAuthor} isMe={c.created_by === myId} style={{ fontWeight: 600 }} />
                       ) : (
-                        <span style={{ fontWeight: 600, fontSize: 12 }}>Unknown</span>
+                        <span style={{ fontWeight: 600 }}>Unknown</span>
                       )}
                     </span>
                     <span style={{ marginLeft: 'auto', fontSize: 10, fontStyle: 'italic', color: 'var(--text-muted)' }}>{cWhen}</span>
@@ -4254,15 +4688,15 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
             Posted by
           </div>
           <span
-            className="member-link"
+            className="member-chip"
             onClick={() => author && onShowMember && onShowMember(author)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: author ? 'pointer' : 'default' }}
+            style={{ fontSize: 14, ...(author ? null : { cursor: 'default' }) }}
           >
             <Dot profile={author} />
             {author ? (
-              <MemberName profile={author} isMe={author.id === myId} style={{ fontWeight: 600, fontSize: 14 }} />
+              <MemberName profile={author} isMe={author.id === myId} style={{ fontWeight: 600 }} />
             ) : (
-              <span style={{ fontWeight: 600, fontSize: 14 }}>Unknown</span>
+              <span style={{ fontWeight: 600 }}>Unknown</span>
             )}
           </span>
           <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)', marginTop: 4 }}>{when}</div>
@@ -4364,6 +4798,22 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'event_rsvp') {
+      const d = p.event_date ? new Date(p.event_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      const verb = ({ yes: 'is going to', maybe: 'might go to', no: "can't make" })[p.status] || 'replied about';
+      const emoji = ({ yes: '✅', maybe: '🤔', no: '❌' })[p.status] || '📅';
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color), fontSize: 14 }}>{emoji}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> {verb} your event
+            </div>
+            <div className="fb-bell-sub">{p.event_title}{d ? ` · ${d}` : ''}</div>
+          </div>
+        </>
+      );
+    }
     if (n.type === 'note_tagged') {
       return (
         <>
@@ -4438,7 +4888,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               const id = n.payload?.task_id || n.payload?.event_id || n.payload?.note_id;
               if (!id) return;
               if ((n.type === 'task_assigned' || n.type === 'task_cancelled') && onOpenTask) onOpenTask(id);
-              else if (n.type === 'event_invited' && onOpenEvent) onOpenEvent(id);
+              else if ((n.type === 'event_invited' || n.type === 'event_rsvp') && onOpenEvent) onOpenEvent(id);
               else if ((n.type === 'note_tagged' || n.type === 'note_replied' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
             return (
@@ -4490,6 +4940,17 @@ export function MainApp({ profile, onSettings }) {
   // "This week"). Default = 'week'; the only other option is 'all'.
   const [tasksFilter, setTasksFilter] = React.useState('week');
   const [events, setEvents] = React.useState([]);
+  // Recurring events get expanded into their visible instances so the
+  // calendar grid + day modal + month modal all render one entry per
+  // occurrence. Detail-modal lookups still use the raw `events` list
+  // (so `events.find(e => e.id === detailEventId)` returns the single
+  // master row — the instance's date is shown by the day modal that
+  // launched it). A 1-year window keeps the expansion bounded.
+  const expandedEvents = React.useMemo(() => {
+    const start = new Date(); start.setHours(0,0,0,0); start.setMonth(start.getMonth() - 6);
+    const end   = new Date(); end.setHours(0,0,0,0);   end.setMonth(end.getMonth() + 12);
+    return expandRecurringEvents(events, start, end);
+  }, [events]);
   const [notes, setNotes] = React.useState([]);
   const [notifications, setNotifications] = React.useState([]);
   const [bellOpen, setBellOpen] = React.useState(false);
@@ -4648,10 +5109,14 @@ export function MainApp({ profile, onSettings }) {
   const addTask = async (data) => {
     let payload = { group_id: profile.group_id, created_by: profile.id, ...data };
     // Optional columns that older schemas may not have — strip on error.
-    const optional = ['description', 'recurrence'];
+    // `event_id` is the link to an event (event detail modal -> "Linked
+    // tasks" -> create new task). Null when the task isn't tied to an
+    // event, present otherwise. Strip-on-error mirrors recurrence.
+    const optional = ['description', 'recurrence', 'event_id'];
+    const droppedCols = [];
     let row = null;
     let error = null;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       ({ data: row, error } = await supabase.from('tasks').insert(payload).select().single());
       if (!error) break;
       let stripped = null;
@@ -4661,6 +5126,7 @@ export function MainApp({ profile, onSettings }) {
           const { [col]: _, ...rest } = payload;
           payload = rest;
           stripped = col;
+          droppedCols.push(col);
           break;
         }
       }
@@ -4669,6 +5135,20 @@ export function MainApp({ profile, onSettings }) {
     if (error || !row) {
       if (error) alert('Could not save task: ' + error.message);
       return;
+    }
+    // Warn if the new event_id column was stripped — the task saved but
+    // won't appear linked under the event. One-time gate so we don't
+    // nag repeatedly.
+    if (droppedCols.includes('event_id') && data.event_id) {
+      if (!window.__kinnektEventIdWarned) {
+        window.__kinnektEventIdWarned = true;
+        alert(
+          'Task saved, but it could NOT be linked to the event.\n\n' +
+          'The "event_id" column is missing from your tasks table.\n' +
+          'Run this in your Supabase SQL Editor:\n\n' +
+          'alter table public.tasks add column if not exists event_id uuid references public.events(id) on delete cascade;'
+        );
+      }
     }
     setTasks(prev => [row, ...prev]);
     if (row.assigned_to && row.assigned_to !== profile.id) {
@@ -4721,22 +5201,28 @@ export function MainApp({ profile, onSettings }) {
 
   // Event CRUD
   const addEvent = async (data) => {
-    const { attendees = [], ...rest } = data;
+    const { attendees = [], recurrence = null, ...rest } = data;
+    // The creator is auto-RSVP'd as Going so the modal shows a sensible
+    // default state right after save (and so the upcoming list / event
+    // chip can reflect "1 going" instead of blank).
+    const initialRsvps = { [profile.id]: 'yes' };
     let payload = {
       group_id: profile.group_id,
       created_by: profile.id,
       color: profile.color || 'coral',
       ...rest,
       attendees,
+      recurrence,
+      rsvps: initialRsvps,
     };
 
     // Optional columns that may not exist in older schemas — strip them on error.
-    const optionalCols = ['description', 'location', 'attendees'];
+    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps'];
     const droppedCols = [];
 
     let row = null;
     let error = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 7; attempt++) {
       ({ data: row, error } = await supabase.from('events').insert(payload).select().single());
       if (!error) break;
       // Parse missing-column name from PostgREST error and strip it.
@@ -4769,6 +5255,30 @@ export function MainApp({ profile, onSettings }) {
         'alter table public.events add column if not exists attendees uuid[] default \'{}\';'
       );
     }
+    // Same warning for the new recurrence / rsvps columns. Only flag
+    // when the user *actually* tried to use the feature — a one-off
+    // event with no RSVPs shouldn't nag about a missing rsvps column.
+    if (droppedCols.includes('recurrence') && recurrence) {
+      alert(
+        'Event saved, but the repeat rule could NOT be stored.\n\n' +
+        'The "recurrence" column is missing from your events table.\n' +
+        'Run this in your Supabase SQL Editor:\n\n' +
+        'alter table public.events add column if not exists recurrence jsonb;'
+      );
+    }
+    if (droppedCols.includes('rsvps')) {
+      // Always show this one — the modal will render RSVP buttons
+      // and the user will hit a wall the first time they try to RSVP.
+      // Showing it at save-time gives them the fix up front.
+      if (!window.__kinnektRsvpWarned) {
+        window.__kinnektRsvpWarned = true;
+        alert(
+          'RSVP feature needs a database update.\n\n' +
+          'Run this in your Supabase SQL Editor:\n\n' +
+          'alter table public.events add column if not exists rsvps jsonb default \'{}\';'
+        );
+      }
+    }
 
     setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
     const attendeeIds = attendees.filter(id => id !== profile.id);
@@ -4786,6 +5296,66 @@ export function MainApp({ profile, onSettings }) {
   const deleteEvent = async (id) => {
     setEvents(prev => prev.filter(e => e.id !== id));
     await supabase.from('events').delete().eq('id', id);
+  };
+
+  // Set my RSVP status on an event (or clear it by passing null).
+  // Updates the `rsvps` JSONB column ({ [userId]: 'yes'|'maybe'|'no' }).
+  // Notifies the event creator so they see who's coming. Optimistic
+  // UI + revert-on-error to keep the modal responsive.
+  const setRsvp = async (eventId, status) => {
+    const me = profile?.id;
+    if (!me || !eventId) return;
+    const original = events.find(e => e.id === eventId);
+    if (!original) return;
+    const prevRsvps = (original.rsvps && typeof original.rsvps === 'object') ? original.rsvps : {};
+    const nextRsvps = { ...prevRsvps };
+    if (status === null || status === undefined) {
+      delete nextRsvps[me];
+    } else {
+      nextRsvps[me] = status;
+    }
+    setEvents(prev => prev.map(e => e.id === eventId ? { ...e, rsvps: nextRsvps } : e));
+    const { error } = await supabase
+      .from('events')
+      .update({ rsvps: nextRsvps })
+      .eq('id', eventId);
+    if (error) {
+      // Revert on failure (most likely cause: rsvps column not added yet)
+      setEvents(prev => prev.map(e => e.id === eventId ? { ...e, rsvps: prevRsvps } : e));
+      if (/rsvps/i.test(error.message || '')) {
+        alert('RSVPs need a database update.\n\nRun:\nalter table public.events add column if not exists rsvps jsonb default \'{}\';');
+      } else {
+        alert('Could not save RSVP: ' + error.message);
+      }
+      return;
+    }
+    // Notify the event creator (skip if I am the creator).
+    if (status && original.created_by && original.created_by !== me) {
+      notify([original.created_by], 'event_rsvp', {
+        event_id: eventId,
+        event_title: original.title,
+        event_date: original.date,
+        status,
+        by_name: profile.display_name,
+        by_color: profile.color,
+      });
+    }
+  };
+
+  // Create a new task linked to an event. Used from the event detail
+  // modal's "Linked tasks" inline composer. Routes through addTask so
+  // the same notification / column-strip behavior applies — we just
+  // forward `event_id` in the payload, which the strip-on-error retry
+  // loop handles gracefully if the column hasn't been migrated.
+  const addLinkedTask = async (eventId, title) => {
+    const t = (title || '').trim();
+    if (!t || !eventId) return;
+    await addTask({
+      title: t,
+      assigned_to: profile?.id || null,
+      due_date: null,
+      event_id: eventId,
+    });
   };
 
   // Note CRUD
@@ -5033,9 +5603,39 @@ export function MainApp({ profile, onSettings }) {
     }
   };
 
+  // Soft-delete a note in the home feed. The note row stays in the
+  // table so reply chains still resolve (otherwise a "replying to …"
+  // pill would dangle pointing at nothing), but its content is wiped
+  // and a `payload.deleted` flag is set. FeedPost renders the note
+  // as a small italic "deleted" tombstone in place of the original
+  // bubble. Only the author can delete — the call sites already
+  // guard this via `canDelete = n.created_by === myId`, but we
+  // re-check here as a backstop.
   const deleteNote = async (id) => {
-    setNotes(prev => prev.filter(n => n.id !== id));
-    await supabase.from('notes').delete().eq('id', id);
+    const current = notes.find(n => n.id === id);
+    if (!current) return;
+    if (current.created_by !== profile?.id) return;
+    if (current.payload?.deleted) return; // already gone
+    const newPayload = {
+      ...(current.payload || {}),
+      deleted: true,
+      deleted_at: new Date().toISOString(),
+    };
+    // Optimistic UI: clear content + unpin so the tombstone renders
+    // immediately and a pinned deleted post doesn't keep its slot.
+    setNotes(prev => prev.map(n => n.id === id
+      ? { ...n, content: '', pinned: false, payload: newPayload }
+      : n
+    ));
+    const { error } = await supabase
+      .from('notes')
+      .update({ content: '', pinned: false, payload: newPayload })
+      .eq('id', id);
+    if (error) {
+      // Revert on failure
+      setNotes(prev => prev.map(n => n.id === id ? current : n));
+      alert('Could not delete post: ' + error.message);
+    }
   };
   const deleteNotification = async (id) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
@@ -5202,7 +5802,7 @@ export function MainApp({ profile, onSettings }) {
       <DayDetailsModal
         open={!!dayDetailsDate}
         date={dayDetailsDate}
-        events={events}
+        events={expandedEvents}
         members={members}
         getProfile={getProfile}
         myId={profile?.id}
@@ -5232,6 +5832,11 @@ export function MainApp({ profile, onSettings }) {
         onClose={() => setDetailEventId(null)}
         onDelete={(id) => deleteEvent(id)}
         onShowMember={(p) => { setDetailEventId(null); setDetailMemberId(p.id); }}
+        tasks={tasks}
+        onSetRsvp={setRsvp}
+        onAddLinkedTask={addLinkedTask}
+        onToggleTask={toggleTask}
+        onOpenTask={(t) => { setDetailEventId(null); setDetailTaskId(t.id); }}
       />
       <NoteDetailsModal
         open={!!detailNoteId}

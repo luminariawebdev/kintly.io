@@ -162,6 +162,14 @@ html { overscroll-behavior-x: none; }
      header from being pushed out of view when scrolling up past 0 */
   overscroll-behavior: none;
   scrollbar-width: none;
+  /* Lay out children as a column so .fb-sec-wrap (the glass surface
+     that holds Home Feed / Tasks / Calendar) can grow with flex:1 to
+     fill any leftover viewport height. Without this, collapsing all
+     three sections left a tall dark band of bare shell background
+     below the last header — the wrap was content-sized and stopped
+     short. */
+  display: flex;
+  flex-direction: column;
 }
 .fb-scroll::-webkit-scrollbar { display: none; }
 
@@ -330,6 +338,11 @@ html { overscroll-behavior-x: none; }
   position: relative;
   isolation: isolate;
   background: var(--sec-wrap-bg);
+  /* Grow to fill the remaining vertical space inside .fb-scroll when
+     content is shorter than the viewport (e.g. all three sections are
+     collapsed). flex-shrink: 0 + flex-basis: auto means it never
+     shrinks below its natural content size when content is taller. */
+  flex: 1 0 auto;
 }
 .fb-sec-wrap::before {
   content: '';
@@ -977,6 +990,17 @@ html { overscroll-behavior-x: none; }
 .bubble-action-btn:focus-visible {
   background: rgba(255, 255, 255, 0.14);
   outline: none;
+}
+/* Destructive variant: the Delete option in the long-press action bar
+   for the post's own author. Soft pink/red tint so it reads as the
+   "dangerous" option without screaming for attention. */
+.bubble-action-btn.bubble-action-delete {
+  color: #FF8B98;
+}
+.bubble-action-btn.bubble-action-delete:hover,
+.bubble-action-btn.bubble-action-delete:focus-visible {
+  background: rgba(230, 57, 70, 0.22);
+  color: #FFC2C9;
 }
 .bubble-action-icon {
   font-size: 14px;
@@ -2924,6 +2948,162 @@ html { overscroll-behavior-x: none; }
   background: var(--hover-tint);
 }
 
+/* ── Member chip — the glass pill shape that wraps a profile
+   avatar + name. The directive is: every place in the app that
+   shows a user's identity gets the same pill bubble around it
+   (so it visually reads as "this is a person tag" anywhere it
+   appears — attendees, created_by, assigned_to, comment authors,
+   etc.). Variants are kept minimal: inherit color/cursor from
+   context; size scales with font-size. */
+.member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border-glass);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.member-chip:hover {
+  background: var(--hover-tint);
+}
+/* ── RSVP row inside the Event detail modal ──
+   Three pill buttons (Going / Maybe / Can't go) arranged in a single
+   horizontal row. Each button gets a subtle muted look by default, and
+   takes on its status color (green / amber / red) when selected. The
+   on-state uses a tinted background + bolder border, mirroring the
+   "pick" pattern used for assignee / attendee selectors so the visual
+   language of selection stays consistent across the app. */
+.rsvp-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rsvp-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-glass);
+  background: var(--surface-glass);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease);
+  flex: 1 1 0;
+  justify-content: center;
+  min-width: 0;
+}
+.rsvp-btn:hover { background: var(--hover-tint); }
+.rsvp-btn.on.rsvp-yes   { background: rgba(45, 198, 83, 0.16);  border-color: #2DC653; color: #2DC653; }
+.rsvp-btn.on.rsvp-maybe { background: rgba(255, 177, 0, 0.16);  border-color: #FFB100; color: #B57A00; }
+.rsvp-btn.on.rsvp-no    { background: rgba(230, 57, 70, 0.16);  border-color: #E63946; color: #E63946; }
+
+/* Small status pip on attendee chips inside the event detail.
+   Inherits chip layout (already inline-flex with gap 6px); we just
+   nudge the emoji a touch smaller so it reads as metadata, not a
+   second name. */
+.rsvp-pip {
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── Linked task row inside the Event detail modal.
+   A compact row with a checkmark box on the left, the title, and an
+   optional assignee chip on the right. Click the row to open the
+   task's detail; click the checkbox to toggle completion. */
+.linked-task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 160ms var(--ease);
+}
+.linked-task-row:hover { background: var(--hover-tint); }
+.linked-task-check {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-glass);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: transparent;
+  transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease);
+  padding: 0;
+}
+.linked-task-check:hover { border-color: var(--kinnekt-purple); }
+.linked-task-check.on {
+  background: var(--kinnekt-purple);
+  border-color: var(--kinnekt-purple);
+  color: #fff;
+}
+.linked-task-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.linked-task-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.linked-task-assn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Tombstone shown in place of a deleted post in the home feed.
+   Mirrors the date/time styling used inside chat bubbles (.chat-time):
+   small, italic, muted — so the deleted post visually fades into the
+   feed background and reads as a removed item without disrupting
+   conversation flow (reply context still resolves). Sits on the
+   same side as the original bubble (right for me, left for them)
+   via the parent .chat-row alignment. */
+.feed-deleted {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  opacity: 0.85;
+  background: transparent;
+  user-select: none;
+}
+
 /* Avatar variants on the standard .dot */
 .dot.avatar-img { background-color: transparent; background-repeat: no-repeat; }
 .dot.avatar-emoji {
@@ -3013,28 +3193,39 @@ html { overscroll-behavior-x: none; }
    ──────────────────────────────────────────────────────────── */
 
 /* Trigger button that replaces the cramped native <input type="date">.
-   Looks like an input field but opens the full-size DatePickerModal. */
+   Looks like an input field but opens the full-size DatePickerModal.
+   Theme-aware: uses the same glass surface as .field input so dark
+   mode gives us light-on-dark instead of the old hardcoded white bg
+   (which collided with --text-primary's light dark-mode text and
+   produced near-invisible labels in the Add Event modal). */
 .dp-trigger {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 10px 14px;
-  border: 1.5px solid var(--ink, #141414);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.85);
+  padding: 12px 16px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--r-md);
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: var(--text-primary);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   text-align: left;
   cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 .dp-trigger:hover {
-  background: var(--hover-tint);
+  background: var(--surface-glass-strong);
   border-color: var(--hover-border);
   box-shadow: var(--shadow-soft);
+}
+.dp-trigger:focus-visible {
+  outline: none;
+  border-color: var(--kinnekt-purple);
+  box-shadow: var(--shadow-glow);
 }
 
 /* Month nav strip: prev arrow ・ Month Year ・ next arrow */
