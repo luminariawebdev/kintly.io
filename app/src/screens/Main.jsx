@@ -312,7 +312,7 @@ function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
   );
 }
 
-function Dot({ profile, size = '' }) {
+function Dot({ profile, size = '', style }) {
   const avatar = profile?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
   const color = getColor(profile?.color);
@@ -327,6 +327,7 @@ function Dot({ profile, size = '' }) {
           backgroundImage: `url(${avatar})`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
+          ...style,
         }}
       />
     );
@@ -335,14 +336,14 @@ function Dot({ profile, size = '' }) {
     return (
       <span
         className={base + ' avatar-emoji'}
-        style={{ '--c': color, background: color }}
+        style={{ '--c': color, background: color, ...style }}
       >{avatar}</span>
     );
   }
   return (
     <span
       className={base}
-      style={{ '--c': color, background: color }}
+      style={{ '--c': color, background: color, ...style }}
     />
   );
 }
@@ -1785,8 +1786,8 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const [assignee, setAssignee] = React.useState(myId || null);
   const [dueOpt, setDueOpt] = React.useState('today');
   const [dueDate, setDueDate] = React.useState('');
-  const [repeatFreq, setRepeatFreq] = React.useState('none'); // none | daily | weekly | monthly
-  const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly
+  const [repeatFreq, setRepeatFreq] = React.useState('none'); // none | daily | weekly | monthly | custom
+  const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly + custom
   const [repeatTime, setRepeatTime] = React.useState('');     // HH:MM
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
@@ -1798,6 +1799,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
     if (dueOpt === 'today') return d.toISOString().slice(0, 10);
     if (dueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
     if (dueOpt === 'week') { d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
+    if (dueOpt === 'month') { d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); }
     if (dueOpt === 'pick') return dueDate || null;
     return null;
   };
@@ -1806,7 +1808,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
     if (repeatFreq === 'none') return null;
     const r = { freq: repeatFreq };
     if (repeatTime) r.time = repeatTime;
-    if (repeatFreq === 'weekly') r.days = repeatDays.slice().sort();
+    if (repeatFreq === 'weekly' || repeatFreq === 'custom') r.days = repeatDays.slice().sort();
     return r;
   };
 
@@ -1862,7 +1864,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
         <textarea
           value={description}
           onChange={e => setDescription(e.target.value.slice(0, 500))}
-          placeholder="Instructions, links, things to bring…"
+          placeholder="Add details here"
           rows={3}
           maxLength={500}
           style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 14, padding: '8px 10px', border: '1.5px solid var(--rule, #141414)', borderRadius: 8, background: 'var(--cream, #FFFEF7)', color: 'var(--ink, #141414)', outline: 'none', boxSizing: 'border-box' }}
@@ -1886,7 +1888,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
       <div className="field">
         <label>Due</label>
         <div className="date-row">
-          {[['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'This week'], ['none', 'No date'], ['pick', 'Pick…']].map(([k, lbl]) => (
+          {[['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'This week'], ['month', 'This month'], ['pick', 'Custom']].map(([k, lbl]) => (
             <button key={k} className={'pick' + (dueOpt === k ? ' on' : '')} onClick={() => setDueOpt(k)}>{lbl}</button>
           ))}
         </div>
@@ -1916,6 +1918,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
             ['daily',   'Daily'],
             ['weekly',  'Weekly'],
             ['monthly', 'Monthly'],
+            ['custom',  'Custom'],
           ].map(([k, lbl]) => (
             <button key={k} className={'pick' + (repeatFreq === k ? ' on' : '')} onClick={() => setRepeatFreq(k)}>{lbl}</button>
           ))}
@@ -1935,6 +1938,38 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
                   style={{ minWidth: 0, padding: '8px 10px' }}
                 >{day}</button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {repeatFreq === 'custom' && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
+              Repeat on
+            </div>
+            <div className="day-check-list">
+              {[
+                [1, 'Monday'],
+                [2, 'Tuesday'],
+                [3, 'Wednesday'],
+                [4, 'Thursday'],
+                [5, 'Friday'],
+                [6, 'Saturday'],
+                [0, 'Sunday'],
+              ].map(([idx, name]) => {
+                const selected = repeatDays.includes(idx);
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={'day-check-row' + (selected ? ' on' : '')}
+                    onClick={() => toggleDay(idx)}
+                  >
+                    <span className="day-check-box" aria-hidden>{selected ? '✓' : ''}</span>
+                    <span className="day-check-name">{name}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -2710,6 +2745,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     if (taskDueOpt === 'today') return d.toISOString().slice(0, 10);
     if (taskDueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
     if (taskDueOpt === 'week') { d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
+    if (taskDueOpt === 'month') { d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); }
     if (taskDueOpt === 'pick') return taskDueDate || null;
     return null;
   };
@@ -3049,7 +3085,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           <div className="field" style={{ marginBottom: 0 }}>
             <label>Due</label>
             <div className="date-row">
-              {[['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'This week'], ['none', 'No date'], ['pick', 'Pick…']].map(([k, lbl]) => (
+              {[['today', 'Today'], ['tomorrow', 'Tomorrow'], ['week', 'This week'], ['month', 'This month'], ['pick', 'Custom']].map(([k, lbl]) => (
                 <button key={k} className={'pick' + (taskDueOpt === k ? ' on' : '')} onClick={() => setTaskDueOpt(k)}>{lbl}</button>
               ))}
             </div>
@@ -3262,9 +3298,10 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
         marginBottom: 20,
         borderBottom: '1px solid var(--border-soft)',
       }}>
-        <span
-          className="dot xl"
-          style={{ '--c': getColor(member.color), background: getColor(member.color), width: 44, height: 44 }}
+        <Dot
+          profile={member}
+          size="xl"
+          style={{ width: 44, height: 44, fontSize: 28 }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
@@ -3412,6 +3449,12 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
       return `Weekly · ${days}${t}`;
     }
     if (r.freq === 'monthly') return `Every month${t}`;
+    if (r.freq === 'custom') {
+      const days = Array.isArray(r.days) && r.days.length > 0
+        ? r.days.map(i => dayNames[i]).join(', ')
+        : 'no day selected';
+      return `Custom · ${days}${t}`;
+    }
     return null;
   })();
 
