@@ -654,12 +654,12 @@ html { overscroll-behavior-x: none; }
   display: grid; grid-template-columns: repeat(7, 1fr);
   text-align: center;
   font-family: 'Inter', system-ui, sans-serif;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.10em;
-  padding: 8px 0 6px;
+  padding: 10px 0 8px;
 }
 
 .cal-grid {
@@ -673,13 +673,13 @@ html { overscroll-behavior-x: none; }
   box-shadow: var(--shadow-soft);
 }
 .cal-cell {
-  aspect-ratio: 1 / 1.05;
+  aspect-ratio: 1 / 1.84;
   border-right: 1px solid rgba(15, 30, 60, 0.05);
   border-bottom: 1px solid rgba(15, 30, 60, 0.05);
-  padding: 5px 5px 4px;
+  padding: 8px 8px 6px;
   display: flex; flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
+  gap: 4px;
+  font-size: 13px;
   position: relative;
   background: transparent;
   overflow: hidden;
@@ -709,9 +709,9 @@ html { overscroll-behavior-x: none; }
   color: var(--kinnekt-purple);
   font-weight: 700;
 }
-.cal-cell .num { font-family: 'Inter', system-ui, sans-serif; font-size: 12px; font-weight: 600; }
+.cal-cell .num { font-family: 'Inter', system-ui, sans-serif; font-size: 16px; font-weight: 600; }
 .cal-cell .evt-chip { font-family: 'Inter', system-ui, sans-serif; font-weight: 500; }
-.cal-cell .more { font-size: 9px; opacity: 0.6; font-weight: 500; }
+.cal-cell .more { font-size: 12px; opacity: 0.65; font-weight: 500; }
 
 .evt-legend {
   display: flex; gap: 14px; flex-wrap: wrap;
@@ -2601,6 +2601,16 @@ html { overscroll-behavior-x: none; }
 @keyframes sheet-slide-up {
   from { transform: translateY(100%); }
   to   { transform: translateY(0); }
+}
+/* Compact variant — used by Date / Time pickers so the sheet shrinks
+   to fit its content (wheels + Done button) and bottom-aligns near
+   the trigger button. Without this, the default min-height:75% would
+   stretch the sheet to fill most of the viewport, pushing the picker
+   wheels up into the top half of the screen and leaving a tall band
+   of empty translucent space below them. */
+.sheet.sheet-compact {
+  min-height: 0;
+  padding-bottom: 28px;
 }
 /* Grab handle area sits at the top of the sheet, full width, draggable */
 .sheet-grab {

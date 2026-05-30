@@ -123,7 +123,11 @@ export function NoteCard({ note, tall = false }) {
   );
 }
 
-export function Modal({ open, title, onClose, children, footer }) {
+// `compact` switches the sheet from the default 75%-min bottom drawer
+// to a content-sized sheet that bottom-aligns. Used by date/time
+// pickers so the wheels land near the trigger button instead of
+// drifting toward the upper half of the screen.
+export function Modal({ open, title, onClose, children, footer, compact }) {
   const sheetRef = React.useRef(null);
   const dragRef = React.useRef({ startY: 0, dragging: false, offset: 0 });
 
@@ -169,7 +173,7 @@ export function Modal({ open, title, onClose, children, footer }) {
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <div
-        className="sheet"
+        className={'sheet' + (compact ? ' sheet-compact' : '')}
         ref={sheetRef}
         onClick={(e) => e.stopPropagation()}
       >

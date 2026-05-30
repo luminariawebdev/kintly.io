@@ -749,11 +749,14 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
     return d.getFullYear() === calYear && d.getMonth() === calMonth;
   });
 
-  const eventsByDay = {};
-  monthEvents.forEach(e => {
-    const day = new Date(e.date + 'T00:00:00').getDate();
-    eventsByDay[day] = eventsByDay[day] || [];
-    eventsByDay[day].push(e);
+  // Keyed by full ISO date so dim cells (prev/next month days visible
+  // in the grid) can render their events too. monthEvents stays
+  // scoped to the current month for the section header count and the
+  // "view all" modal.
+  const eventsByDate = {};
+  expanded.forEach(e => {
+    eventsByDate[e.date] = eventsByDate[e.date] || [];
+    eventsByDate[e.date].push(e);
   });
 
   const upcoming = expanded
@@ -799,11 +802,11 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
       <div className="cal-grid">
         {cells.map((c, i) => {
           const isToday = c.m === 'curr' && isCurrentMonth && c.d === todayD;
-          const evs = c.m === 'curr' ? (eventsByDay[c.d] || []) : [];
           let cellYear = calYear, cellMonth = calMonth;
           if (c.m === 'prev') { cellMonth = calMonth - 1; if (cellMonth < 0) { cellMonth = 11; cellYear--; } }
           else if (c.m === 'next') { cellMonth = calMonth + 1; if (cellMonth > 11) { cellMonth = 0; cellYear++; } }
           const cellIso = `${cellYear}-${String(cellMonth + 1).padStart(2, '0')}-${String(c.d).padStart(2, '0')}`;
+          const evs = eventsByDate[cellIso] || [];
           return (
             <div
               key={i}
@@ -820,7 +823,7 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
                 // reconciler from collapsing two chips on the same day.
                 const key = `${e.id}::${e._occDate || e.date}`;
                 return (
-                  <div key={key} className="evt-chip" style={{ background: getColor(p?.color || e.color), fontSize: 9, padding: '1px 3px', borderRadius: 3, color: '#fff', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', marginTop: 1, cursor: 'pointer' }} title={e.title}>
+                  <div key={key} className="evt-chip" style={{ background: getColor(p?.color || e.color), fontSize: 11, lineHeight: 1.2, padding: '3px 5px', borderRadius: 4, color: '#fff', overflow: 'hidden', wordBreak: 'break-word', overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, marginTop: 2, cursor: 'pointer' }} title={e.title}>
                     {e.title}
                   </div>
                 );
@@ -1761,7 +1764,7 @@ function DatePickerModal({ open, value, title, onClose, onPick, minDate }) {
   while (cells.length < 42) cells.push(null);
 
   return (
-    <Modal open={open} onClose={onClose} title={title || 'Pick a date'}>
+    <Modal open={open} onClose={onClose} title={title || 'Pick a date'} compact>
       <div className="dp-month-nav">
         <button type="button" className="dp-nav-btn" onClick={prev} aria-label="Previous month">‹</button>
         <div className="dp-month-label">{MONTHS[viewMonth]} {viewYear}</div>
@@ -1909,6 +1912,7 @@ function TimePickerModal({ open, value, title, onClose, onPick }) {
       onClose={onClose}
       title={title || 'Pick a time'}
       footer={<button className="fb-btn solid" onClick={confirm}>Done</button>}
+      compact
     >
       <div className="tp-wheels" aria-label="Time">
         <div className="tp-band" aria-hidden />
@@ -1990,6 +1994,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   };
 
   return (
+    <>
     <Modal open={open} onClose={onClose} title={<>Add <em>task</em></>}
       footer={
         <>
@@ -2136,21 +2141,30 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
         )}
       </div>
 
-      <DatePickerModal
-        open={dueDateOpen}
-        value={dueDate}
-        title="Due date"
-        onClose={() => setDueDateOpen(false)}
-        onPick={(iso) => setDueDate(iso)}
-      />
-      <TimePickerModal
-        open={repeatTimeOpen}
-        value={repeatTime}
-        title="Repeat at"
-        onClose={() => setRepeatTimeOpen(false)}
-        onPick={(t) => setRepeatTime(t)}
-      />
     </Modal>
+    {/* Nested pickers are rendered as SIBLINGS to the parent Modal, not
+        as children of its sheet body. As a child the picker overlay's
+        `position: absolute; inset:0` was scoped to the parent sheet's
+        padding box — combined with .sheet's translucent backdrop and
+        min-height: 75%, the picker visually drifted to the upper part
+        of the screen. Hoisting it here lets its overlay use the screen-
+        level positioning context so the picker sheet slides up from
+        the bottom of the visible viewport, right under the trigger. */}
+    <DatePickerModal
+      open={dueDateOpen}
+      value={dueDate}
+      title="Due date"
+      onClose={() => setDueDateOpen(false)}
+      onPick={(iso) => setDueDate(iso)}
+    />
+    <TimePickerModal
+      open={repeatTimeOpen}
+      value={repeatTime}
+      title="Repeat at"
+      onClose={() => setRepeatTimeOpen(false)}
+      onPick={(t) => setRepeatTime(t)}
+    />
+    </>
   );
 }
 
@@ -2222,6 +2236,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
   };
 
   return (
+    <>
     <Modal open={open} onClose={onClose} title={<>Add <em>event</em></>}
       footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save event'}</button>}>
       <div className="field">
@@ -2383,28 +2398,32 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
         )}
       </div>
 
-      <DatePickerModal
-        open={dateOpen}
-        value={date}
-        title="Event date"
-        onClose={() => setDateOpen(false)}
-        onPick={(iso) => setDate(iso)}
-      />
-      <TimePickerModal
-        open={startOpen}
-        value={startTime}
-        title="Start time"
-        onClose={() => setStartOpen(false)}
-        onPick={(t) => setStartTime(t)}
-      />
-      <TimePickerModal
-        open={endOpen}
-        value={endTime}
-        title="End time"
-        onClose={() => setEndOpen(false)}
-        onPick={(t) => setEndTime(t)}
-      />
     </Modal>
+    {/* Sibling pickers — see AddTaskModal for the explanation. Mounting
+        outside the parent sheet keeps the picker's `inset:0` overlay
+        scoped to the screen, not the AddEvent sheet's translucent box. */}
+    <DatePickerModal
+      open={dateOpen}
+      value={date}
+      title="Event date"
+      onClose={() => setDateOpen(false)}
+      onPick={(iso) => setDate(iso)}
+    />
+    <TimePickerModal
+      open={startOpen}
+      value={startTime}
+      title="Start time"
+      onClose={() => setStartOpen(false)}
+      onPick={(t) => setStartTime(t)}
+    />
+    <TimePickerModal
+      open={endOpen}
+      value={endTime}
+      title="End time"
+      onClose={() => setEndOpen(false)}
+      onPick={(t) => setEndTime(t)}
+    />
+    </>
   );
 }
 
@@ -2813,7 +2832,13 @@ function MonthEventsModal({ open, onClose, monthName, year, events, members, get
             const dayEvents = grouped[date].slice().sort((a, b) => (a.start_time || '99').localeCompare(b.start_time || '99'));
             return (
               <div key={date}>
-                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--mute)', marginBottom: 8 }}>
+                {/* Date group header — bumped from 10px monospace muted-gray
+                    up to 16px Inter w/ stronger weight + higher-contrast
+                    color so it's comfortably legible. Older readers were
+                    finding the old "FRI, MAY 15" label unreadable; this
+                    keeps the brand date-strip vibe (uppercase, letter-
+                    spaced) but at a size that doesn't squint. */}
+                <div style={{ fontFamily: "'Inter', system-ui, sans-serif", fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-primary)', marginBottom: 10 }}>
                   {label}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -3278,6 +3303,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   );
 
   return (
+    <>
     <Modal open={open} onClose={onClose} title={titleNode}
       footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Posting…' : 'Post'}</button>}>
 
@@ -3615,38 +3641,40 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
         </div>
       )}
 
-      {/* Large custom date / time pickers — overlay the composer
-          modal at the same size, so cells / wheels are easy to tap
-          on mobile. */}
-      <DatePickerModal
-        open={datePickerOpen}
-        value={eventDate}
-        title="Event date"
-        onClose={() => setDatePickerOpen(false)}
-        onPick={(iso) => setEventDate(iso)}
-      />
-      <DatePickerModal
-        open={taskDatePickerOpen}
-        value={taskDueDate}
-        title="Task due date"
-        onClose={() => setTaskDatePickerOpen(false)}
-        onPick={(iso) => setTaskDueDate(iso)}
-      />
-      <TimePickerModal
-        open={startTimePickerOpen}
-        value={eventStartTime}
-        title="Start time"
-        onClose={() => setStartTimePickerOpen(false)}
-        onPick={(t) => setEventStartTime(t)}
-      />
-      <TimePickerModal
-        open={endTimePickerOpen}
-        value={eventEndTime}
-        title="End time"
-        onClose={() => setEndTimePickerOpen(false)}
-        onPick={(t) => setEventEndTime(t)}
-      />
     </Modal>
+    {/* Pickers hoisted to siblings of the composer modal — see AddTask
+        for the explanation. The previous nesting caused the picker to
+        render in the top half of the screen because its overlay's
+        `inset:0` was scoped to the composer sheet's box. */}
+    <DatePickerModal
+      open={datePickerOpen}
+      value={eventDate}
+      title="Event date"
+      onClose={() => setDatePickerOpen(false)}
+      onPick={(iso) => setEventDate(iso)}
+    />
+    <DatePickerModal
+      open={taskDatePickerOpen}
+      value={taskDueDate}
+      title="Task due date"
+      onClose={() => setTaskDatePickerOpen(false)}
+      onPick={(iso) => setTaskDueDate(iso)}
+    />
+    <TimePickerModal
+      open={startTimePickerOpen}
+      value={eventStartTime}
+      title="Start time"
+      onClose={() => setStartTimePickerOpen(false)}
+      onPick={(t) => setEventStartTime(t)}
+    />
+    <TimePickerModal
+      open={endTimePickerOpen}
+      value={eventEndTime}
+      title="End time"
+      onClose={() => setEndTimePickerOpen(false)}
+      onPick={(t) => setEventEndTime(t)}
+    />
+    </>
   );
 }
 
