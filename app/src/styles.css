@@ -3214,17 +3214,20 @@ html { overscroll-behavior-x: none; }
      bar hidden, the 54px reserved for it is too much. Use the OS
      safe-area inset so it sits flush under any real notch. */
   .fb-stickyhead {
-    padding-top: max(12px, env(safe-area-inset-top, 0px)) !important;
+    /* Real phone: pad enough to clear the OS status bar AND leave
+       room for the centered bell + profile (44px) plus a small gap
+       (8px) before the tab slider. Desktop's 118px assumes the iOS
+       mock's dynamic island; mobile has no mock so we tighten it. */
+    padding-top: calc(env(safe-area-inset-top, 12px) + 52px) !important;
   }
 
-  /* The bell + profile head row is absolutely-positioned and 54px tall
-     on desktop to sit centered in the iOS-mock status bar area. On a
-     real phone the mock is hidden and the safe-area inset is smaller,
-     so the 54px height would extend past the inset and overlap the
-     tabs. Clamp it to match the real reserve while keeping enough
-     vertical room for the 38px buttons. */
+  /* On desktop the bell + profile sit at top: 52px to clear the
+     mock's dynamic island. On a real phone there is no island, so
+     pull them back to flush against the safe-area inset (right below
+     the OS status bar). */
   .fb-stickyhead-head {
-    height: max(44px, env(safe-area-inset-top, 0px)) !important;
+    top: env(safe-area-inset-top, 0px) !important;
+    height: 44px !important;
   }
 
   /* Notifications dropdown: by default the menu is positioned inside
