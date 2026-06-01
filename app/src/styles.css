@@ -181,7 +181,7 @@ html { overscroll-behavior-x: none; }
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-soft);
-  padding-top: 78px;
+  padding-top: 118px;
 }
 .fb-stickyhead-row {
   display: grid;
@@ -209,12 +209,13 @@ html { overscroll-behavior-x: none; }
    the status bar reserve. */
 .fb-stickyhead-head {
   position: absolute;
-  top: 0;
+  top: 52px;
+  left: 0;
   right: 0;
   height: 44px;
   display: flex;
   align-items: flex-start;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 12px;
   padding: 0 12px 0;
   z-index: 2;
@@ -222,7 +223,7 @@ html { overscroll-behavior-x: none; }
 .fb-stickyhead-right {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   flex-shrink: 0;
 }
