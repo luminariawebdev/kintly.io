@@ -204,3 +204,185 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+-- ─── Shared Lists ─────────────────────────────────────────────────────────────
+-- Collaborative lists: groceries, packing, school supplies, hardware, etc.
+-- Each list belongs to a group. Items are checkable, assignable to a family
+-- member, and re-orderable. `list_type` is just a hint for the UI icon — the
+-- mechanics are the same for every kind. `event_id` makes lists linkable to
+-- events for future use (the frontend writes null today).
+create table if not exists public.shared_lists (
+  id          uuid default gen_random_uuid() primary key,
+  group_id    uuid references public.groups not null,
+  created_by  uuid references public.profiles not null,
+  title       text not null,
+  color       text default 'coral',
+  list_type   text default 'general',
+  event_id    uuid references public.events on delete set null,
+  archived_at timestamptz,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+create index if not exists shared_lists_group_idx
+  on public.shared_lists (group_id, created_at desc);
+
+create table if not exists public.shared_list_items (
+  id           uuid default gen_random_uuid() primary key,
+  list_id      uuid references public.shared_lists on delete cascade not null,
+  group_id     uuid references public.groups not null,
+  created_by   uuid references public.profiles not null,
+  title        text not null,
+  quantity     text,
+  category     text,
+  assigned_to  uuid references public.profiles,
+  completed    boolean default false,
+  completed_at timestamptz,
+  completed_by uuid references public.profiles,
+  position     int default 0,
+  created_at   timestamptz default now()
+);
+create index if not exists shared_list_items_list_idx
+  on public.shared_list_items (list_id, position);
+
+-- Activity history — short ledger of who did what. Kept simple: action is a
+-- string ('list_created' | 'item_added' | 'item_completed' | 'item_removed'
+-- | 'list_renamed' | 'list_deleted'), payload is free-form jsonb (item
+-- titles, qty, etc.). Realtime INSERTs feed the "Recent activity" stream.
+create table if not exists public.shared_list_activity (
+  id         uuid default gen_random_uuid() primary key,
+  list_id    uuid references public.shared_lists on delete cascade not null,
+  group_id   uuid references public.groups not null,
+  actor_id   uuid references public.profiles not null,
+  action     text not null,
+  payload    jsonb,
+  created_at timestamptz default now()
+);
+create index if not exists shared_list_activity_list_idx
+  on public.shared_list_activity (list_id, created_at desc);
+
+alter table public.shared_lists         enable row level security;
+alter table public.shared_list_items    enable row level security;
+alter table public.shared_list_activity enable row level security;
+
+-- shared_lists policies (group-scoped — same pattern as tasks/events)
+drop policy if exists "shared_lists_select" on public.shared_lists;
+create policy "shared_lists_select" on public.shared_lists
+  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_lists_insert" on public.shared_lists;
+create policy "shared_lists_insert" on public.shared_lists
+  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_lists_update" on public.shared_lists;
+create policy "shared_lists_update" on public.shared_lists
+  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_lists_delete" on public.shared_lists;
+create policy "shared_lists_delete" on public.shared_lists
+  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+
+-- shared_list_items policies
+drop policy if exists "shared_list_items_select" on public.shared_list_items;
+create policy "shared_list_items_select" on public.shared_list_items
+  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_list_items_insert" on public.shared_list_items;
+create policy "shared_list_items_insert" on public.shared_list_items
+  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_list_items_update" on public.shared_list_items;
+create policy "shared_list_items_update" on public.shared_list_items
+  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_list_items_delete" on public.shared_list_items;
+create policy "shared_list_items_delete" on public.shared_list_items
+  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+
+-- shared_list_activity policies (insert + select only; immutable ledger)
+drop policy if exists "shared_list_activity_select" on public.shared_list_activity;
+create policy "shared_list_activity_select" on public.shared_list_activity
+  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "shared_list_activity_insert" on public.shared_list_activity;
+create policy "shared_list_activity_insert" on public.shared_list_activity
+  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+
+-- ─── Spaces ───────────────────────────────────────────────────────────────────
+-- A Space is a lightweight organizational container for a family topic
+-- ("Italy Trip", "Garden", "Christmas"). Tasks, events, notes, and shared
+-- lists can each optionally reference a space via space_id. Deleting a space
+-- nulls those references rather than cascading — you don't lose the packing
+-- list when you delete the trip. Archive via archived_at for soft-delete.
+create table if not exists public.spaces (
+  id          uuid default gen_random_uuid() primary key,
+  group_id    uuid references public.groups not null,
+  created_by  uuid references public.profiles not null,
+  title       text not null,
+  emoji       text default '✨',
+  color       text default 'coral',
+  description text,
+  member_ids  uuid[] default '{}',
+  pinned_at   timestamptz,
+  archived_at timestamptz,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+create index if not exists spaces_group_idx
+  on public.spaces (group_id, created_at desc);
+
+alter table public.spaces enable row level security;
+
+drop policy if exists "spaces_select" on public.spaces;
+create policy "spaces_select" on public.spaces
+  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "spaces_insert" on public.spaces;
+create policy "spaces_insert" on public.spaces
+  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "spaces_update" on public.spaces;
+create policy "spaces_update" on public.spaces
+  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "spaces_delete" on public.spaces;
+create policy "spaces_delete" on public.spaces
+  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+
+-- Cross-cutting space_id columns. Nullable, so existing rows are unaffected.
+-- ON DELETE SET NULL keeps items intact when a space is hard-deleted.
+alter table public.tasks        add column if not exists space_id uuid references public.spaces on delete set null;
+alter table public.events       add column if not exists space_id uuid references public.spaces on delete set null;
+alter table public.notes        add column if not exists space_id uuid references public.spaces on delete set null;
+alter table public.shared_lists add column if not exists space_id uuid references public.spaces on delete set null;
+
+create index if not exists tasks_space_idx        on public.tasks (space_id);
+create index if not exists events_space_idx       on public.events (space_id);
+create index if not exists notes_space_idx        on public.notes (space_id);
+create index if not exists shared_lists_space_idx on public.shared_lists (space_id);
+
+-- ─── Space items (built-in checklist) ──────────────────────────────────────
+-- Folded the old standalone "Lists" feature into Spaces. Every Space can
+-- carry a flat checklist of items (the simple "Groceries with milk @mom"
+-- use case) right alongside its tagged tasks/events/notes. Shape mirrors
+-- shared_list_items; items cascade-delete with the parent space.
+create table if not exists public.space_items (
+  id           uuid default gen_random_uuid() primary key,
+  space_id     uuid references public.spaces on delete cascade not null,
+  group_id     uuid references public.groups not null,
+  created_by   uuid references public.profiles not null,
+  title        text not null,
+  quantity     text,
+  category     text,
+  assigned_to  uuid references public.profiles,
+  completed    boolean default false,
+  completed_at timestamptz,
+  completed_by uuid references public.profiles,
+  position     int default 0,
+  created_at   timestamptz default now()
+);
+create index if not exists space_items_space_idx
+  on public.space_items (space_id, position);
+
+alter table public.space_items enable row level security;
+drop policy if exists "space_items_select" on public.space_items;
+create policy "space_items_select" on public.space_items
+  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "space_items_insert" on public.space_items;
+create policy "space_items_insert" on public.space_items
+  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "space_items_update" on public.space_items;
+create policy "space_items_update" on public.space_items
+  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+drop policy if exists "space_items_delete" on public.space_items;
+create policy "space_items_delete" on public.space_items
+  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));

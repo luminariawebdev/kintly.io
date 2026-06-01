@@ -181,7 +181,7 @@ html { overscroll-behavior-x: none; }
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-soft);
-  padding-top: 54px;
+  padding-top: 78px;
 }
 .fb-stickyhead-row {
   display: grid;
@@ -201,13 +201,23 @@ html { overscroll-behavior-x: none; }
 .fb-stickyhead-corner .fb-grp-wrap,
 .fb-stickyhead-corner .fb-grp-pill { justify-self: auto; }
 
-/* Brand-on-left + stacked controls-on-right header */
+/* Header row — brand block lives on the Settings page now. The bell +
+   profile float into the 54px status-bar-reserve at the top (right-
+   aligned, vertically centered) so they fill that otherwise-empty top
+   negative space instead of occupying their own strip below it. With
+   the row taken out of flow, the slider/tab bar sits flush against
+   the status bar reserve. */
 .fb-stickyhead-head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 44px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  justify-content: flex-end;
   gap: 12px;
-  padding: 12px 12px 14px 10px;
+  padding: 0 12px 0;
+  z-index: 2;
 }
 .fb-stickyhead-right {
   display: flex;
@@ -235,6 +245,37 @@ html { overscroll-behavior-x: none; }
   color: var(--text-primary);
   line-height: 1;
   white-space: nowrap;
+}
+
+/* Settings page brand mark — logo + wordmark + tagline, centered stack.
+   This is where the app identity now lives (it used to occupy the top of
+   every Main screen). */
+.settings-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 22px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-brand svg { display: block; }
+.settings-brand-name {
+  font-family: 'Satoshi', 'Inter', system-ui, sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  color: var(--text-primary);
+  line-height: 1;
+  margin-top: 4px;
+}
+.settings-brand-tag {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  line-height: 1.2;
 }
 
 .fb-wordmark {
@@ -308,7 +349,7 @@ html { overscroll-behavior-x: none; }
 .fb-tab {
   flex: 1;
   text-align: center;
-  padding: 11px 0;
+  padding: 15px 0;
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 13px;
   font-weight: 600;
@@ -3175,6 +3216,16 @@ html { overscroll-behavior-x: none; }
     padding-top: max(12px, env(safe-area-inset-top, 0px)) !important;
   }
 
+  /* The bell + profile head row is absolutely-positioned and 54px tall
+     on desktop to sit centered in the iOS-mock status bar area. On a
+     real phone the mock is hidden and the safe-area inset is smaller,
+     so the 54px height would extend past the inset and overlap the
+     tabs. Clamp it to match the real reserve while keeping enough
+     vertical room for the 38px buttons. */
+  .fb-stickyhead-head {
+    height: max(44px, env(safe-area-inset-top, 0px)) !important;
+  }
+
   /* Notifications dropdown: by default the menu is positioned inside
      .fb-bell-wrap (a 38px-wide button container pinned to the right
      edge of the header). When the menu's max-width (320px) doesn't
@@ -3486,4 +3537,657 @@ html { overscroll-behavior-x: none; }
   .tp-column { width: 60px; }
   .tp-item   { font-size: 17px; }
   .tp-item.on { font-size: 21px; }
+}
+
+/* ───────────────────────── Shared Lists ──────────────────────────────────── */
+
+/* Quick-create row at the top of the section. */
+.list-new-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin: 6px 0 14px;
+}
+.list-new-input {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-glass);
+  background: var(--surface-glass);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.list-new-input:focus {
+  border-color: var(--kinnekt-purple);
+  background: var(--surface-glass-strong);
+}
+
+/* Stack of list cards. */
+.lists-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 32px;
+}
+
+/* One list "card" — header bar + optional expanded body. Uses --c
+   (the list's color) for the left accent stripe. */
+.list-card {
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  transition: box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.list-card.open { box-shadow: var(--shadow-medium); border-color: var(--hover-border); }
+
+.list-card-hd {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 0;
+  background: transparent;
+  border-left: 4px solid var(--c, var(--text-muted));
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  -webkit-tap-highlight-color: transparent;
+}
+.list-card-hd:hover { background: var(--hover-tint); }
+.list-card-caret {
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 18px;
+  text-align: center;
+}
+.list-card-title {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-card-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.list-card-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.list-card-del:hover { background: rgba(230, 57, 70, 0.12); color: #E63946; }
+
+/* Right-side cluster: member dots + count */
+.list-card-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.list-card-members {
+  display: flex;
+  align-items: center;
+}
+.list-member-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--c, var(--text-muted));
+  border: 2px solid var(--surface-glass);
+  margin-left: -5px;
+  display: inline-block;
+}
+.list-member-dot:first-child { margin-left: 0; }
+
+/* Expanded body */
+.list-card-body {
+  padding: 4px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.list-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 8px 0;
+}
+.list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Item row */
+.list-item-row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-glass-strong);
+  border: 1px solid var(--border-glass);
+  transition: background 0.2s var(--ease), opacity 0.2s var(--ease);
+}
+.list-item-row.done { opacity: 0.55; }
+.list-item-row.done .list-item-title { text-decoration: line-through; }
+.list-item-check {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--c, var(--text-muted));
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.list-item-check.on {
+  background: var(--c, var(--text-muted));
+  border-color: var(--c, var(--text-muted));
+}
+.list-item-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.list-item-title {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-item-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.list-item-qty {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+.list-item-cat {
+  background: var(--hover-tint);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--text-secondary);
+}
+.list-item-assn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 4px 6px;
+  border-radius: 999px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.15s var(--ease);
+}
+.list-item-assn:hover { background: var(--hover-tint); }
+.list-item-assn-name { max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item-assn-empty {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--hover-tint);
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Inline add-item composer at bottom of expanded list */
+.list-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-top: 4px;
+}
+.list-add-input {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-glass);
+  background: var(--surface-glass);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.list-add-input:focus {
+  border-color: var(--c, var(--kinnekt-purple));
+  background: var(--surface-glass-strong);
+}
+.list-add-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--c, var(--kinnekt-purple));
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+.list-add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.list-add-btn:hover:not(:disabled) { transform: scale(1.05); }
+.list-add-btn:active:not(:disabled) { transform: scale(0.95); }
+
+/* Activity feed */
+.list-activity-toggle {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+.list-activity-toggle:hover { color: var(--text-primary); }
+.list-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px dashed var(--border-glass);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+.list-activity-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.list-activity-when {
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.list-activity-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ─── Spaces ──────────────────────────────────────────────────────────────── */
+/* Card grid for the Spaces section. Mirrors lists-stack spacing. */
+.spaces-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 32px;
+}
+
+/* One Space card — a single tappable row with emoji + title + counts. */
+.space-card {
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  transition: box-shadow 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.18s var(--ease);
+}
+.space-card:hover { box-shadow: var(--shadow-medium); border-color: var(--hover-border); }
+.space-card:active { transform: scale(0.995); }
+
+.space-card-hd {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 44px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px;
+  border: 0;
+  background: transparent;
+  border-left: 5px solid var(--c, var(--text-muted));
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  -webkit-tap-highlight-color: transparent;
+}
+.space-card-hd:hover { background: var(--hover-tint); }
+
+.space-card-emoji {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--c, var(--text-muted)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c, var(--text-muted)) 25%, transparent);
+  flex-shrink: 0;
+}
+
+.space-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+.space-card-title {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.space-card-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-card-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.space-card-members {
+  display: flex;
+  align-items: center;
+}
+.space-member-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--c, var(--text-muted));
+  border: 2px solid var(--surface-glass);
+  margin-left: -5px;
+  display: inline-block;
+}
+.space-member-dot:first-child { margin-left: 0; }
+.space-card-extra {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+.space-card-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.space-card-del:hover { background: rgba(230, 57, 70, 0.12); color: #E63946; }
+
+/* Inline pill chip shown on tagged items (TaskRow / EventCard / etc.). */
+.space-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c, var(--text-muted)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c, var(--text-muted)) 30%, transparent);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  max-width: 100%;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.space-chip:hover {
+  background: color-mix(in srgb, var(--c, var(--text-muted)) 22%, transparent);
+  border-color: color-mix(in srgb, var(--c, var(--text-muted)) 45%, transparent);
+}
+.space-chip:active { transform: scale(0.96); }
+.space-chip.compact {
+  padding: 2px 8px 2px 6px;
+  font-size: 11px;
+}
+.space-chip-emoji {
+  font-size: 13px;
+  line-height: 1;
+  display: inline-block;
+}
+.space-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+/* ── Emoji input (used by AddSpaceModal + Settings avatar picker) ──
+   Text input lets users type any OS-keyboard emoji; preset grid
+   underneath is for one-tap quick picks. */
+.emoji-input-wrap { display: flex; flex-direction: column; gap: 10px; }
+.emoji-input-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+.emoji-input-preview {
+  flex-shrink: 0;
+  width: 56px; height: 56px;
+  border-radius: 14px;
+  background: var(--surface-glass-strong);
+  border: 1px solid var(--border-glass);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 30px; line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.emoji-input-preview:hover { border-color: var(--kinnekt-purple); }
+.emoji-input-preview:active { transform: scale(0.96); }
+.emoji-input-field {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-medium);
+  background: var(--surface-glass);
+  border-radius: 14px;
+  padding: 0 14px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.emoji-input-field::placeholder { color: var(--text-muted); }
+.emoji-input-field:focus {
+  border-color: var(--kinnekt-purple);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--kinnekt-purple) 18%, transparent);
+}
+.emoji-input-hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.emoji-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+}
+
+/* Legacy class kept for any callers still using the bare preset grid
+   directly. The new EmojiInput uses .emoji-preset-grid above. */
+.emoji-picker {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.emoji-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  font-size: 22px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.emoji-opt:hover { background: var(--hover-tint); }
+.emoji-opt:active { transform: scale(0.95); }
+.emoji-opt.on {
+  background: var(--surface-glass-strong);
+  border-color: var(--kinnekt-purple);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--kinnekt-purple) 25%, transparent);
+}
+
+.space-color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.space-color-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--c, var(--text-muted));
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.space-color-swatch:hover { transform: scale(1.08); }
+.space-color-swatch.on {
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 2px var(--surface-glass), 0 0 0 4px var(--c, var(--text-muted));
+}
+
+/* Floating #space autocomplete dropdown. Anchored ABOVE the input
+   (mirrors .mention-picker) so it doesn't land on top of the next
+   form field — native form controls can render above absolutely-
+   positioned siblings in some browsers regardless of z-index. */
+.space-hash-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--surface-primary);
+  border: 1.5px solid var(--border-medium);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-medium);
+  padding: 4px;
+  z-index: 200;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.space-hash-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid var(--c, transparent);
+  border-radius: 6px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s var(--ease);
+}
+.space-hash-pick-item:hover {
+  background: var(--hover-tint);
+}
+.space-hash-emoji {
+  font-size: 16px;
+  line-height: 1;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.space-hash-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.space-hash-empty {
+  padding: 10px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+  text-align: center;
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import { supabase } from '../lib/supabase';
-import { AnchorTabs, Modal } from '../Components';
+import { AnchorTabs, Modal, EmojiInput } from '../Components';
 
 const COLOR_MAP = {
   red:        '#E63946',
@@ -23,6 +23,12 @@ const getInitial = n => (n || '?')[0].toUpperCase();
 // "you" without prop-drilling `myId` everywhere. Set by MainApp via
 // <MyIdContext.Provider> and read by <MemberName>.
 const MyIdContext = React.createContext(null);
+
+// Same idea, but for Spaces — exposes the list, an opener, and a
+// profile lookup so any child component (TaskRow, EventCard, ListCard,
+// FeedPost) can render a SpaceTag chip — colored by the Space creator's
+// profile color — from just `spaceId`, without prop-drilling.
+const SpacesContext = React.createContext({ spaces: [], showSpace: null, getProfile: () => null });
 
 // Format an "HH:MM" 24-hour time string for display as 12-hour
 // w/ AM/PM. Returns '' for empty / invalid input so the caller can
@@ -76,39 +82,9 @@ function renderWithMentions(text, isMe, members) {
   });
 }
 
-function KinnektLogo({ size = 54 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="Kinnekt">
-      <defs>
-        <linearGradient id="kk-dot" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#4A6CFF" />
-          <stop offset="100%" stopColor="#5683FF" />
-        </linearGradient>
-        <linearGradient id="kk-v" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#4A6CFF" />
-          <stop offset="100%" stopColor="#6FA9FF" />
-        </linearGradient>
-        <linearGradient id="kk-u" x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0%" stopColor="#5683FF" />
-          <stop offset="100%" stopColor="#85C0FF" />
-        </linearGradient>
-        <linearGradient id="kk-d" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#3DD9C5" />
-          <stop offset="45%" stopColor="#FFA88A" />
-          <stop offset="100%" stopColor="#FF7878" />
-        </linearGradient>
-      </defs>
-      {/* Dot — the head of the i */}
-      <circle cx="22" cy="12" r="6.8" fill="url(#kk-dot)" />
-      {/* Vertical pill — body of the i, left stroke of the K */}
-      <rect x="16" y="22" width="12" height="44" rx="6" fill="url(#kk-v)" />
-      {/* Upper-right diagonal — blue gradient */}
-      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-u)" transform="rotate(-45 22 44)" />
-      {/* Lower-right diagonal — cyan → coral */}
-      <rect x="22" y="38" width="32" height="12" rx="6" fill="url(#kk-d)" transform="rotate(45 22 44)" />
-    </svg>
-  );
-}
+// KinnektLogo moved to ../Components and consumed by SettingsScreen — the
+// brand mark lives on the Settings page now, not the top sticky header, so
+// the slider/tab bar can ride flush near the top of the screen.
 
 // Synthesized bubble pop — short downward freq sweep with quick decay.
 let __audioCtx = null;
@@ -598,6 +574,9 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
             {formatDue(task.due_date)}
           </div>
         )}
+        {task.space_id && (
+          <div style={{ marginTop: 6 }}><SpaceTag spaceId={task.space_id} /></div>
+        )}
       </div>
     </div>
     </SwipeToDelete>
@@ -759,10 +738,40 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
     eventsByDate[e.date].push(e);
   });
 
+  // Upcoming events are filtered by the tab above the list.
+  //   week  = today through end of the current calendar week (Saturday)
+  //   month = today through end of the current calendar month
+  //   all   = everything from today onward (within the expansion window)
+  // Default to "week" since that's the most common quick-glance view.
+  const [upcomingFilter, setUpcomingFilter] = React.useState('week');
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const endOfWeek = new Date(todayStart);
+  endOfWeek.setDate(endOfWeek.getDate() + (6 - todayStart.getDay()));
+  endOfWeek.setHours(23, 59, 59, 999);
+  const endOfMonth = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+  const upcomingRangeEnd =
+    upcomingFilter === 'week'  ? endOfWeek  :
+    upcomingFilter === 'month' ? endOfMonth :
+    null; // 'all' — no upper bound
   const upcoming = expanded
-    .filter(e => new Date(e.date + 'T00:00:00') >= new Date(new Date().setHours(0,0,0,0)))
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '99').localeCompare(b.start_time || '99'))
-    .slice(0, 5);
+    .filter(e => {
+      const d = new Date(e.date + 'T00:00:00');
+      if (d < todayStart) return false;
+      if (upcomingRangeEnd && d > upcomingRangeEnd) return false;
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '99').localeCompare(b.start_time || '99'));
+
+  // Pagination — mirrors the home feed's "load more / see less" pills.
+  // Show the first 7 events, then a +10 bump per click; "see less"
+  // collapses back to 7. Switching tabs resets the limit so the new
+  // range starts compact rather than inheriting a previous expansion.
+  const EVENTS_INITIAL = 7;
+  const EVENTS_STEP    = 10;
+  const [eventsLimit, setEventsLimit] = React.useState(EVENTS_INITIAL);
+  React.useEffect(() => { setEventsLimit(EVENTS_INITIAL); }, [upcomingFilter]);
+  const visibleUpcoming = upcoming.slice(0, eventsLimit);
+  const hiddenEvents = Math.max(0, upcoming.length - visibleUpcoming.length);
 
   const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -846,11 +855,29 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
         <span className="plus">+</span> Add event
       </button>
 
-      {upcoming.length > 0 && (
-        <div className="upcoming-box">
-          <div className="upcoming-legend">Upcoming</div>
+      {/* Range tabs for the Upcoming list. "This week" = today through
+          Saturday, "This month" = today through end of the current
+          month. Same chip styling used by the Tasks filter for visual
+          consistency. */}
+      <div className="fb-chips" style={{ marginTop: 14 }}>
+        {[['week', 'This week'], ['month', 'This month'], ['all', 'All']].map(([k, label]) => (
+          <button
+            key={k}
+            className={'fb-chip' + (upcomingFilter === k ? ' on' : '')}
+            onClick={() => setUpcomingFilter(k)}
+          >{label}</button>
+        ))}
+      </div>
+
+      <div className="upcoming-box">
+        <div className="upcoming-legend">Upcoming</div>
+        {upcoming.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', padding: '8px 2px' }}>
+            No events {upcomingFilter === 'week' ? 'this week' : upcomingFilter === 'month' ? 'this month' : 'scheduled'}.
+          </div>
+        ) : (
           <div className="upcoming">
-            {upcoming.map(e => {
+            {visibleUpcoming.map(e => {
               const p = getProfile(e.created_by);
               const d = new Date(e.date + 'T00:00:00');
               const key = `${e.id}::${e._occDate || e.date}`;
@@ -881,8 +908,48 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+        {/* Load-more / see-less pills — same pattern as the home feed.
+            Shown only when there's something to reveal or to collapse. */}
+        {(hiddenEvents > 0 || eventsLimit > EVENTS_INITIAL) && (
+          <div className="feed-more-row">
+            {hiddenEvents > 0 && (
+              <button
+                type="button"
+                className="feed-more-pill"
+                onClick={() => setEventsLimit(l => l + EVENTS_STEP)}
+                aria-label={`Load ${Math.min(EVENTS_STEP, hiddenEvents)} more events`}
+              >
+                <span className="feed-more-arrow" aria-hidden>
+                  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                    <path d="M7 3v8m0 0l-3.5-3.5M7 11l3.5-3.5"
+                          stroke="currentColor" strokeWidth="1.8"
+                          fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <span className="feed-more-text">load more events</span>
+              </button>
+            )}
+            {eventsLimit > EVENTS_INITIAL && (
+              <button
+                type="button"
+                className="feed-more-pill feed-less-pill"
+                onClick={() => setEventsLimit(EVENTS_INITIAL)}
+                aria-label="Collapse the upcoming list back to the next few events"
+              >
+                <span className="feed-more-arrow" aria-hidden>
+                  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                    <path d="M7 11V3m0 0l-3.5 3.5M7 3l3.5 3.5"
+                          stroke="currentColor" strokeWidth="1.8"
+                          fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <span className="feed-more-text">see less</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       </>)}
     </section>
   );
@@ -1334,6 +1401,11 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
             <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
             <div className="chat-time">{when}</div>
           </div>
+          {n.space_id && (
+            <div style={{ marginTop: 4, display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start' }}>
+              <SpaceTag spaceId={n.space_id} />
+            </div>
+          )}
           <Caption />
         </div>
       </div>
@@ -1712,7 +1784,7 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
         <div className="kbd-hint" style={{ padding: '24px 0' }}>NO POSTS YET — TAP "POST" BELOW</div>
       )}
 
-      <button className="fb-btn solid" onClick={onAdd} style={{ marginTop: 14 }}>
+      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
         <span className="plus">+</span> Post
       </button>
       </>)}
@@ -1926,7 +1998,7 @@ function TimePickerModal({ open, value, title, onClose, onPick }) {
 }
 
 // ─── Add Task Modal ───────────────────────────────────────────────────────────
-function AddTaskModal({ open, onClose, members, myId, onSave }) {
+function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, onSave }) {
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [assignee, setAssignee] = React.useState(myId || null);
@@ -1935,10 +2007,16 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
   const [repeatFreq, setRepeatFreq] = React.useState('none'); // none | daily | weekly | monthly | custom
   const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly + custom
   const [repeatTime, setRepeatTime] = React.useState('');     // HH:MM
+  const [spaceId, setSpaceId] = React.useState(initialSpaceId || null);
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
   const [dueDateOpen,    setDueDateOpen]    = React.useState(false);
   const [repeatTimeOpen, setRepeatTimeOpen] = React.useState(false);
+
+  // Keep spaceId in sync when reopened (e.g. via "+ Add task" from inside a Space).
+  React.useEffect(() => {
+    if (open) setSpaceId(initialSpaceId || null);
+  }, [open, initialSpaceId]);
 
   const getDueDate = () => {
     const d = new Date();
@@ -1966,6 +2044,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
     setTitle(''); setDescription(''); setAssignee(myId || null);
     setDueOpt('today'); setDueDate('');
     setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
+    setSpaceId(initialSpaceId || null);
   };
 
   const buildPayload = () => ({
@@ -1974,6 +2053,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
     assigned_to: assignee,
     due_date: getDueDate(),
     recurrence: getRecurrence(),
+    space_id: spaceId || null,
   });
 
   const save = async () => {
@@ -2004,7 +2084,15 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
       }>
       <div className="field">
         <label>Title</label>
-        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?" onKeyDown={e => e.key === 'Enter' && save()} />
+        <div style={{ position: 'relative' }}>
+          <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?  Type # to tag a Space" onKeyDown={e => e.key === 'Enter' && save()} />
+          <SpaceHashtagDropdown
+            value={title}
+            spaces={spaces}
+            onChange={setTitle}
+            onPickSpace={setSpaceId}
+          />
+        </div>
       </div>
       <div className="field">
         <label>Details <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
@@ -2141,6 +2229,11 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
         )}
       </div>
 
+      <div className="field">
+        <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
+      </div>
+
     </Modal>
     {/* Nested pickers are rendered as SIBLINGS to the parent Modal, not
         as children of its sheet body. As a child the picker overlay's
@@ -2169,7 +2262,7 @@ function AddTaskModal({ open, onClose, members, myId, onSave }) {
 }
 
 // ─── Add Event Modal ──────────────────────────────────────────────────────────
-function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
+function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spaces, initialSpaceId }) {
   const today = new Date().toISOString().slice(0, 10);
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -2178,12 +2271,25 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
   const [attendees, setAttendees] = React.useState([]);
+  // RSVP recipients — the group members you want to request an RSVP
+  // from. They get the `event_invited` notification on save (which is
+  // the RSVP request) and are merged into the attendee list so their
+  // responses show up. Empty = no RSVP requested.
+  const [rsvpRecipients, setRsvpRecipients] = React.useState([]);
+  // Linked tasks staged for this event. Each entry is a full task
+  // payload (title, description, assigned_to, due_date, recurrence) —
+  // the same shape AddTaskModal produces. On Event save, each one is
+  // created via addTask({...task, event_id: newEvent.id}) so it lands
+  // in the assignee's regular task list AND links back to the event.
+  const [linkedTasks, setLinkedTasks] = React.useState([]);
+  const [addLinkedTaskOpen, setAddLinkedTaskOpen] = React.useState(false);
   // Recurrence — same shape used by tasks. `repeatFreq` defaults to
   // 'none' (one-off event). For 'weekly' and 'custom', `repeatDays`
   // is the set of weekdays the event repeats on (0=Sun..6=Sat). For
   // 'daily' and 'monthly' the days list is unused.
   const [repeatFreq, setRepeatFreq] = React.useState('none');
   const [repeatDays, setRepeatDays] = React.useState([]);
+  const [spaceId, setSpaceId] = React.useState(initialSpaceId || null);
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
   const [dateOpen,  setDateOpen]  = React.useState(false);
@@ -2195,15 +2301,34 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
     if (open) {
       setDate(initialDate || today);
       setAttendees([]);
+      setRsvpRecipients([]);
+      setLinkedTasks([]);
+      setAddLinkedTaskOpen(false);
       setRepeatFreq('none');
       setRepeatDays([]);
+      setSpaceId(initialSpaceId || null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialDate]);
+  }, [open, initialDate, initialSpaceId]);
 
   const toggleAttendee = (id) => {
     setAttendees(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
+
+  // RSVP recipient selection
+  const toggleRsvpRecipient = (id) => {
+    setRsvpRecipients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const allMemberIds = (members || []).map(m => m.id);
+  const allRsvpSelected = allMemberIds.length > 0 && allMemberIds.every(id => rsvpRecipients.includes(id));
+  const toggleAllRsvp = () => setRsvpRecipients(allRsvpSelected ? [] : allMemberIds);
+
+  // Linked-task staging — AddTaskModal hands us the full payload.
+  const stageLinkedTask = (taskPayload) => {
+    if (!taskPayload || !taskPayload.title) return;
+    setLinkedTasks(prev => [...prev, taskPayload]);
+  };
+  const removeLinkedTask = (idx) => setLinkedTasks(prev => prev.filter((_, i) => i !== idx));
 
   const toggleRepeatDay = (d) => {
     setRepeatDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
@@ -2219,6 +2344,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
   const save = async () => {
     if (!title.trim() || !date) return;
     setSaving(true);
+    // RSVP recipients are merged into the attendee list so addEvent's
+    // notify() loop reaches them with `event_invited` (the RSVP
+    // request) and their responses surface in the attendee list.
+    const finalAttendees = Array.from(new Set([...attendees, ...rsvpRecipients]));
     await onSave({
       title: title.trim(),
       description: description.trim() || null,
@@ -2226,11 +2355,16 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
       date,
       start_time: startTime || null,
       end_time: endTime || null,
-      attendees,
+      attendees: finalAttendees,
       recurrence: getRecurrence(),
+      linkedTasks,
+      space_id: spaceId || null,
     });
     setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
+    setRsvpRecipients([]);
+    setLinkedTasks([]); setAddLinkedTaskOpen(false);
     setRepeatFreq('none'); setRepeatDays([]);
+    setSpaceId(initialSpaceId || null);
     setSaving(false);
     onClose();
   };
@@ -2241,7 +2375,15 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
       footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save event'}</button>}>
       <div className="field">
         <label>Title</label>
-        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice" />
+        <div style={{ position: 'relative' }}>
+          <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice  ·  Type # to tag a Space" />
+          <SpaceHashtagDropdown
+            value={title}
+            spaces={spaces}
+            onChange={setTitle}
+            onPickSpace={setSpaceId}
+          />
+        </div>
       </div>
       <div className="field">
         <label>Description <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
@@ -2329,6 +2471,90 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
         </div>
       </div>
 
+      {/* Send RSVP — pick exactly who should respond. Selected members
+          get an `event_invited` notification (the RSVP request) on save
+          and are merged into the attendee list so their responses show
+          up. "Everyone" is a one-tap convenience, not the default. */}
+      <div className="field">
+        <label>Send RSVP <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <div className="assignee-picker">
+          {/* Filled gradient + 📨 only when every member is currently
+              picked; otherwise outlined off-state. Same look as the
+              AddSpaceModal "Everyone" chip. */}
+          <button
+            type="button"
+            className={'pick' + (allRsvpSelected ? ' on' : '')}
+            onClick={toggleAllRsvp}
+          >
+            <span aria-hidden>📨</span>
+            <span>Everyone</span>
+          </button>
+          {members.map(m => (
+            <button
+              key={m.id}
+              type="button"
+              className={'pick' + (rsvpRecipients.includes(m.id) ? ' on' : '')}
+              onClick={() => toggleRsvpRecipient(m.id)}
+              style={rsvpRecipients.includes(m.id) ? { '--pick-c': getColor(m.color) } : {}}
+            >
+              <Dot profile={m} />
+              <MemberName profile={m} isMe={m.id === myId} />
+            </button>
+          ))}
+        </div>
+        {rsvpRecipients.length > 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+            {rsvpRecipients.length} {rsvpRecipients.length === 1 ? 'person' : 'people'} will get a notification asking them to RSVP.
+          </div>
+        )}
+      </div>
+
+      {/* Linked tasks — full task payloads (title/details/assignee/due/
+          repeat) staged here, then created on Event save with event_id
+          pointing at the new event. Each row shows a summary; tap "+
+          Add task" to open the full AddTaskModal. */}
+      <div className="field">
+        <label>Linked tasks <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        {linkedTasks.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+            {linkedTasks.map((t, i) => {
+              const assn = t.assigned_to ? (members || []).find(m => m.id === t.assigned_to) : null;
+              const dueLbl = t.due_date
+                ? new Date(t.due_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                : null;
+              return (
+                <div key={i} className="linked-task-row" style={{ cursor: 'default' }}>
+                  <button type="button" className="linked-task-check" disabled aria-hidden style={{ pointerEvents: 'none' }} />
+                  <span className="linked-task-title" style={{ flex: 1 }}>{t.title}</span>
+                  {dueLbl && (
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{dueLbl}</span>
+                  )}
+                  {assn && (
+                    <span className="linked-task-assn">
+                      <Dot profile={assn} />
+                      <MemberName profile={assn} isMe={assn.id === myId} />
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeLinkedTask(i)}
+                    aria-label="Remove task"
+                    style={{ border: 'none', background: 'transparent', color: 'var(--text-muted)', fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}
+                  >×</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <button
+          type="button"
+          className="fb-btn"
+          onClick={() => setAddLinkedTaskOpen(true)}
+        >
+          <span className="plus">+</span> Add task
+        </button>
+      </div>
+
       {/* Repeat — same recurrence model used by tasks. When set, the
           calendar grid + upcoming list will expand this event into
           multiple instances per the rule (every day / every chosen
@@ -2398,6 +2624,11 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
         )}
       </div>
 
+      <div className="field">
+        <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
+      </div>
+
     </Modal>
     {/* Sibling pickers — see AddTaskModal for the explanation. Mounting
         outside the parent sheet keeps the picker's `inset:0` overlay
@@ -2422,6 +2653,17 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate }) {
       title="End time"
       onClose={() => setEndOpen(false)}
       onPick={(t) => setEndTime(t)}
+    />
+    {/* Nested AddTaskModal — full task form (title, details, assignee,
+        due, repeat). On save we stage the payload; the event-save flow
+        then creates it via addTask with event_id set so it lands in
+        the assignee's task list AND links back to this event. */}
+    <AddTaskModal
+      open={addLinkedTaskOpen}
+      onClose={() => setAddLinkedTaskOpen(false)}
+      members={members}
+      myId={myId}
+      onSave={stageLinkedTask}
     />
     </>
   );
@@ -2478,6 +2720,9 @@ function EventCard({ event, members, getProfile, myId, onDelete, onClick }) {
             {event.description}
           </div>
         )}
+        {event.space_id && (
+          <div style={{ marginTop: 6 }}><SpaceTag spaceId={event.space_id} /></div>
+        )}
       </div>
     </div>
     </SwipeToDelete>
@@ -2529,6 +2774,34 @@ function EventDetailsModal({
   // attendees might want to opt in / decline a wider family event.
   const canRsvp = !!onSetRsvp && !!myId;
 
+  // Local draft so tapping a chip stages the choice instead of
+  // committing it. The committed value still comes from `myRsvp`; a Save
+  // button appears whenever the draft diverges. Brief "Saved" pulse on
+  // success gives the user the confirmation that the old auto-save
+  // silently lacked.
+  const [draftRsvp, setDraftRsvp] = React.useState(myRsvp);
+  const [savingRsvp, setSavingRsvp] = React.useState(false);
+  const [savedRsvpPulse, setSavedRsvpPulse] = React.useState(false);
+  // Re-sync the draft any time the event being viewed changes, or the
+  // server-side value updates (other family member RSVPs on your behalf,
+  // realtime delivers a new payload, etc.).
+  React.useEffect(() => {
+    setDraftRsvp(myRsvp);
+    setSavedRsvpPulse(false);
+  }, [event.id, myRsvp]);
+  const rsvpDirty = draftRsvp !== myRsvp;
+  const handleSaveRsvp = async () => {
+    if (!onSetRsvp || savingRsvp) return;
+    setSavingRsvp(true);
+    try {
+      await onSetRsvp(event.id, draftRsvp);
+      setSavedRsvpPulse(true);
+      window.setTimeout(() => setSavedRsvpPulse(false), 1800);
+    } finally {
+      setSavingRsvp(false);
+    }
+  };
+
   // Recurrence label
   const recLabel = formatEventRecurrence(event.recurrence);
 
@@ -2542,22 +2815,17 @@ function EventDetailsModal({
     return (a.due_date || '').localeCompare(b.due_date || '');
   });
 
-  // Inline new-linked-task composer
-  const [newTaskTitle, setNewTaskTitle] = React.useState('');
-  const [addingTask, setAddingTask] = React.useState(false);
-  const handleAddLinkedTask = async () => {
-    const t = newTaskTitle.trim();
-    if (!t || !onAddLinkedTask) return;
-    setAddingTask(true);
-    try {
-      await onAddLinkedTask(event.id, t);
-      setNewTaskTitle('');
-    } finally {
-      setAddingTask(false);
-    }
+  // Full AddTaskModal opens on "+ Add task". onSave hands us the same
+  // payload shape AddTaskModal builds for top-level tasks — we just
+  // route it through onAddLinkedTask so event_id gets stamped on.
+  const [addLinkedTaskOpen, setAddLinkedTaskOpen] = React.useState(false);
+  const handleAddLinkedTask = async (taskPayload) => {
+    if (!taskPayload || !taskPayload.title || !onAddLinkedTask) return;
+    await onAddLinkedTask(event.id, taskPayload);
   };
 
   return (
+    <>
     <Modal open={open} onClose={onClose} title="Event">
       <div style={{
         borderLeft: `6px solid ${color}`,
@@ -2584,10 +2852,11 @@ function EventDetailsModal({
         )}
       </div>
 
-      {/* RSVP block — three buttons stacked horizontally. The current
-          selection gets a filled background + colored border. Tapping
-          the same button again clears the RSVP (returns to "no
-          response"). All three call onSetRsvp(eventId, status). */}
+      {/* RSVP block — three buttons stage a local draft, then a Save
+          button commits it. The previously-saved choice is shown via
+          the filled "on" chip styling. Tapping the same chip you
+          already saved clears the draft back to "no response"; Save
+          then writes that clear to the server. */}
       {canRsvp && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>Your RSVP</label>
@@ -2597,13 +2866,13 @@ function EventDetailsModal({
               ['maybe', 'Maybe',     '🤔'],
               ['no',    "Can't go",  '❌'],
             ].map(([val, lbl, emoji]) => {
-              const on = myRsvp === val;
+              const on = draftRsvp === val;
               return (
                 <button
                   key={val}
                   type="button"
                   className={'rsvp-btn rsvp-' + val + (on ? ' on' : '')}
-                  onClick={() => onSetRsvp(event.id, on ? null : val)}
+                  onClick={() => setDraftRsvp(on ? null : val)}
                   aria-pressed={on}
                 >
                   <span aria-hidden>{emoji}</span>
@@ -2611,6 +2880,44 @@ function EventDetailsModal({
                 </button>
               );
             })}
+          </div>
+          <div style={{
+            marginTop: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            minHeight: 32,
+          }}>
+            <span style={{
+              fontSize: 12,
+              color: savedRsvpPulse ? '#2DC653' : 'var(--text-muted)',
+              fontFamily: 'JetBrains Mono, monospace',
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              transition: 'color 0.25s var(--ease)',
+            }}>
+              {savedRsvpPulse
+                ? '✓ Saved'
+                : rsvpDirty
+                  ? 'Unsaved change'
+                  : (myRsvp ? `Saved: ${rsvpLabel(myRsvp)}` : 'No response yet')}
+            </span>
+            <button
+              type="button"
+              className="fb-btn solid"
+              onClick={handleSaveRsvp}
+              disabled={!rsvpDirty || savingRsvp}
+              style={{
+                width: 'auto',
+                padding: '8px 18px',
+                fontSize: 13,
+                opacity: (!rsvpDirty || savingRsvp) ? 0.5 : 1,
+                cursor: (!rsvpDirty || savingRsvp) ? 'default' : 'pointer',
+              }}
+            >
+              {savingRsvp ? 'Saving…' : 'Save RSVP'}
+            </button>
           </div>
         </div>
       )}
@@ -2685,23 +2992,13 @@ function EventDetailsModal({
               No tasks linked yet.
             </div>
           )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              value={newTaskTitle}
-              onChange={e => setNewTaskTitle(e.target.value.slice(0, 200))}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddLinkedTask(); } }}
-              placeholder="Add a task for this event…"
-              maxLength={200}
-              style={{ flex: 1, fontFamily: 'inherit', fontSize: 13, padding: '8px 12px', border: '1px solid var(--border-glass)', borderRadius: 999, background: 'var(--surface-glass)', color: 'var(--ink)', outline: 'none', minWidth: 0 }}
-              disabled={addingTask}
-            />
-            <button
-              onClick={handleAddLinkedTask}
-              disabled={!newTaskTitle.trim() || addingTask}
-              className="fb-btn solid"
-              style={{ width: 'auto', padding: '8px 16px', fontSize: 13, opacity: (!newTaskTitle.trim() || addingTask) ? 0.5 : 1 }}
-            >{addingTask ? '…' : 'Add'}</button>
-          </div>
+          <button
+            type="button"
+            className="fb-btn"
+            onClick={() => setAddLinkedTaskOpen(true)}
+          >
+            <span className="plus">+</span> Add task
+          </button>
         </div>
       )}
 
@@ -2766,6 +3063,20 @@ function EventDetailsModal({
         </div>
       )}
     </Modal>
+    {/* Sibling AddTaskModal — full task form. onSave returns a payload
+        we pass back to MainApp via onAddLinkedTask, which stamps
+        event_id and creates the task through addTask (so it shows up
+        in the assignee's task list + lists under this event). */}
+    {onAddLinkedTask && (
+      <AddTaskModal
+        open={addLinkedTaskOpen}
+        onClose={() => setAddLinkedTaskOpen(false)}
+        members={members}
+        myId={myId}
+        onSave={handleAddLinkedTask}
+      />
+    )}
+    </>
   );
 }
 
@@ -2864,7 +3175,7 @@ function MonthEventsModal({ open, onClose, monthName, year, events, members, get
 }
 
 // ─── Add Note Modal ───────────────────────────────────────────────────────────
-function AddNoteModal({ open, onClose, profile, members, onSave }) {
+function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initialSpaceId }) {
   const [postType, setPostType] = React.useState('message');
   const [body, setBody] = React.useState('');
   const [saving, setSaving] = React.useState(false);
@@ -2907,9 +3218,14 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   const [pollQuestion, setPollQuestion] = React.useState('');
   const [pollOptions, setPollOptions] = React.useState(['', '']);
 
+  // Optional Space tag — propagates to all generated rows (note + task + event).
+  const [spaceId, setSpaceId] = React.useState(initialSpaceId || null);
+
   // @mention state
   const editorRef = React.useRef(null);
   const [mentionAnchor, setMentionAnchor] = React.useState(null); // { query } | null
+  // #space hashtag state — same shape, different trigger character
+  const [spaceHashAnchor, setSpaceHashAnchor] = React.useState(null);
 
   // Extract plain text (with @[Name] markers) from the contentEditable editor
   const getEditorText = () => {
@@ -2970,9 +3286,10 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
       setPhotos([]);
       setPollQuestion('');
       setPollOptions(['', '']);
+      setSpaceId(initialSpaceId || null);
       setTimeout(() => editorRef.current?.focus(), 50);
     }
-  }, [open, profile?.id]);
+  }, [open, profile?.id, initialSpaceId]);
 
   // Photo upload helpers — turn user-selected files into compressed data URLs
   const handlePhotoSelect = (e) => {
@@ -3062,16 +3379,24 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [body, assigneeEdited, members, profile?.id]);
 
-  // @mention detection on every input in the contentEditable editor
+  // @mention + #space detection on every input in the contentEditable editor.
+  // Only one picker is open at a time — whichever trigger is closest to the
+  // cursor wins. Other gets cleared.
   const handleInput = () => {
     const text = getEditorText();
     setBody(text);
     const before = getTextBeforeCursor();
-    const m = before.match(/@([^@\[\]\n]*)$/);
-    if (m) {
-      setMentionAnchor({ query: m[1].toLowerCase().trim() });
+    const at = before.match(/@([^@\[\]\n#]*)$/);
+    const hash = before.match(/(?:^|\s)#([a-zA-Z0-9_-]*)$/);
+    if (at) {
+      setMentionAnchor({ query: at[1].toLowerCase().trim() });
+      setSpaceHashAnchor(null);
+    } else if (hash) {
+      setSpaceHashAnchor({ query: hash[1].toLowerCase().trim() });
+      setMentionAnchor(null);
     } else {
       setMentionAnchor(null);
+      setSpaceHashAnchor(null);
     }
   };
 
@@ -3151,11 +3476,56 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     setBody(getEditorText());
   };
 
+  // Strip the trailing `#word` from the editor (at the caret) and set
+  // spaceId so the bottom Space picker reflects the choice. Unlike
+  // insertMention we don't insert a visible chip — the SpacePicker chip
+  // at the bottom of the modal is the visible confirmation.
+  const pickSpaceHash = (space) => {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) { setSpaceHashAnchor(null); return; }
+
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const offset = range.startOffset;
+      const textBefore = node.textContent.slice(0, offset);
+      const hashMatch = textBefore.match(/(?:^|\s)#[a-zA-Z0-9_-]*$/);
+      if (hashMatch) {
+        const replaceWith = hashMatch[0].startsWith(' ') ? ' ' : '';
+        const hashStart = offset - hashMatch[0].length;
+        node.textContent =
+          node.textContent.slice(0, hashStart) +
+          replaceWith +
+          node.textContent.slice(offset);
+        // Put caret right after the replacement
+        const newOffset = hashStart + replaceWith.length;
+        const newRange = document.createRange();
+        newRange.setStart(node, Math.min(newOffset, node.textContent.length));
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+      }
+    }
+
+    setSpaceId(space.id);
+    setSpaceHashAnchor(null);
+    setBody(getEditorText());
+  };
+
   const otherMembers = (members || []).filter(m => m.id !== profile?.id);
   const mentionMatches = mentionAnchor !== null
     ? otherMembers.filter(m =>
         !mentionAnchor.query || m.display_name?.toLowerCase().startsWith(mentionAnchor.query)
       )
+    : [];
+  const spaceHashMatches = spaceHashAnchor !== null
+    ? (spaces || [])
+        .filter(s => !s.archived_at)
+        .filter(s => !spaceHashAnchor.query || s.title.toLowerCase().includes(spaceHashAnchor.query))
+        .slice(0, 6)
     : [];
 
   const getDueDate = () => {
@@ -3233,7 +3603,9 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
         type: postType,
         payload,
         pinned: finalPinned,
-      }, taskPayload, eventPayload);
+        space_id: spaceId || null,
+      }, taskPayload ? { ...taskPayload, space_id: spaceId || null } : null,
+         eventPayload ? { ...eventPayload, space_id: spaceId || null } : null);
     } catch (e) {
       alert('Error: ' + (e?.message || String(e)));
     }
@@ -3263,9 +3635,9 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
     <div className="field">
       <label>
         {labelText}
-        {otherMembers.length > 0 && (
+        {(otherMembers.length > 0 || (spaces || []).length > 0) && (
           <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
-            — type @ to tag someone
+            — type @ to tag someone, # for a Space
           </span>
         )}
       </label>
@@ -3278,7 +3650,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           data-gramm_editor="false"
           className={'mention-editor' + (extraClass ? ' ' + extraClass : '')}
           onInput={handleInput}
-          onKeyDown={(e) => { if (e.key === 'Escape') setMentionAnchor(null); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setMentionAnchor(null); setSpaceHashAnchor(null); } }}
           onPaste={handlePaste}
         />
         {!body && (
@@ -3296,6 +3668,30 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
                 <span style={{ color: getColor(m.color) }}>{m.display_name}</span>
               </button>
             ))}
+          </div>
+        )}
+        {spaceHashAnchor !== null && (
+          <div className="space-hash-picker">
+            {spaceHashMatches.length === 0 ? (
+              <div className="space-hash-empty">No matching spaces.</div>
+            ) : (
+              spaceHashMatches.map(s => {
+                const creator = (members || []).find(m => m.id === s.created_by);
+                const c = getColor(creator?.color || 'coral');
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="space-hash-pick-item"
+                    onMouseDown={(e) => { e.preventDefault(); pickSpaceHash(s); }}
+                    style={{ '--c': c }}
+                  >
+                    <span className="space-hash-emoji" aria-hidden>{s.emoji || '✨'}</span>
+                    <span className="space-hash-title">{s.title}</span>
+                  </button>
+                );
+              })
+            )}
           </div>
         )}
       </div>
@@ -3640,6 +4036,11 @@ function AddNoteModal({ open, onClose, profile, members, onSave }) {
           </div>
         </div>
       )}
+
+      <div className="field">
+        <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
+      </div>
 
     </Modal>
     {/* Pickers hoisted to siblings of the composer modal — see AddTask
@@ -4949,6 +5350,1236 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
   );
 }
 
+// ─── Shared Lists ─────────────────────────────────────────────────────────────
+// Lightweight collaborative lists (groceries, packing, hardware store, etc.).
+// Slash syntax for fast entry: "milk x2 #dairy @maya" → title="milk",
+// quantity="2", category="dairy", assigned_to=<maya's id>. Members are
+// matched by display_name prefix (case-insensitive). If a token fails to
+// match a member, it stays in the title so the user knows.
+function parseListItemInput(raw, members) {
+  let text = String(raw || '').trim();
+  let quantity = null, category = null, assigned_to = null;
+  const qm = text.match(/(?:^|\s)x(\d+(?:\.\d+)?[a-z%]*)\b/i);
+  if (qm) {
+    quantity = qm[1];
+    text = (text.slice(0, qm.index) + text.slice(qm.index + qm[0].length)).trim();
+  }
+  const cm = text.match(/(?:^|\s)#([\w-]+)/);
+  if (cm) {
+    category = cm[1];
+    text = (text.slice(0, cm.index) + text.slice(cm.index + cm[0].length)).trim();
+  }
+  const am = text.match(/(?:^|\s)@([\w-]+)/);
+  if (am) {
+    const needle = am[1].toLowerCase();
+    const match = (members || []).find(m => (m.display_name || '').toLowerCase().startsWith(needle));
+    if (match) {
+      assigned_to = match.id;
+      text = (text.slice(0, am.index) + text.slice(am.index + am[0].length)).trim();
+    }
+  }
+  return { title: text.replace(/\s+/g, ' ').trim(), quantity, category, assigned_to };
+}
+
+// Tiny relative-time helper for the activity feed ("2m ago", "yesterday").
+function relTime(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60)    return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60)    return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24)    return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d === 1)   return 'yesterday';
+  if (d < 7)     return `${d}d ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Human label for an activity row.
+function activityLabel(row, getProfile) {
+  const who = (getProfile(row.actor_id)?.display_name) || 'Someone';
+  const t = row.payload?.title || row.payload?.item_title || '';
+  switch (row.action) {
+    case 'list_created':    return `${who} created the list`;
+    case 'list_renamed':    return `${who} renamed the list`;
+    case 'list_deleted':    return `${who} deleted the list`;
+    case 'item_added':      return `${who} added ${t || 'an item'}`;
+    case 'item_completed':  return `${who} checked off ${t || 'an item'}`;
+    case 'item_uncompleted':return `${who} unchecked ${t || 'an item'}`;
+    case 'item_removed':    return `${who} removed ${t || 'an item'}`;
+    case 'item_assigned':   return `${who} assigned ${t || 'an item'}`;
+    default:                return `${who} ${row.action}`;
+  }
+}
+
+// One row inside a list. Tap the checkbox to toggle completion. Swipe-left
+// to delete (mirrors the task swipe pattern). Tap the assignee chip to
+// cycle through members (fast, no modal).
+function ListItemRow({ item, members, getProfile, myId, onToggle, onDelete, onCycleAssignee }) {
+  const assignee = item.assigned_to ? getProfile(item.assigned_to) : null;
+  const itemColor = assignee ? getColor(assignee.color) : 'var(--text-muted)';
+  return (
+    <SwipeToDelete onDelete={() => onDelete(item.id)}>
+      <div className={'list-item-row' + (item.completed ? ' done' : '')} style={{ '--c': itemColor }}>
+        <button
+          type="button"
+          className={'list-item-check' + (item.completed ? ' on' : '')}
+          onClick={() => onToggle(item.id, !item.completed)}
+          aria-label={item.completed ? 'Mark incomplete' : 'Mark complete'}
+        >{item.completed ? '✓' : ''}</button>
+        <div className="list-item-body">
+          <div className="list-item-title">{item.title}</div>
+          {(item.quantity || item.category) && (
+            <div className="list-item-meta">
+              {item.quantity && <span className="list-item-qty">×{item.quantity}</span>}
+              {item.category && <span className="list-item-cat">#{item.category}</span>}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="list-item-assn"
+          onClick={() => onCycleAssignee(item)}
+          title={assignee ? `Assigned to ${assignee.display_name}` : 'Tap to assign'}
+        >
+          {assignee
+            ? <><Dot profile={assignee} /><span className="list-item-assn-name">{assignee.display_name}</span></>
+            : <span className="list-item-assn-empty">+</span>}
+        </button>
+      </div>
+    </SwipeToDelete>
+  );
+}
+
+// Single list "card" — collapsed shows title + counts; expanded shows
+// items, the inline add composer, and an optional activity feed.
+// ─── List Detail Modal ────────────────────────────────────────────────────────
+// Full-screen bottom sheet for one list: items, add-item composer, activity.
+function ListDetailModal({ open, list, items, members, getProfile, myId, onClose, onAddItem, onToggleItem, onDeleteItem, onCycleAssignee, activity, onLoadActivity }) {
+  const [draft, setDraft] = React.useState('');
+  const [showActivity, setShowActivity] = React.useState(false);
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (open) {
+      setDraft('');
+      setShowActivity(false);
+      // Focus add-input so user can start typing immediately
+      setTimeout(() => inputRef.current?.focus(), 320);
+    }
+  }, [open]);
+
+  React.useEffect(() => {
+    if (showActivity && onLoadActivity && list?.id) onLoadActivity(list.id);
+  }, [showActivity, list?.id, onLoadActivity]);
+
+  if (!open || !list) return null;
+
+  const openItems = (items || []).filter(i => !i.completed).sort((a, b) => a.position - b.position);
+  const doneItems = (items || []).filter(i =>  i.completed).sort((a, b) => a.position - b.position);
+  const ordered   = [...openItems, ...doneItems];
+  const color     = getColor(list.color || 'coral');
+
+  const submitDraft = () => {
+    const t = draft.trim();
+    if (!t) return;
+    const parsed = parseListItemInput(t, members);
+    if (!parsed.title) return;
+    onAddItem(list.id, parsed);
+    setDraft('');
+    inputRef.current?.focus();
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={list.title}>
+      <div style={{ borderLeft: `4px solid ${color}`, paddingLeft: 12, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.06em' }}>
+          {openItems.length} {openItems.length === 1 ? 'item' : 'items'} open
+          {doneItems.length > 0 && ` · ${doneItems.length} done`}
+        </div>
+      </div>
+
+      {ordered.length > 0 ? (
+        <div className="list-items" style={{ marginBottom: 14 }}>
+          {ordered.map(it => (
+            <ListItemRow
+              key={it.id}
+              item={it}
+              members={members}
+              getProfile={getProfile}
+              myId={myId}
+              onToggle={onToggleItem}
+              onDelete={onDeleteItem}
+              onCycleAssignee={onCycleAssignee}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="list-empty" style={{ marginBottom: 14 }}>Nothing yet — add the first item below.</div>
+      )}
+
+      <div className="list-add-row">
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitDraft(); } }}
+          placeholder="Add item — try 'milk x2 #dairy @mom'"
+          className="list-add-input"
+          maxLength={200}
+        />
+        <button type="button" className="list-add-btn" onClick={submitDraft} disabled={!draft.trim()} aria-label="Add item" style={{ '--c': color }}>+</button>
+      </div>
+
+      <button type="button" className="list-activity-toggle" onClick={() => setShowActivity(s => !s)} style={{ marginTop: 10 }}>
+        {showActivity ? 'Hide activity' : 'Show activity'}
+      </button>
+      {showActivity && (
+        <div className="list-activity">
+          {(activity && activity.length > 0)
+            ? activity.slice(0, 15).map(a => (
+                <div key={a.id} className="list-activity-row">
+                  <span className="list-activity-text">{activityLabel(a, getProfile)}</span>
+                  <span className="list-activity-when">{relTime(a.created_at)}</span>
+                </div>
+              ))
+            : <div className="list-activity-empty">No activity yet.</div>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── Add List Modal ───────────────────────────────────────────────────────────
+// Name input + member picker. Opens when user clicks Create with empty input,
+// or directly via a create button press.
+function AddListModal({ open, onClose, members, myId, initialTitle = '', spaces, initialSpaceId, onSave }) {
+  const [title, setTitle]       = React.useState('');
+  const [memberIds, setMemberIds] = React.useState([]);
+  const [spaceId, setSpaceId]   = React.useState(initialSpaceId || null);
+  const [saving, setSaving]     = React.useState(false);
+
+  // Reset every time the modal opens; pre-fill title if caller passed one.
+  React.useEffect(() => {
+    if (open) {
+      setTitle(initialTitle || '');
+      // Start empty so the "Everyone" chip isn't pre-highlighted — the
+      // user actively picks members (or taps Everyone). The list-helper
+      // text below the picker handles the "no one selected" state.
+      setMemberIds([]);
+      setSpaceId(initialSpaceId || null);
+      setSaving(false);
+    }
+  }, [open, initialTitle, members, initialSpaceId]);
+
+  const toggleMember = (id) => {
+    setMemberIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const allSelected = (members || []).length > 0 && (members || []).every(m => memberIds.includes(m.id));
+
+  const save = async () => {
+    const t = title.trim();
+    if (!t || saving) return;
+    setSaving(true);
+    const result = await onSave({ title: t, memberIds, spaceId });
+    setSaving(false);
+    if (!result?.error) onClose();
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={<>New <em>list</em></>}
+      footer={
+        <button className="fb-btn solid" onClick={save} disabled={!title.trim() || saving}>
+          {saving ? 'Creating…' : 'Create list'}
+        </button>
+      }
+    >
+      <div className="field">
+        <label>List name</label>
+        <div style={{ position: 'relative' }}>
+          <input
+            autoFocus
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
+            placeholder="e.g. Groceries, School supplies"
+            maxLength={120}
+          />
+          <SpaceHashtagDropdown
+            value={title}
+            spaces={spaces}
+            onChange={setTitle}
+            onPickSpace={setSpaceId}
+          />
+        </div>
+      </div>
+      <div className="field">
+        <label>
+          Shared with
+          <span style={{ fontWeight: 400, opacity: 0.5 }}> · tap to change</span>
+        </label>
+        <div className="assignee-picker">
+          {/* Everyone shortcut — gradient + envelope only when actually
+              all-selected. Same visual treatment as the other Add* modals. */}
+          <button
+            type="button"
+            className={'pick' + (allSelected ? ' on' : '')}
+            onClick={() => setMemberIds(allSelected ? [] : (members || []).map(m => m.id))}
+          >
+            <span aria-hidden>📨</span>
+            <span>Everyone</span>
+          </button>
+          {(members || []).map(m => (
+            <button
+              key={m.id}
+              type="button"
+              className={'pick' + (memberIds.includes(m.id) ? ' on' : '')}
+              onClick={() => toggleMember(m.id)}
+              style={memberIds.includes(m.id) ? { '--pick-c': getColor(m.color) } : {}}
+            >
+              <Dot profile={m} />
+              <MemberName profile={m} isMe={m.id === myId} />
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+          {memberIds.length === 0
+            ? 'No one selected — only you will see this list.'
+            : memberIds.length === (members || []).length
+            ? 'Everyone in the group can see this list.'
+            : `${memberIds.length} ${memberIds.length === 1 ? 'person' : 'people'} will see this list.`}
+        </div>
+      </div>
+      <div className="field">
+        <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
+      </div>
+    </Modal>
+  );
+}
+
+// ─── List Card (section row) ──────────────────────────────────────────────────
+// Tap to open ListDetailModal. Shows title, counts, member avatars, delete.
+function ListCard({ list, items, members, getProfile, myId, onOpen, onDeleteList }) {
+  const openCount = (items || []).filter(i => !i.completed).length;
+  const doneCount = (items || []).filter(i =>  i.completed).length;
+  const color     = getColor(list.color || 'coral');
+
+  // Member avatars for who the list is shared with
+  const sharedWith = Array.isArray(list.member_ids) && list.member_ids.length > 0
+    ? list.member_ids.map(id => getProfile(id)).filter(Boolean)
+    : members || [];
+
+  return (
+    <div className="list-card" style={{ '--c': color }}>
+      <button type="button" className="list-card-hd" onClick={() => onOpen(list)}>
+        <span className="list-card-caret" aria-hidden>▸</span>
+        <span className="list-card-title">{list.title}</span>
+        <div className="list-card-right">
+          {/* Member dot cluster */}
+          <span className="list-card-members">
+            {sharedWith.slice(0, 4).map(m => (
+              <span key={m.id} title={m.display_name || m.name} style={{ '--c': getColor(m.color) }} className="list-member-dot" />
+            ))}
+            {sharedWith.length > 4 && <span className="list-card-count" style={{ fontSize: 10 }}>+{sharedWith.length - 4}</span>}
+          </span>
+          <span className="list-card-count">
+            {openCount} {openCount === 1 ? 'item' : 'items'}
+            {doneCount > 0 && <> · {doneCount} done</>}
+          </span>
+        </div>
+        {list.created_by === myId && (
+          <span
+            role="button"
+            tabIndex={0}
+            className="list-card-del"
+            aria-label="Delete list"
+            onClick={e => { e.stopPropagation(); if (window.confirm(`Delete "${list.title}"?`)) onDeleteList(list.id); }}
+          >×</span>
+        )}
+      </button>
+      {list.space_id && (
+        <div style={{ padding: '0 12px 10px' }}>
+          <SpaceTag spaceId={list.space_id} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ListsSection({
+  lists, listItems, members, getProfile, myId,
+  collapsed, onToggleCollapse,
+  onAddList, onDeleteList,
+  onAddItem, onToggleItem, onDeleteItem, onCycleAssignee,
+  activityByList, onLoadActivity,
+  // Modal callbacks — state lives in MainApp so modals render at screen
+  // level (same as AddTaskModal/AddEventModal) and scroll stays isolated.
+  onOpenAddModal, onOpenDetail,
+}) {
+  // Only show lists the current user is a member of (or created).
+  // Lists without member_ids (legacy / no column yet) are visible to all.
+  const visibleLists = (lists || [])
+    .filter(l => {
+      if (l.archived_at) return false;
+      if (l.created_by === myId) return true;
+      if (!Array.isArray(l.member_ids) || l.member_ids.length === 0) return true;
+      return l.member_ids.includes(myId);
+    })
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  const totalOpenItems = (listItems || []).filter(i => {
+    const list = visibleLists.find(l => l.id === i.list_id);
+    return list && !i.completed;
+  }).length;
+
+  return (
+    <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-lists">
+      <div className="fb-sec-hd">
+        <div className="fb-sec-hd-left">
+          <h2 className="fb-sec-title">Shared <em>lists</em></h2>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
+        </div>
+        <div className="fb-sec-hd-right">
+          <div className="fb-sec-meta">{totalOpenItems} open</div>
+        </div>
+      </div>
+
+      {!collapsed && (<>
+      {/* Same primary section-action button as "+ Add task" / "+ Post". */}
+      <button className="fb-btn" onClick={() => onOpenAddModal?.()}>
+        <span className="plus">+</span> Create list
+      </button>
+
+      {visibleLists.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', padding: '16px 2px', marginTop: 32 }}>
+          No lists yet — tap <strong>+ Create list</strong> to get started.
+        </div>
+      ) : (
+        <div className="lists-stack">
+          {visibleLists.map(list => (
+            <ListCard
+              key={list.id}
+              list={list}
+              items={(listItems || []).filter(i => i.list_id === list.id)}
+              members={members}
+              getProfile={getProfile}
+              myId={myId}
+              onOpen={onOpenDetail}
+              onDeleteList={onDeleteList}
+            />
+          ))}
+        </div>
+      )}
+      </>)}
+    </section>
+  );
+}
+
+// ─── Spaces ───────────────────────────────────────────────────────────────────
+// A Space is a lightweight tag that groups related tasks/lists/notes/events
+// into one view ("Italy Trip", "Garden", "Christmas"). Items keep living in
+// their normal sections; the Space view is a filter across all four types.
+const SPACE_EMOJI_OPTIONS = [
+  '✨', '🏕️', '🇮🇹', '🎄', '🌱', '⚽',
+  '🎒', '🏠', '🎂', '📚', '🏖️', '🍳',
+  '🚗', '🐾', '🎁', '🎨', '🛠️', '🧺',
+];
+
+const SPACE_COLOR_OPTIONS = [
+  'coral', 'amber', 'green', 'teal', 'blue',
+  'periwinkle', 'plum', 'rose', 'red',
+];
+
+// Small inline pill that shows a Space's emoji + title. Used on TaskRows,
+// EventCards, ListCards, FeedPosts so a tagged item visually carries its
+// Space membership. Tapping (when onClick is provided) opens the Space.
+// `color` overrides the space's stored color — callers pass the Space
+// creator's profile color so the chip stays consistent with the rest
+// of that user's items, app-wide.
+function SpaceChip({ space, onClick, compact = false, color }) {
+  if (!space) return null;
+  const c = color || getColor('coral');
+  return (
+    <button
+      type="button"
+      className={'space-chip' + (compact ? ' compact' : '')}
+      style={{ '--c': c }}
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick(space); } : undefined}
+      title={space.title}
+    >
+      <span className="space-chip-emoji" aria-hidden>{space.emoji || '✨'}</span>
+      <span className="space-chip-title">{space.title}</span>
+    </button>
+  );
+}
+
+// Context-aware chip rendered on TaskRow / EventCard / ListCard / FeedPost
+// whenever the item has a space_id. Resolves the Space from context and
+// opens its detail modal on tap. Color is derived from the Space
+// creator's profile color so it stays in sync app-wide.
+function SpaceTag({ spaceId, compact = true }) {
+  const { spaces, showSpace, getProfile } = React.useContext(SpacesContext);
+  if (!spaceId) return null;
+  const space = (spaces || []).find(s => s.id === spaceId);
+  if (!space) return null;
+  const creator = getProfile?.(space.created_by);
+  const color = getColor(creator?.color || 'coral');
+  return <SpaceChip space={space} compact={compact} onClick={showSpace || undefined} color={color} />;
+}
+
+// Local wrapper around the shared EmojiInput so callers in this file
+// still write <EmojiPicker value=… onChange=… />. Uses the Space-topic
+// presets as quick picks; the underlying input accepts any iOS emoji.
+function EmojiPicker({ value, onChange }) {
+  return (
+    <EmojiInput
+      value={value}
+      onChange={onChange}
+      presets={SPACE_EMOJI_OPTIONS}
+    />
+  );
+}
+
+// Color swatch row matching the existing color palette.
+function SpaceColorPicker({ value, onChange }) {
+  return (
+    <div className="space-color-picker" role="radiogroup" aria-label="Color">
+      {SPACE_COLOR_OPTIONS.map(c => (
+        <button
+          key={c}
+          type="button"
+          role="radio"
+          aria-checked={value === c}
+          className={'space-color-swatch' + (value === c ? ' on' : '')}
+          style={{ '--c': getColor(c) }}
+          onClick={() => onChange(c)}
+          aria-label={c}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Picker row used inside AddTask/AddEvent/AddNote/AddList modals so each
+// item can optionally be tagged into a Space at creation time. Horizontal
+// chip strip — "None" + each available Space — single-select. Chip color
+// pulls from the Space creator's profile so the visual matches them
+// everywhere else.
+function SpacePicker({ value, spaces, onChange }) {
+  const { getProfile } = React.useContext(SpacesContext);
+  const visible = (spaces || []).filter(s => !s.archived_at);
+  return (
+    <div className="assignee-picker">
+      <button
+        type="button"
+        className={'pick' + (!value ? ' on' : '')}
+        onClick={() => onChange(null)}
+        style={!value ? { '--pick-c': 'var(--text-muted)' } : {}}
+      >
+        None
+      </button>
+      {visible.map(s => {
+        const on = value === s.id;
+        const creator = getProfile?.(s.created_by);
+        const c = getColor(creator?.color || 'coral');
+        return (
+          <button
+            key={s.id}
+            type="button"
+            className={'pick' + (on ? ' on' : '')}
+            onClick={() => onChange(s.id)}
+            style={on ? { '--pick-c': c } : {}}
+            title={s.title}
+          >
+            <span style={{ fontSize: 14 }} aria-hidden>{s.emoji || '✨'}</span>
+            <span>{s.title}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Inline `#space` autocomplete dropdown for plain <input> fields.
+// Detects a trailing `#word` token and shows matching Spaces. On pick,
+// strips the `#word` from the input value and sets the Space tag via
+// onPickSpace — the modal's existing SpacePicker chip lights up too,
+// so the user gets visual confirmation in two places.
+function SpaceHashtagDropdown({ value, spaces, onChange, onPickSpace }) {
+  const { getProfile } = React.useContext(SpacesContext);
+  const match = /(?:^|\s)#([a-zA-Z0-9_-]*)$/.exec(value || '');
+  if (!match) return null;
+  const query = match[1].toLowerCase();
+  const filtered = (spaces || [])
+    .filter(s => !s.archived_at)
+    .filter(s => !query || s.title.toLowerCase().includes(query))
+    .slice(0, 6);
+
+  const pick = (space) => {
+    const stripped = (value || '')
+      .replace(/(?:^|\s)#[a-zA-Z0-9_-]*$/, (m) => m.startsWith(' ') ? ' ' : '')
+      .trimEnd();
+    onChange(stripped);
+    onPickSpace(space.id);
+  };
+
+  return (
+    <div className="space-hash-picker">
+      {filtered.length === 0 ? (
+        <div className="space-hash-empty">No matching spaces.</div>
+      ) : (
+        filtered.map(s => {
+          const creator = getProfile?.(s.created_by);
+          const c = getColor(creator?.color || 'coral');
+          return (
+            <button
+              key={s.id}
+              type="button"
+              className="space-hash-pick-item"
+              onMouseDown={(e) => { e.preventDefault(); pick(s); }}
+              style={{ '--c': c }}
+            >
+              <span className="space-hash-emoji" aria-hidden>{s.emoji || '✨'}</span>
+              <span className="space-hash-title">{s.title}</span>
+            </button>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// Full-width Space card shown inside SpacesSection. Counts are an
+// at-a-glance summary of how many items across all four content types
+// currently belong to this Space.
+function SpaceCard({ space, counts, members, getProfile, myId, onOpen, onDeleteSpace }) {
+  // Color derives from the Space creator's profile color so the visual
+  // identity follows them app-wide. If they change their profile color,
+  // every space they made re-tints to match.
+  const creator = getProfile?.(space.created_by);
+  const color = getColor(creator?.color || 'coral');
+  const sharedWith = Array.isArray(space.member_ids) && space.member_ids.length > 0
+    ? space.member_ids.map(id => getProfile(id)).filter(Boolean)
+    : members || [];
+  const totalOpen = (counts?.openTasks || 0)
+    + (counts?.upcomingEvents || 0)
+    + (counts?.openListItems || 0)
+    + (counts?.notes || 0);
+
+  return (
+    <div className="space-card" style={{ '--c': color }}>
+      <button type="button" className="space-card-hd" onClick={() => onOpen(space)}>
+        <span className="space-card-emoji" aria-hidden>{space.emoji || '✨'}</span>
+        <div className="space-card-body">
+          <div className="space-card-title">{space.title}</div>
+          <div className="space-card-meta">
+            {totalOpen === 0
+              ? 'Empty'
+              : [
+                  counts?.openTasks ? `${counts.openTasks} task${counts.openTasks === 1 ? '' : 's'}` : null,
+                  counts?.upcomingEvents ? `${counts.upcomingEvents} event${counts.upcomingEvents === 1 ? '' : 's'}` : null,
+                  counts?.openListItems ? `${counts.openListItems} item${counts.openListItems === 1 ? '' : 's'}` : null,
+                  counts?.notes ? `${counts.notes} note${counts.notes === 1 ? '' : 's'}` : null,
+                ].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+        <div className="space-card-right">
+          <span className="space-card-members">
+            {sharedWith.slice(0, 4).map(m => (
+              <span key={m.id} title={m.display_name || m.name}
+                    style={{ '--c': getColor(m.color) }} className="space-member-dot" />
+            ))}
+            {sharedWith.length > 4 && (
+              <span className="space-card-extra">+{sharedWith.length - 4}</span>
+            )}
+          </span>
+        </div>
+        {space.created_by === myId && (
+          <span
+            role="button"
+            tabIndex={0}
+            className="space-card-del"
+            aria-label="Delete space"
+            onClick={e => {
+              e.stopPropagation();
+              if (window.confirm(`Delete "${space.title}"? Items tagged with this space will be unassigned but not deleted.`)) {
+                onDeleteSpace(space.id);
+              }
+            }}
+          >×</span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function AddSpaceModal({ open, onClose, members, myId, initial, onSave }) {
+  const [title, setTitle] = React.useState('');
+  const [emoji, setEmoji] = React.useState('✨');
+  const [color, setColor] = React.useState('coral');
+  const [description, setDescription] = React.useState('');
+  const [memberIds, setMemberIds] = React.useState([]);
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setTitle(initial?.title || '');
+    setEmoji(initial?.emoji || '✨');
+    setColor(initial?.color || 'coral');
+    setDescription(initial?.description || '');
+    // When editing, preserve the saved member list. When creating fresh,
+    // start empty so the "Everyone" chip isn't pre-highlighted — the
+    // user actively picks (or taps Everyone).
+    setMemberIds(
+      Array.isArray(initial?.member_ids) && initial.member_ids.length > 0
+        ? initial.member_ids
+        : []
+    );
+    setSaving(false);
+  }, [open, initial, members]);
+
+  const isEdit = !!initial?.id;
+  const toggleMember = (id) => {
+    setMemberIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const allSelected = (members || []).length > 0 && (members || []).every(m => memberIds.includes(m.id));
+
+  const save = async () => {
+    const t = title.trim();
+    if (!t || saving) return;
+    setSaving(true);
+    const result = await onSave({
+      id: initial?.id,
+      title: t, emoji, color,
+      description: description.trim(),
+      memberIds,
+    });
+    setSaving(false);
+    if (!result?.error) onClose();
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? <>Edit <em>space</em></> : <>New <em>space</em></>}
+      footer={
+        <button className="fb-btn solid" onClick={save} disabled={!title.trim() || saving}>
+          {saving ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save changes' : 'Create space')}
+        </button>
+      }
+    >
+      {!isEdit && (
+        <div style={{
+          fontSize: 13,
+          lineHeight: 1.5,
+          color: 'var(--text-muted)',
+          padding: '2px 0 14px',
+          marginBottom: 14,
+          borderBottom: '1px solid var(--border-soft)',
+        }}>
+          A Space is a hub for one project, trip, or family event — like a vacation,
+          a renovation, or a wedding. Tag any task, event, list, or post with this
+          Space and it'll show up here too, gathered with everything else for the
+          same topic.
+        </div>
+      )}
+      <div className="field">
+        <label>Name</label>
+        <input
+          autoFocus
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
+          placeholder="e.g. Italy Trip, Christmas, Garden"
+          maxLength={120}
+        />
+      </div>
+      <div className="field">
+        <label>Icon</label>
+        <EmojiPicker value={emoji} onChange={setEmoji} />
+      </div>
+      {/* No color picker — every Space wears its creator's profile color,
+          so the visual identity stays consistent app-wide and updates
+          automatically when the creator changes their profile color. */}
+      <div className="field">
+        <label>Description <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <textarea
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="What's this space for?"
+          rows={2}
+          maxLength={400}
+          style={{
+            width: '100%', resize: 'vertical',
+            padding: '10px 12px',
+            border: '1px solid var(--border-soft)',
+            background: 'var(--surface-glass-strong)',
+            borderRadius: 10, fontFamily: 'inherit', fontSize: 14, color: 'var(--text-primary)',
+          }}
+        />
+      </div>
+      <div className="field">
+        <label>
+          Shared with
+          <span style={{ fontWeight: 400, opacity: 0.5 }}> · tap to change</span>
+        </label>
+        <div className="assignee-picker">
+          {/* "Everyone" — gradient-filled with 📨 envelope ONLY when all
+              members are actually selected. Otherwise outlined off-state.
+              Matches the Send RSVP chip in AddEventModal exactly. */}
+          <button
+            type="button"
+            className={'pick' + (allSelected ? ' on' : '')}
+            onClick={() => setMemberIds(allSelected ? [] : (members || []).map(m => m.id))}
+          >
+            <span aria-hidden>📨</span>
+            <span>Everyone</span>
+          </button>
+          {(members || []).map(m => (
+            <button
+              key={m.id}
+              type="button"
+              className={'pick' + (memberIds.includes(m.id) ? ' on' : '')}
+              onClick={() => toggleMember(m.id)}
+              style={memberIds.includes(m.id) ? { '--pick-c': getColor(m.color) } : {}}
+            >
+              <Dot profile={m} />
+              <MemberName profile={m} isMe={m.id === myId} />
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+          {memberIds.length === 0
+            ? 'No one selected — only you will see this space.'
+            : memberIds.length === (members || []).length
+            ? 'Everyone in the group can see this space.'
+            : `${memberIds.length} ${memberIds.length === 1 ? 'person' : 'people'} will see this space.`}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// The big "click into a Space" popup. Mirrors MemberDetailsModal — header,
+// then sections of items grouped by type. Each section has a quick "+ Add"
+// that opens the corresponding Add* modal with space_id pre-set.
+function SpaceDetailModal({
+  open, space, onClose,
+  tasks, events, notes, lists, listItems,
+  spaceItems, onAddSpaceItem, onToggleSpaceItem, onDeleteSpaceItem, onCycleSpaceItemAssignee,
+  members, getProfile, myId,
+  onEdit, onArchive, onAddTask, onAddEvent, onAddNote, onAddList,
+  onShowTask, onShowEvent, onShowNote, onOpenList,
+}) {
+  const [checklistDraft, setChecklistDraft] = React.useState('');
+  const checklistInputRef = React.useRef(null);
+
+  // Reset checklist draft when modal opens/switches spaces.
+  React.useEffect(() => {
+    if (open) setChecklistDraft('');
+  }, [open, space?.id]);
+
+  if (!open || !space) return null;
+
+  // Color derives from the Space creator's profile — same rule used
+  // throughout: items always wear the color of the person who made them.
+  const creator = getProfile?.(space.created_by);
+  const color = getColor(creator?.color || 'coral');
+  const sharedWith = Array.isArray(space.member_ids) && space.member_ids.length > 0
+    ? space.member_ids.map(id => getProfile(id)).filter(Boolean)
+    : members || [];
+
+  const spaceTasks  = (tasks  || []).filter(t => t.space_id === space.id);
+  const spaceEvents = (events || []).filter(e => e.space_id === space.id);
+  const spaceNotes  = (notes  || []).filter(n => n.space_id === space.id);
+  const spaceLists  = (lists  || []).filter(l => l.space_id === space.id);
+  // Built-in checklist items (the absorbed "Lists" feature). Sorted with
+  // open items first, then completed, both by position to preserve order.
+  const myItems = (spaceItems || []).filter(i => i.space_id === space.id);
+  const openItems = myItems.filter(i => !i.completed).sort((a, b) => a.position - b.position);
+  const doneItems = myItems.filter(i =>  i.completed).sort((a, b) => a.position - b.position);
+  const orderedItems = [...openItems, ...doneItems];
+
+  const submitChecklistDraft = () => {
+    const t = (checklistDraft || '').trim();
+    if (!t || !onAddSpaceItem) return;
+    const parsed = parseListItemInput(t, members);
+    if (!parsed.title) return;
+    onAddSpaceItem(space.id, parsed);
+    setChecklistDraft('');
+    checklistInputRef.current?.focus();
+  };
+
+  const openTasks = spaceTasks.filter(t => !t.completed && !t.cancelled_at);
+  const doneTasks = spaceTasks.filter(t => t.completed);
+  const today = new Date().toISOString().slice(0, 10);
+  const upcoming = spaceEvents
+    .filter(e => e.date >= today)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const past = spaceEvents
+    .filter(e => e.date < today)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const itemStyle = {
+    padding: '10px 12px',
+    background: 'var(--surface-glass-strong)',
+    border: '1px solid var(--border-glass)',
+    borderRadius: 12,
+    cursor: 'pointer',
+    fontSize: 13,
+    lineHeight: 1.4,
+  };
+  const sectionLabelStyle = {
+    fontFamily: 'Inter, system-ui, sans-serif',
+    fontSize: 10, fontWeight: 700,
+    textTransform: 'uppercase', letterSpacing: '0.14em',
+    color: 'var(--text-muted)',
+    marginBottom: 10,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  };
+  const emptyStyle = { fontSize: 13, fontStyle: 'italic', color: 'var(--text-muted)' };
+  const addBtnStyle = {
+    fontSize: 11, fontWeight: 600, padding: '4px 10px',
+    borderRadius: 999, border: '1px solid var(--border-soft)',
+    background: 'transparent', cursor: 'pointer',
+    color: 'var(--text-primary)', letterSpacing: '0.04em',
+    textTransform: 'none',
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Space">
+      {/* Header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 14,
+        padding: '4px 0 18px', marginBottom: 18,
+        borderBottom: '1px solid var(--border-soft)',
+      }}>
+        <div style={{
+          width: 56, height: 56, borderRadius: 16,
+          background: `${color}1a`, border: `1px solid ${color}40`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 30, flexShrink: 0,
+        }} aria-hidden>{space.emoji || '✨'}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontFamily: 'Satoshi, Inter, system-ui, sans-serif',
+            fontSize: 22, fontWeight: 700, lineHeight: 1.15,
+            letterSpacing: '-0.02em', color: 'var(--text-primary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{space.title}</div>
+          {space.description && (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+              {space.description}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+            {sharedWith.slice(0, 6).map(m => (
+              <span key={m.id} title={m.display_name}
+                    style={{ '--c': getColor(m.color) }} className="space-member-dot" />
+            ))}
+            {sharedWith.length > 6 && (
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
+                +{sharedWith.length - 6}
+              </span>
+            )}
+            <span style={{
+              marginLeft: 'auto', display: 'flex', gap: 6,
+            }}>
+              {space.created_by === myId && (
+                <button type="button" onClick={() => onEdit && onEdit(space)} style={addBtnStyle}>Edit</button>
+              )}
+              {space.created_by === myId && (
+                <button type="button" onClick={() => onArchive && onArchive(space)} style={addBtnStyle}>
+                  {space.archived_at ? 'Unarchive' : 'Archive'}
+                </button>
+              )}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Checklist — the absorbed "Lists" feature. Always rendered so an
+          empty Space can be used as a simple to-buy list with zero setup.
+          Uses the same ListItemRow primitive as the old ListDetailModal,
+          plus the same parseListItemInput so "milk x2 #dairy @mom" works
+          identically here. */}
+      <div style={{ marginBottom: 22 }}>
+        <div style={sectionLabelStyle}>
+          <span>Checklist {openItems.length > 0 && <span style={{ color }}>· {openItems.length} open</span>}
+            {doneItems.length > 0 && <span style={{ color: 'var(--text-muted)' }}> · {doneItems.length} done</span>}
+          </span>
+        </div>
+        {orderedItems.length > 0 && (
+          <div className="list-items" style={{ marginBottom: 10 }}>
+            {orderedItems.map(it => (
+              <ListItemRow
+                key={it.id}
+                item={it}
+                members={members}
+                getProfile={getProfile}
+                myId={myId}
+                onToggle={onToggleSpaceItem}
+                onDelete={onDeleteSpaceItem}
+                onCycleAssignee={onCycleSpaceItemAssignee}
+              />
+            ))}
+          </div>
+        )}
+        <div className="list-add-row">
+          <input
+            ref={checklistInputRef}
+            value={checklistDraft}
+            onChange={e => setChecklistDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitChecklistDraft(); } }}
+            placeholder="Add item — try 'milk x2 @mom'"
+            className="list-add-input"
+            maxLength={200}
+          />
+          <button
+            type="button"
+            className="list-add-btn"
+            onClick={submitChecklistDraft}
+            disabled={!checklistDraft.trim()}
+            aria-label="Add item"
+            style={{ '--c': color }}
+          >+</button>
+        </div>
+      </div>
+
+      {/* Upcoming events */}
+      <div style={{ marginBottom: 22 }}>
+        <div style={sectionLabelStyle}>
+          <span>Upcoming events {upcoming.length > 0 && <span style={{ color }}>· {upcoming.length}</span>}</span>
+          <button type="button" style={addBtnStyle} onClick={() => onAddEvent && onAddEvent(space)}>+ Add</button>
+        </div>
+        {upcoming.length === 0 ? (
+          <div style={emptyStyle}>No upcoming events.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {upcoming.map(e => {
+              const evColor = getColor(e.color || 'coral');
+              const [y, mo, da] = e.date.split('-').map(Number);
+              const dateLabel = new Date(y, mo - 1, da).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              return (
+                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}` }} onClick={() => onShowEvent && onShowEvent(e)}>
+                  <div style={{ fontWeight: 600 }}>{e.title}</div>
+                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    {dateLabel}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Tasks */}
+      <div style={{ marginBottom: 22 }}>
+        <div style={sectionLabelStyle}>
+          <span>To do {openTasks.length > 0 && <span style={{ color }}>· {openTasks.length} open</span>}</span>
+          <button type="button" style={addBtnStyle} onClick={() => onAddTask && onAddTask(space)}>+ Add</button>
+        </div>
+        {openTasks.length === 0 && doneTasks.length === 0 ? (
+          <div style={emptyStyle}>No tasks yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {openTasks.map(t => {
+              const assn = getProfile(t.assigned_to);
+              const aColor = getColor(assn?.color);
+              const overdue = dueDateOverdue(t.due_date);
+              return (
+                <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${aColor || color}` }} onClick={() => onShowTask && onShowTask(t)}>
+                  <div style={{ fontWeight: 600 }}>{t.title}</div>
+                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: overdue ? '#E27457' : 'var(--text-muted)' }}>
+                    {t.due_date ? formatDue(t.due_date) : 'No due'}{assn ? ` · ${assn.display_name}` : ''}
+                  </div>
+                </div>
+              );
+            })}
+            {doneTasks.length > 0 && (
+              <>
+                <div style={{ ...sectionLabelStyle, fontSize: 9, marginTop: 8, marginBottom: 6, opacity: 0.7 }}>
+                  Completed · {doneTasks.length}
+                </div>
+                {doneTasks.slice(0, 5).map(t => (
+                  <div key={t.id} style={{ ...itemStyle, opacity: 0.55 }} onClick={() => onShowTask && onShowTask(t)}>
+                    <div style={{ fontWeight: 500, textDecoration: 'line-through' }}>{t.title}</div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Tagged Lists — hidden while the Lists feature is dormant. The
+          checklist section above now covers this need natively. Restore
+          the block (and the Lists tab) together if you re-enable Lists. */}
+      {false && (
+      <div style={{ marginBottom: 22 }}>
+        <div style={sectionLabelStyle}>
+          <span>Lists {spaceLists.length > 0 && <span style={{ color }}>· {spaceLists.length}</span>}</span>
+          <button type="button" style={addBtnStyle} onClick={() => onAddList && onAddList(space)}>+ Add</button>
+        </div>
+        {spaceLists.length === 0 ? (
+          <div style={emptyStyle}>No lists yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {spaceLists.map(l => {
+              const items = (listItems || []).filter(i => i.list_id === l.id);
+              const openCount = items.filter(i => !i.completed).length;
+              const lc = getColor(l.color || 'coral');
+              return (
+                <div key={l.id} style={{ ...itemStyle, borderLeft: `4px solid ${lc}` }} onClick={() => onOpenList && onOpenList(l)}>
+                  <div style={{ fontWeight: 600 }}>{l.title}</div>
+                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    {openCount} {openCount === 1 ? 'item' : 'items'}{items.length - openCount > 0 ? ` · ${items.length - openCount} done` : ''}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* Notes */}
+      <div style={{ marginBottom: past.length > 0 ? 22 : 0 }}>
+        <div style={sectionLabelStyle}>
+          <span>Notes {spaceNotes.length > 0 && <span style={{ color }}>· {spaceNotes.length}</span>}</span>
+          <button type="button" style={addBtnStyle} onClick={() => onAddNote && onAddNote(space)}>+ Add</button>
+        </div>
+        {spaceNotes.length === 0 ? (
+          <div style={emptyStyle}>No notes yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {spaceNotes.slice(0, 8).map(n => {
+              const author = getProfile(n.created_by);
+              const aColor = getColor(author?.color);
+              return (
+                <div key={n.id} style={{ ...itemStyle, borderLeft: `4px solid ${aColor || color}` }} onClick={() => onShowNote && onShowNote(n)}>
+                  <div style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap', textOverflow: 'ellipsis' }}>
+                    {n.content || (n.type === 'photo' ? '📷 Photo' : n.type === 'poll' ? '📊 Poll' : '')}
+                  </div>
+                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    {author?.display_name || 'Someone'} · {new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Past events (collapsed below the fold) */}
+      {past.length > 0 && (
+        <div>
+          <div style={{ ...sectionLabelStyle, opacity: 0.7 }}>Past · {past.length}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {past.slice(0, 5).map(e => {
+              const evColor = getColor(e.color || 'coral');
+              const [y, mo, da] = e.date.split('-').map(Number);
+              const dateLabel = new Date(y, mo - 1, da).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              return (
+                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}`, opacity: 0.6 }} onClick={() => onShowEvent && onShowEvent(e)}>
+                  <div style={{ fontWeight: 500 }}>{e.title}</div>
+                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    {dateLabel}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function SpacesSection({
+  spaces, tasks, events, notes, lists, listItems, spaceItems,
+  members, getProfile, myId,
+  collapsed, onToggleCollapse,
+  onAddSpace, onDeleteSpace, onOpenAddModal, onOpenDetail,
+}) {
+  const visible = (spaces || [])
+    .filter(s => {
+      if (s.archived_at) return false;
+      if (s.created_by === myId) return true;
+      if (!Array.isArray(s.member_ids) || s.member_ids.length === 0) return true;
+      return s.member_ids.includes(myId);
+    })
+    .sort((a, b) => {
+      const ap = a.pinned_at ? new Date(a.pinned_at).getTime() : 0;
+      const bp = b.pinned_at ? new Date(b.pinned_at).getTime() : 0;
+      if (ap !== bp) return bp - ap;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const countsFor = (spaceId) => ({
+    openTasks: (tasks || []).filter(t => t.space_id === spaceId && !t.completed && !t.cancelled_at).length,
+    upcomingEvents: (events || []).filter(e => e.space_id === spaceId && e.date >= today).length,
+    // openListItems now counts the built-in space_items checklist (the
+    // absorbed Lists feature). Tagged shared_lists are no longer counted
+    // here since the Lists feature is dormant — re-add a second source if
+    // it ever gets re-enabled.
+    openListItems: (spaceItems || []).filter(i => i.space_id === spaceId && !i.completed).length,
+    notes: (notes || []).filter(n => n.space_id === spaceId).length,
+  });
+
+  return (
+    <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-spaces">
+      <div className="fb-sec-hd">
+        <div className="fb-sec-hd-left">
+          <h2 className="fb-sec-title"><em>Spaces</em></h2>
+          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
+        </div>
+        <div className="fb-sec-hd-right">
+          <div className="fb-sec-meta">{visible.length} {visible.length === 1 ? 'space' : 'spaces'}</div>
+        </div>
+      </div>
+
+      {!collapsed && (<>
+      {/* Same primary section-action button pattern as "+ Add task" and
+          "+ Post" — single tap opens the full create-space modal. */}
+      <button className="fb-btn" onClick={() => onOpenAddModal?.()}>
+        <span className="plus">+</span> Create space
+      </button>
+
+      {visible.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', padding: '16px 2px', lineHeight: 1.5, marginTop: 32 }}>
+          No spaces yet — try <strong>Italy Trip</strong>, <strong>Christmas</strong>, or <strong>Garden</strong>.<br />
+          A space groups your tasks, events, lists, and notes around one topic.
+        </div>
+      ) : (
+        <div className="spaces-stack">
+          {visible.map(s => (
+            <SpaceCard
+              key={s.id}
+              space={s}
+              counts={countsFor(s.id)}
+              members={members}
+              getProfile={getProfile}
+              myId={myId}
+              onOpen={onOpenDetail}
+              onDeleteSpace={onDeleteSpace}
+            />
+          ))}
+        </div>
+      )}
+      </>)}
+    </section>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export function MainApp({ profile, onSettings }) {
   const [tab, setTab] = React.useState('notes');
@@ -4980,6 +6611,26 @@ export function MainApp({ profile, onSettings }) {
     return expandRecurringEvents(events, start, end);
   }, [events]);
   const [notes, setNotes] = React.useState([]);
+  // Shared Lists state — three parallel arrays keyed by group_id. The
+  // realtime channel mirrors INSERT/UPDATE/DELETE for all three tables.
+  const [lists, setLists] = React.useState([]);
+  const [listItems, setListItems] = React.useState([]);
+  const [activityByList, setActivityByList] = React.useState({});
+  const [listAddOpen, setListAddOpen] = React.useState(false);
+  const [listDetailItem, setListDetailItem] = React.useState(null);
+  // Spaces state — top-level containers that group items across tasks /
+  // events / notes / lists by space_id. Same modal-lifting pattern as Lists.
+  const [spaces, setSpaces] = React.useState([]);
+  const [spaceAddOpen, setSpaceAddOpen] = React.useState(false);
+  const [spaceEditTarget, setSpaceEditTarget] = React.useState(null);
+  const [spaceDetailItem, setSpaceDetailItem] = React.useState(null);
+  // Space items — flat checklist items per space (the old "Lists" feature
+  // folded inside Spaces so one concept covers both checklist + hub).
+  const [spaceItems, setSpaceItems] = React.useState([]);
+  // When the user taps "+ Add task" (or list/event/note) from inside a
+  // Space's detail modal, we open the corresponding Add* modal with the
+  // current space pre-selected. This holds that pre-selection.
+  const [pendingSpaceId, setPendingSpaceId] = React.useState(null);
   const [notifications, setNotifications] = React.useState([]);
   const [bellOpen, setBellOpen] = React.useState(false);
   const bellMenuRef = React.useRef(null);
@@ -5001,9 +6652,12 @@ export function MainApp({ profile, onSettings }) {
   // collapses that section's body and (if there's a next section) smooth-
   // scrolls to it — a quick way to walk Home Feed → Tasks → Calendar.
   const [collapsed, setCollapsed] = React.useState({
-    notes: false, tasks: false, calendar: false,
+    notes: false, tasks: false, calendar: false, lists: false, spaces: false,
   });
-  const SECTION_ORDER = ['notes', 'tasks', 'calendar'];
+  // 'lists' temporarily hidden — Spaces covers the same use case better.
+  // Restore by adding it back here AND in the scroll-sync ids array AND in
+  // the JSX render below (search for "ListsSection is hidden").
+  const SECTION_ORDER = ['notes', 'tasks', 'spaces', 'calendar'];
   const toggleCollapse = (id) => {
     const wasCollapsed = collapsed[id];
     setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
@@ -5055,6 +6709,27 @@ export function MainApp({ profile, onSettings }) {
       }
     });
 
+    // Shared Lists — separate Promise.all so a missing migration doesn't
+    // block the rest of the app. Both queries silently fall back to []
+    // if the tables don't exist (the section will show "No lists yet").
+    Promise.all([
+      supabase.from('shared_lists').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
+      supabase.from('shared_list_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true }),
+    ]).then(([l, i]) => {
+      if (!l.error) setLists(l.data || []);
+      if (!i.error) setListItems(i.data || []);
+    });
+
+    // Spaces — same defensive pattern; falls back to [] if the table
+    // hasn't been migrated. Section renders an empty state in that case.
+    supabase.from('spaces').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false })
+      .then(({ data, error }) => { if (!error) setSpaces(data || []); });
+
+    // Space items — flat checklists living inside each space. Same
+    // defensive load; silently empty if the migration hasn't run yet.
+    supabase.from('space_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true })
+      .then(({ data, error }) => { if (!error) setSpaceItems(data || []); });
+
     // Load notifications (silently no-op if table missing)
     supabase.from('notifications')
       .select('*')
@@ -5075,7 +6750,79 @@ export function MainApp({ profile, onSettings }) {
         setNotifications(prev => [row, ...prev.filter(n => n.id !== row.id)]);
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    // Realtime for Shared Lists — group-scoped, covers lists, items,
+    // and activity in a single channel. Each event merges into local
+    // state so multiple family members see edits live.
+    const listsChannel = supabase
+      .channel('kinnekt-lists-' + profile.group_id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_lists', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setLists(prev => prev.filter(l => l.id !== old.id));
+            setListItems(prev => prev.filter(i => i.list_id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setLists(prev => prev.some(l => l.id === row.id) ? prev : [row, ...prev]);
+          } else {
+            setLists(prev => prev.map(l => l.id === row.id ? row : l));
+          }
+        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_list_items', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setListItems(prev => prev.filter(i => i.id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setListItems(prev => prev.some(i => i.id === row.id) ? prev : [...prev, row]);
+          } else {
+            setListItems(prev => prev.map(i => i.id === row.id ? row : i));
+          }
+        })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'shared_list_activity', filter: `group_id=eq.${profile.group_id}` },
+        ({ new: row }) => {
+          setActivityByList(prev => {
+            const existing = prev[row.list_id] || [];
+            if (existing.some(a => a.id === row.id)) return prev;
+            return { ...prev, [row.list_id]: [row, ...existing].slice(0, 30) };
+          });
+        })
+      .subscribe();
+
+    // Realtime for Spaces — group-scoped. Items in other tables that
+    // gain/lose a space_id come through their own table channels.
+    // space_items rides on this same channel so checklist edits from
+    // other family members stream in live.
+    const spacesChannel = supabase
+      .channel('kinnekt-spaces-' + profile.group_id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'spaces', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setSpaces(prev => prev.filter(s => s.id !== old.id));
+            // Cascade-delete on the FK handles space_items in the DB;
+            // mirror locally so the UI doesn't show orphaned items.
+            setSpaceItems(prev => prev.filter(i => i.space_id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setSpaces(prev => prev.some(s => s.id === row.id) ? prev : [row, ...prev]);
+          } else {
+            setSpaces(prev => prev.map(s => s.id === row.id ? row : s));
+          }
+        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'space_items', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setSpaceItems(prev => prev.filter(i => i.id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setSpaceItems(prev => prev.some(i => i.id === row.id) ? prev : [...prev, row]);
+          } else {
+            setSpaceItems(prev => prev.map(i => i.id === row.id ? row : i));
+          }
+        })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      supabase.removeChannel(listsChannel);
+      supabase.removeChannel(spacesChannel);
+    };
   }, [profile?.group_id, profile?.id]);
 
   // Close bell menu on outside click
@@ -5140,11 +6887,11 @@ export function MainApp({ profile, onSettings }) {
     // `event_id` is the link to an event (event detail modal -> "Linked
     // tasks" -> create new task). Null when the task isn't tied to an
     // event, present otherwise. Strip-on-error mirrors recurrence.
-    const optional = ['description', 'recurrence', 'event_id'];
+    const optional = ['description', 'recurrence', 'event_id', 'space_id'];
     const droppedCols = [];
     let row = null;
     let error = null;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       ({ data: row, error } = await supabase.from('tasks').insert(payload).select().single());
       if (!error) break;
       let stripped = null;
@@ -5229,7 +6976,7 @@ export function MainApp({ profile, onSettings }) {
 
   // Event CRUD
   const addEvent = async (data) => {
-    const { attendees = [], recurrence = null, ...rest } = data;
+    const { attendees = [], recurrence = null, linkedTasks = [], ...rest } = data;
     // The creator is auto-RSVP'd as Going so the modal shows a sensible
     // default state right after save (and so the upcoming list / event
     // chip can reflect "1 going" instead of blank).
@@ -5245,12 +6992,12 @@ export function MainApp({ profile, onSettings }) {
     };
 
     // Optional columns that may not exist in older schemas — strip them on error.
-    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps'];
+    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps', 'space_id'];
     const droppedCols = [];
 
     let row = null;
     let error = null;
-    for (let attempt = 0; attempt < 7; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       ({ data: row, error } = await supabase.from('events').insert(payload).select().single());
       if (!error) break;
       // Parse missing-column name from PostgREST error and strip it.
@@ -5320,10 +7067,410 @@ export function MainApp({ profile, onSettings }) {
         by_color: profile.color,
       });
     }
+    // Create any tasks staged in the Add Event modal, linked to the new
+    // event (event_id = row.id). Each staged entry is a full task
+    // payload from AddTaskModal — we just stamp event_id on it and
+    // route through addLinkedTask → addTask so notifications +
+    // column-strip retries apply.
+    if (Array.isArray(linkedTasks) && linkedTasks.length > 0) {
+      for (const t of linkedTasks) {
+        if (!t || !t.title) continue;
+        // eslint-disable-next-line no-await-in-loop
+        await addLinkedTask(row.id, t);
+      }
+    }
   };
   const deleteEvent = async (id) => {
     setEvents(prev => prev.filter(e => e.id !== id));
     await supabase.from('events').delete().eq('id', id);
+  };
+
+  // ─── Shared Lists CRUD ───────────────────────────────────────────────────
+  // Activity logging — best-effort fire-and-forget. Failures are silent
+  // so a missing table never breaks the user-facing action.
+  const logListActivity = async (listId, action, payload) => {
+    if (!listId || !profile?.group_id) return;
+    try {
+      await supabase.from('shared_list_activity').insert({
+        list_id: listId,
+        group_id: profile.group_id,
+        actor_id: profile.id,
+        action,
+        payload: payload || null,
+      });
+    } catch { /* ignore */ }
+  };
+  // Load the most recent 30 activity rows for one list on demand. Cached
+  // in activityByList so re-opening doesn't re-fetch unnecessarily.
+  const loadListActivity = React.useCallback(async (listId) => {
+    if (!listId) return;
+    const { data, error } = await supabase
+      .from('shared_list_activity')
+      .select('*')
+      .eq('list_id', listId)
+      .order('created_at', { ascending: false })
+      .limit(30);
+    if (!error) setActivityByList(prev => ({ ...prev, [listId]: data || [] }));
+  }, []);
+
+  // Accepts { title, memberIds } or a plain string for backwards compat.
+  // member_ids is stored on the row so each list can be scoped to a subset
+  // of the group. Uses the column-strip retry pattern — if member_ids column
+  // doesn't exist yet, the insert retries without it (visible to all).
+  const addList = async (arg) => {
+    const { title: rawTitle, memberIds, spaceId } =
+      typeof arg === 'string' ? { title: arg, memberIds: null, spaceId: null } : (arg || {});
+    const t = (rawTitle || '').trim();
+    if (!t) return { data: null, error: { message: 'Title is empty' } };
+    if (!profile?.group_id) {
+      return { data: null, error: { message: 'No group_id — try refreshing.' } };
+    }
+    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const row = {
+      id: tempId,
+      group_id: profile.group_id,
+      created_by: profile.id,
+      title: t,
+      color: profile.color || 'coral',
+      list_type: 'general',
+      member_ids: memberIds || (members || []).map(m => m.id),
+      space_id: spaceId || null,
+      archived_at: null,
+      created_at: new Date().toISOString(),
+    };
+    setLists(prev => prev.some(l => l.id === tempId) ? prev : [row, ...prev]);
+    let error = null;
+    // Strip member_ids / space_id on error (columns may not exist yet) — retry up to twice.
+    let payload = { ...row };
+    try {
+      let result = await supabase.from('shared_lists').insert(payload);
+      if (result.error && /space_id/i.test(result.error.message || '')) {
+        const { space_id: _s, ...stripped } = payload;
+        payload = stripped;
+        result = await supabase.from('shared_lists').insert(payload);
+      }
+      if (result.error && /member_ids/i.test(result.error.message || '')) {
+        const { member_ids: _m, ...stripped } = payload;
+        result = await supabase.from('shared_lists').insert(stripped);
+      }
+      error = result.error;
+    } catch (thrown) {
+      console.error('[shared_lists] insert threw:', thrown);
+      error = { message: String(thrown?.message || thrown) };
+    }
+    if (error) {
+      console.error('[shared_lists] insert error:', error);
+      setLists(prev => prev.filter(l => l.id !== tempId));
+      return { data: null, error };
+    }
+    logListActivity(tempId, 'list_created', { title: t });
+    return { data: row, error: null };
+  };
+  const deleteList = async (id) => {
+    const existing = lists.find(l => l.id === id);
+    setLists(prev => prev.filter(l => l.id !== id));
+    setListItems(prev => prev.filter(i => i.list_id !== id));
+    const { error } = await supabase.from('shared_lists').delete().eq('id', id);
+    if (error) {
+      // Revert + surface
+      if (existing) setLists(prev => prev.some(l => l.id === id) ? prev : [existing, ...prev]);
+      alert('Could not delete list: ' + error.message);
+      return;
+    }
+    logListActivity(id, 'list_deleted', { title: existing?.title });
+  };
+
+  // ─── Spaces CRUD ─────────────────────────────────────────────────────────
+  // Optimistic insert with crypto.randomUUID — same pattern as addList. Items
+  // tagged with this space (via tasks.space_id, events.space_id, etc.) are
+  // linked by id only; the FK uses ON DELETE SET NULL so deleting a Space
+  // never destroys its content.
+  const addSpace = async (arg) => {
+    const { id: editId, title: rawTitle, emoji, color, description, memberIds } = arg || {};
+    if (editId) return updateSpace(editId, { title: rawTitle, emoji, color, description, memberIds });
+    const t = (rawTitle || '').trim();
+    if (!t) return { data: null, error: { message: 'Title is empty' } };
+    if (!profile?.group_id) {
+      return { data: null, error: { message: 'No group_id — try refreshing.' } };
+    }
+    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const row = {
+      id: tempId,
+      group_id: profile.group_id,
+      created_by: profile.id,
+      title: t,
+      emoji: emoji || '✨',
+      color: color || 'coral',
+      description: (description || '').trim() || null,
+      member_ids: memberIds || (members || []).map(m => m.id),
+      pinned_at: null,
+      archived_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setSpaces(prev => prev.some(s => s.id === tempId) ? prev : [row, ...prev]);
+    let payload = { ...row };
+    let error = null;
+    try {
+      let result = await supabase.from('spaces').insert(payload);
+      // Column-strip retry (optional fields may not exist yet)
+      const optional = ['member_ids', 'description', 'emoji', 'pinned_at'];
+      for (let i = 0; i < 4 && result.error; i++) {
+        const msg = (result.error.message || '').toLowerCase();
+        const hit = optional.find(c => payload[c] !== undefined && msg.includes(c));
+        if (!hit) break;
+        const { [hit]: _, ...stripped } = payload;
+        payload = stripped;
+        result = await supabase.from('spaces').insert(payload);
+      }
+      error = result.error;
+    } catch (thrown) {
+      console.error('[spaces] insert threw:', thrown);
+      error = { message: String(thrown?.message || thrown) };
+    }
+    if (error) {
+      console.error('[spaces] insert error:', error);
+      setSpaces(prev => prev.filter(s => s.id !== tempId));
+      return { data: null, error };
+    }
+    return { data: row, error: null };
+  };
+
+  const updateSpace = async (id, patch) => {
+    const existing = spaces.find(s => s.id === id);
+    if (!existing) return { data: null, error: { message: 'Space not found' } };
+    const next = {
+      ...existing,
+      ...(patch.title !== undefined ? { title: (patch.title || '').trim() } : {}),
+      ...(patch.emoji !== undefined ? { emoji: patch.emoji } : {}),
+      ...(patch.color !== undefined ? { color: patch.color } : {}),
+      ...(patch.description !== undefined ? { description: (patch.description || '').trim() || null } : {}),
+      ...(patch.memberIds !== undefined ? { member_ids: patch.memberIds } : {}),
+      updated_at: new Date().toISOString(),
+    };
+    setSpaces(prev => prev.map(s => s.id === id ? next : s));
+    const dbPatch = {};
+    if (patch.title !== undefined)       dbPatch.title       = next.title;
+    if (patch.emoji !== undefined)       dbPatch.emoji       = next.emoji;
+    if (patch.color !== undefined)       dbPatch.color       = next.color;
+    if (patch.description !== undefined) dbPatch.description = next.description;
+    if (patch.memberIds !== undefined)   dbPatch.member_ids  = next.member_ids;
+    dbPatch.updated_at = next.updated_at;
+    const { error } = await supabase.from('spaces').update(dbPatch).eq('id', id);
+    if (error) {
+      setSpaces(prev => prev.map(s => s.id === id ? existing : s));
+      return { data: null, error };
+    }
+    return { data: next, error: null };
+  };
+
+  const archiveSpace = async (space) => {
+    if (!space) return;
+    const isArchived = !!space.archived_at;
+    const nextArchive = isArchived ? null : new Date().toISOString();
+    setSpaces(prev => prev.map(s => s.id === space.id ? { ...s, archived_at: nextArchive } : s));
+    const { error } = await supabase.from('spaces').update({ archived_at: nextArchive }).eq('id', space.id);
+    if (error) {
+      setSpaces(prev => prev.map(s => s.id === space.id ? space : s));
+      alert('Could not ' + (isArchived ? 'unarchive' : 'archive') + ' space: ' + error.message);
+    }
+  };
+
+  const deleteSpace = async (id) => {
+    const existing = spaces.find(s => s.id === id);
+    setSpaces(prev => prev.filter(s => s.id !== id));
+    // Locally null space_id on tagged items so the UI updates instantly.
+    // The DB has ON DELETE SET NULL and realtime UPDATE events will reconcile.
+    setTasks(prev => prev.map(t => t.space_id === id ? { ...t, space_id: null } : t));
+    setEvents(prev => prev.map(e => e.space_id === id ? { ...e, space_id: null } : e));
+    setNotes(prev => prev.map(n => n.space_id === id ? { ...n, space_id: null } : n));
+    setLists(prev => prev.map(l => l.space_id === id ? { ...l, space_id: null } : l));
+    const { error } = await supabase.from('spaces').delete().eq('id', id);
+    if (error) {
+      if (existing) setSpaces(prev => prev.some(s => s.id === id) ? prev : [existing, ...prev]);
+      alert('Could not delete space: ' + error.message);
+    }
+  };
+
+  const addListItem = async (listId, parsed) => {
+    if (!listId || !parsed?.title || !profile?.group_id) return;
+    const sibling = listItems.filter(i => i.list_id === listId);
+    const nextPos = sibling.length === 0 ? 0 : Math.max(...sibling.map(i => i.position || 0)) + 1;
+    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const row = {
+      id: tempId,
+      list_id: listId,
+      group_id: profile.group_id,
+      created_by: profile.id,
+      title: parsed.title,
+      quantity: parsed.quantity || null,
+      category: parsed.category || null,
+      assigned_to: parsed.assigned_to || null,
+      position: nextPos,
+      completed: false,
+      completed_at: null,
+      completed_by: null,
+      created_at: new Date().toISOString(),
+    };
+    setListItems(prev => prev.some(i => i.id === tempId) ? prev : [...prev, row]);
+    let error = null;
+    try {
+      const result = await supabase.from('shared_list_items').insert(row);
+      error = result.error;
+    } catch (thrown) {
+      console.error('[shared_list_items] insert threw:', thrown);
+      error = { message: String(thrown?.message || thrown) };
+    }
+    if (error) {
+      console.error('[shared_list_items] insert error:', error);
+      setListItems(prev => prev.filter(i => i.id !== tempId));
+      alert('Could not add item: ' + (error.message || 'unknown'));
+      return;
+    }
+    logListActivity(listId, 'item_added', { title: row.title, quantity: row.quantity });
+  };
+  const toggleListItem = async (id, next) => {
+    const it = listItems.find(i => i.id === id);
+    if (!it) return;
+    const optimistic = {
+      ...it,
+      completed: !!next,
+      completed_at: next ? new Date().toISOString() : null,
+      completed_by: next ? profile.id : null,
+    };
+    setListItems(prev => prev.map(i => i.id === id ? optimistic : i));
+    const { error } = await supabase.from('shared_list_items')
+      .update({
+        completed: optimistic.completed,
+        completed_at: optimistic.completed_at,
+        completed_by: optimistic.completed_by,
+      }).eq('id', id);
+    if (error) {
+      setListItems(prev => prev.map(i => i.id === id ? it : i));
+      alert('Could not update item: ' + error.message);
+      return;
+    }
+    logListActivity(it.list_id, next ? 'item_completed' : 'item_uncompleted', { title: it.title });
+  };
+  const deleteListItem = async (id) => {
+    const it = listItems.find(i => i.id === id);
+    if (!it) return;
+    setListItems(prev => prev.filter(i => i.id !== id));
+    const { error } = await supabase.from('shared_list_items').delete().eq('id', id);
+    if (error) {
+      setListItems(prev => prev.some(i => i.id === id) ? prev : [...prev, it]);
+      alert('Could not delete item: ' + error.message);
+      return;
+    }
+    logListActivity(it.list_id, 'item_removed', { title: it.title });
+  };
+  // Cycle through [unassigned, member1, member2, ...] each tap. Fast,
+  // no modal — exactly what the spec asks for.
+  const cycleListItemAssignee = async (item) => {
+    const ids = [null, ...(members || []).map(m => m.id)];
+    const idx = ids.indexOf(item.assigned_to ?? null);
+    const next = ids[(idx + 1) % ids.length];
+    setListItems(prev => prev.map(i => i.id === item.id ? { ...i, assigned_to: next } : i));
+    const { error } = await supabase.from('shared_list_items')
+      .update({ assigned_to: next }).eq('id', item.id);
+    if (error) {
+      setListItems(prev => prev.map(i => i.id === item.id ? item : i));
+      alert('Could not reassign: ' + error.message);
+      return;
+    }
+    logListActivity(item.list_id, 'item_assigned', { title: item.title, to: next });
+  };
+
+  // ─── Space items (built-in Space checklist) ─────────────────────────────
+  // Same optimistic-then-revert pattern as shared_list_items, scoped to a
+  // space_id instead of list_id. parsed = { title, quantity, category,
+  // assigned_to } — built by parseListItemInput so "milk x2 #dairy @mom"
+  // still works inside Spaces.
+  const addSpaceItem = async (spaceId, parsed) => {
+    if (!spaceId || !parsed?.title || !profile?.group_id) return;
+    const sibling = spaceItems.filter(i => i.space_id === spaceId);
+    const nextPos = sibling.length === 0 ? 0 : Math.max(...sibling.map(i => i.position || 0)) + 1;
+    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const row = {
+      id: tempId,
+      space_id: spaceId,
+      group_id: profile.group_id,
+      created_by: profile.id,
+      title: parsed.title,
+      quantity: parsed.quantity || null,
+      category: parsed.category || null,
+      assigned_to: parsed.assigned_to || null,
+      position: nextPos,
+      completed: false,
+      completed_at: null,
+      completed_by: null,
+      created_at: new Date().toISOString(),
+    };
+    setSpaceItems(prev => prev.some(i => i.id === tempId) ? prev : [...prev, row]);
+    let error = null;
+    try {
+      const result = await supabase.from('space_items').insert(row);
+      error = result.error;
+    } catch (thrown) {
+      console.error('[space_items] insert threw:', thrown);
+      error = { message: String(thrown?.message || thrown) };
+    }
+    if (error) {
+      console.error('[space_items] insert error:', error);
+      setSpaceItems(prev => prev.filter(i => i.id !== tempId));
+      alert('Could not add item: ' + (error.message || 'unknown'));
+    }
+  };
+  const toggleSpaceItem = async (id, next) => {
+    const it = spaceItems.find(i => i.id === id);
+    if (!it) return;
+    const optimistic = {
+      ...it,
+      completed: !!next,
+      completed_at: next ? new Date().toISOString() : null,
+      completed_by: next ? profile.id : null,
+    };
+    setSpaceItems(prev => prev.map(i => i.id === id ? optimistic : i));
+    const { error } = await supabase.from('space_items')
+      .update({
+        completed: optimistic.completed,
+        completed_at: optimistic.completed_at,
+        completed_by: optimistic.completed_by,
+      }).eq('id', id);
+    if (error) {
+      setSpaceItems(prev => prev.map(i => i.id === id ? it : i));
+      alert('Could not update item: ' + error.message);
+    }
+  };
+  const deleteSpaceItem = async (id) => {
+    const it = spaceItems.find(i => i.id === id);
+    if (!it) return;
+    setSpaceItems(prev => prev.filter(i => i.id !== id));
+    const { error } = await supabase.from('space_items').delete().eq('id', id);
+    if (error) {
+      setSpaceItems(prev => prev.some(i => i.id === id) ? prev : [...prev, it]);
+      alert('Could not delete item: ' + error.message);
+    }
+  };
+  const cycleSpaceItemAssignee = async (item) => {
+    const ids = [null, ...(members || []).map(m => m.id)];
+    const idx = ids.indexOf(item.assigned_to ?? null);
+    const next = ids[(idx + 1) % ids.length];
+    setSpaceItems(prev => prev.map(i => i.id === item.id ? { ...i, assigned_to: next } : i));
+    const { error } = await supabase.from('space_items')
+      .update({ assigned_to: next }).eq('id', item.id);
+    if (error) {
+      setSpaceItems(prev => prev.map(i => i.id === item.id ? item : i));
+      alert('Could not reassign: ' + error.message);
+    }
   };
 
   // Set my RSVP status on an event (or clear it by passing null).
@@ -5370,20 +7517,23 @@ export function MainApp({ profile, onSettings }) {
     }
   };
 
-  // Create a new task linked to an event. Used from the event detail
-  // modal's "Linked tasks" inline composer. Routes through addTask so
-  // the same notification / column-strip behavior applies — we just
-  // forward `event_id` in the payload, which the strip-on-error retry
-  // loop handles gracefully if the column hasn't been migrated.
-  const addLinkedTask = async (eventId, title) => {
-    const t = (title || '').trim();
-    if (!t || !eventId) return;
-    await addTask({
-      title: t,
-      assigned_to: profile?.id || null,
-      due_date: null,
-      event_id: eventId,
-    });
+  // Create a new task linked to an event. Accepts either:
+  //   addLinkedTask(eventId, "Title string")               — quick legacy form
+  //   addLinkedTask(eventId, { title, description, assigned_to, due_date, recurrence })
+  // Routes through addTask so notifications + the column-strip retry
+  // behavior apply. `event_id` is stamped on the payload (the strip-
+  // on-error loop drops it gracefully if the column hasn't been
+  // migrated). The task lands in the assignee's regular task list AND
+  // surfaces under the event's "Linked tasks" section.
+  const addLinkedTask = async (eventId, arg) => {
+    if (!eventId) return;
+    const payload = (typeof arg === 'string')
+      ? { title: arg.trim(), assigned_to: profile?.id || null, due_date: null }
+      : { ...(arg || {}) };
+    if (!payload.title || !payload.title.trim()) return;
+    payload.title = payload.title.trim();
+    payload.event_id = eventId;
+    await addTask(payload);
   };
 
   // Note CRUD
@@ -5398,6 +7548,7 @@ export function MainApp({ profile, onSettings }) {
     const type    = isObj ? (arg.type || 'message') : 'message';
     const payload = isObj ? (arg.payload || null) : null;
     const pinned  = isObj ? !!arg.pinned : false;
+    const space_id = isObj ? (arg.space_id || null) : null;
 
     // Build the insert payload — strip optional columns on schema errors
     let insertRow = {
@@ -5407,8 +7558,9 @@ export function MainApp({ profile, onSettings }) {
       type,
       payload,
       pinned,
+      space_id,
     };
-    const optionalCols = ['type', 'payload', 'pinned'];
+    const optionalCols = ['type', 'payload', 'pinned', 'space_id'];
     let noteRow = null;
     let nErr = null;
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -5708,7 +7860,7 @@ export function MainApp({ profile, onSettings }) {
     let raf;
     const compute = () => {
       if (Date.now() < suppressScrollSync.current) return;
-      const ids = ['notes', 'tasks', 'calendar'];
+      const ids = ['notes', 'tasks', 'spaces', 'calendar']; // 'lists' hidden
       const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
       let cur = ids[0];
       for (const id of ids) {
@@ -5730,6 +7882,14 @@ export function MainApp({ profile, onSettings }) {
     };
   }, [loading]);
 
+  // Exposed via SpacesContext so any item chip can open the Space detail
+  // modal without prop drilling. Declared before the loading early-return
+  // so hook order stays stable across renders.
+  const showSpace = React.useCallback((space) => {
+    if (!space) return;
+    setSpaceDetailItem(space);
+  }, []);
+
   if (loading) {
     return (
       <div className="fb-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -5740,14 +7900,11 @@ export function MainApp({ profile, onSettings }) {
 
   return (
     <MyIdContext.Provider value={profile?.id || null}>
+    <SpacesContext.Provider value={{ spaces, showSpace, getProfile }}>
     <div className="fb-screen">
       <div className="fb-scroll" ref={scrollRef}>
         <div className="fb-stickyhead">
-          <div className="fb-stickyhead-head" style={{position:'relative'}}>
-            <div className="fb-brand-block">
-              <KinnektLogo size={54} />
-              <span className="fb-brand-text">Kinnekt</span>
-            </div>
+          <div className="fb-stickyhead-head">
             <div className="fb-stickyhead-right">
               <div className="fb-head-top">
                 <div className="fb-bell-wrap" ref={bellMenuRef}>
@@ -5808,6 +7965,50 @@ export function MainApp({ profile, onSettings }) {
             onToggleCollapse={() => toggleCollapse('notes')}
           />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} filter={tasksFilter} setFilter={setTasksFilter} />
+          {/* ListsSection is hidden — Spaces handles the same use case
+              with more flexibility. The component, state, modals, and
+              CRUD wiring all stay in place; just uncomment to bring it
+              back (and re-add 'lists' to AnchorTabs, SECTION_ORDER, and
+              the scroll-sync ids array). */}
+          {false && (
+          <ListsSection
+            lists={lists}
+            listItems={listItems}
+            members={members}
+            getProfile={getProfile}
+            myId={profile?.id}
+            collapsed={collapsed.lists}
+            onToggleCollapse={() => toggleCollapse('lists')}
+            onAddList={addList}
+            onDeleteList={deleteList}
+            onAddItem={addListItem}
+            onToggleItem={toggleListItem}
+            onDeleteItem={deleteListItem}
+            onCycleAssignee={cycleListItemAssignee}
+            activityByList={activityByList}
+            onLoadActivity={loadListActivity}
+            onOpenAddModal={() => setListAddOpen(true)}
+            onOpenDetail={setListDetailItem}
+          />
+          )}
+          <SpacesSection
+            spaces={spaces}
+            tasks={tasks}
+            events={events}
+            notes={notes}
+            lists={lists}
+            listItems={listItems}
+            spaceItems={spaceItems}
+            members={members}
+            getProfile={getProfile}
+            myId={profile?.id}
+            collapsed={collapsed.spaces}
+            onToggleCollapse={() => toggleCollapse('spaces')}
+            onAddSpace={addSpace}
+            onDeleteSpace={deleteSpace}
+            onOpenAddModal={() => { setSpaceEditTarget(null); setSpaceAddOpen(true); }}
+            onOpenDetail={setSpaceDetailItem}
+          />
           <CalendarSection
             events={events}
             members={members}
@@ -5824,9 +8025,82 @@ export function MainApp({ profile, onSettings }) {
         </div>
       </div>
 
-      <AddTaskModal open={modal === 'task'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addTask} />
-      <AddEventModal open={modal === 'event'} onClose={() => setModal(null)} members={members} myId={profile?.id} onSave={addEvent} initialDate={eventInitDate} />
-      <AddNoteModal open={modal === 'note'} onClose={() => setModal(null)} profile={profile} members={members} onSave={addNote} />
+      <AddTaskModal open={modal === 'task'} onClose={() => { setModal(null); setPendingSpaceId(null); }} members={members} myId={profile?.id} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addTask} />
+      <AddEventModal open={modal === 'event'} onClose={() => { setModal(null); setPendingSpaceId(null); }} members={members} myId={profile?.id} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addEvent} initialDate={eventInitDate} />
+      <AddNoteModal open={modal === 'note'} onClose={() => { setModal(null); setPendingSpaceId(null); }} profile={profile} members={members} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addNote} />
+      <AddListModal
+        open={listAddOpen}
+        onClose={() => { setListAddOpen(false); setPendingSpaceId(null); }}
+        members={members}
+        myId={profile?.id}
+        spaces={spaces}
+        initialSpaceId={pendingSpaceId}
+        onSave={async ({ title, memberIds, spaceId }) => {
+          const result = await addList({ title, memberIds, spaceId });
+          if (!result?.error) { setListAddOpen(false); setPendingSpaceId(null); }
+          return result;
+        }}
+      />
+      <AddSpaceModal
+        open={spaceAddOpen}
+        onClose={() => { setSpaceAddOpen(false); setSpaceEditTarget(null); }}
+        members={members}
+        myId={profile?.id}
+        initial={spaceEditTarget}
+        onSave={async ({ id, title, emoji, color, description, memberIds }) => {
+          const result = id
+            ? await updateSpace(id, { title, emoji, color, description, memberIds })
+            : await addSpace({ title, emoji, color, description, memberIds });
+          if (!result?.error) {
+            setSpaceAddOpen(false);
+            setSpaceEditTarget(null);
+          }
+          return result;
+        }}
+      />
+      <SpaceDetailModal
+        open={!!spaceDetailItem}
+        space={spaceDetailItem ? (spaces.find(s => s.id === spaceDetailItem.id) || spaceDetailItem) : null}
+        onClose={() => setSpaceDetailItem(null)}
+        tasks={tasks}
+        events={events}
+        notes={notes}
+        lists={lists}
+        listItems={listItems}
+        spaceItems={spaceItems}
+        onAddSpaceItem={addSpaceItem}
+        onToggleSpaceItem={toggleSpaceItem}
+        onDeleteSpaceItem={deleteSpaceItem}
+        onCycleSpaceItemAssignee={cycleSpaceItemAssignee}
+        members={members}
+        getProfile={getProfile}
+        myId={profile?.id}
+        onEdit={(s) => { setSpaceDetailItem(null); setSpaceEditTarget(s); setSpaceAddOpen(true); }}
+        onArchive={(s) => { archiveSpace(s); setSpaceDetailItem(null); }}
+        onAddTask={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('task');  }}
+        onAddEvent={(s) => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('event'); }}
+        onAddNote={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('note');  }}
+        onAddList={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setListAddOpen(true); }}
+        onShowTask={(t)  => { setSpaceDetailItem(null); setDetailTaskId(t.id);  }}
+        onShowEvent={(e) => { setSpaceDetailItem(null); setDetailEventId(e.id); }}
+        onShowNote={(n)  => { setSpaceDetailItem(null); setDetailNoteId(n.id);  }}
+        onOpenList={(l)  => { setSpaceDetailItem(null); setListDetailItem(l);   }}
+      />
+      <ListDetailModal
+        open={!!listDetailItem}
+        list={listDetailItem}
+        items={listDetailItem ? listItems.filter(i => i.list_id === listDetailItem.id) : []}
+        members={members}
+        getProfile={getProfile}
+        myId={profile?.id}
+        onClose={() => setListDetailItem(null)}
+        onAddItem={addListItem}
+        onToggleItem={toggleListItem}
+        onDeleteItem={deleteListItem}
+        onCycleAssignee={cycleListItemAssignee}
+        activity={listDetailItem ? activityByList?.[listDetailItem.id] : null}
+        onLoadActivity={loadListActivity}
+      />
       <DayDetailsModal
         open={!!dayDetailsDate}
         date={dayDetailsDate}
@@ -5911,6 +8185,7 @@ export function MainApp({ profile, onSettings }) {
         onShowEvent={(e) => { setDetailMemberId(null); setDetailEventId(e.id); }}
       />
     </div>
+    </SpacesContext.Provider>
     </MyIdContext.Provider>
   );
 }

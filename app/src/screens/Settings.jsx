@@ -1,6 +1,7 @@
 import React from 'react';
 import { supabase } from '../lib/supabase';
 import { ThemeContext } from '../App';
+import { KinnektLogo, EmojiInput } from '../Components';
 
 const COLORS = [
   { id: 'red',         hex: '#E63946', label: 'Red' },
@@ -164,6 +165,15 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
         </div>
 
         <div style={{ padding: '22px 16px 40px' }}>
+
+          {/* App brand — moved here from the Main sticky header so the
+              top of the home screen stays tight. Logo + wordmark stacked
+              over a small tagline. */}
+          <div className="settings-brand">
+            <KinnektLogo size={64} />
+            <span className="settings-brand-name">Kinnekt</span>
+            <span className="settings-brand-tag">Connecting families</span>
+          </div>
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Profile</div>
           <div className="set-group">
@@ -393,7 +403,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
               </div>
               {theme.pref === 'auto' && (
                 <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                  Currently {theme.resolved} — switches with your system settings and time of day.
+                  Currently {theme.resolved} — follows your system settings.
                 </div>
               )}
             </div>
@@ -475,35 +485,20 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
 
                 {avatarMode === 'emoji' && (
                   <div>
-                    <div style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(8, 1fr)',
-                      gap: 6,
-                      marginBottom: 12,
-                    }}>
-                      {PRESET_EMOJIS.map(emoji => (
-                        <button
-                          key={emoji}
-                          onClick={() => pickEmoji(emoji)}
-                          style={{
-                            aspectRatio: '1 / 1',
-                            fontSize: 22,
-                            border: '1px solid transparent',
-                            background: 'transparent',
-                            borderRadius: 8,
-                            cursor: 'pointer',
-                            transition: 'all 0.15s var(--ease)',
-                            padding: 0,
-                          }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-tint)'; e.currentTarget.style.borderColor = 'var(--hover-border)'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; }}
-                        >{emoji}</button>
-                      ))}
-                    </div>
+                    {/* Open-ended emoji picker — typing in the input
+                        accepts any emoji from the OS keyboard (iOS 🌐
+                        globe key, macOS Cmd+Ctrl+Space, etc.). PRESET
+                        grid below is just one-tap shortcuts. Selection
+                        also closes the sheet via pickEmoji(). */}
+                    <EmojiInput
+                      value={avatar && !avatarIsImage ? avatar : ''}
+                      onChange={pickEmoji}
+                      presets={PRESET_EMOJIS}
+                    />
                     <button
                       onClick={() => setAvatarMode('main')}
                       className="fb-btn"
-                      style={{ width: '100%' }}
+                      style={{ width: '100%', marginTop: 12 }}
                     >‹ Back</button>
                   </div>
                 )}

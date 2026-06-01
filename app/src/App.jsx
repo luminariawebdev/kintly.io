@@ -9,15 +9,16 @@ const FRAME_W = 402;
 const FRAME_H = 874;
 
 // Resolve the actual visual theme given a user preference and current state.
-// 'auto' = follow system preference AND time of day (light 6am-7pm).
+// 'auto' = follow the OS color-scheme preference, matching iOS / macOS /
+// Windows / web convention. (Previously this layered a time-of-day rule on
+// top — auto went dark after 7pm regardless of the system setting — which
+// surprised users whose OS was on light mode.)
 function resolveTheme(pref) {
   if (pref === 'light' || pref === 'dark') return pref;
   const sysDark = typeof window !== 'undefined' && window.matchMedia
     ? window.matchMedia('(prefers-color-scheme: dark)').matches
     : false;
-  const hour = new Date().getHours();
-  const timeIsNight = hour < 6 || hour >= 19;
-  return sysDark && timeIsNight ? 'dark' : (sysDark || timeIsNight ? 'dark' : 'light');
+  return sysDark ? 'dark' : 'light';
 }
 
 export const ThemeContext = React.createContext({ pref: 'auto', setPref: () => {}, resolved: 'light' });
@@ -31,7 +32,8 @@ export function App() {
   });
   const [resolved, setResolved] = React.useState(() => resolveTheme(themePref));
 
-  // Re-resolve on preference change, system theme change, or hourly tick (for auto by time-of-day)
+  // Re-resolve on preference change or system theme change. matchMedia fires
+  // the listener whenever the OS toggles light/dark, so no polling needed.
   React.useEffect(() => {
     try { localStorage.setItem('kinnekt:theme', themePref); } catch {}
     setResolved(resolveTheme(themePref));
@@ -39,9 +41,7 @@ export function App() {
     const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => setResolved(resolveTheme(themePref));
     mq?.addEventListener?.('change', onChange);
-    // Recheck every 5 min so auto-by-time crosses dawn/dusk without a refresh
-    const tick = setInterval(() => setResolved(resolveTheme(themePref)), 5 * 60 * 1000);
-    return () => { mq?.removeEventListener?.('change', onChange); clearInterval(tick); };
+    return () => { mq?.removeEventListener?.('change', onChange); };
   }, [themePref]);
 
   // Apply data-theme attribute to root so CSS overrides cascade
