@@ -2858,8 +2858,13 @@ html { overscroll-behavior-x: none; }
 .fb-bell-menu {
   position: absolute;
   top: calc(100% + 8px);
-  right: 0;
-  left: auto;
+  /* Bell is now centered in the header, so anchor the menu to the
+     bell's horizontal center and translate left by half its own
+     width. Avoids the previous right:0 anchor extending the menu
+     off the left edge of the viewport. */
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
   width: max-content;
   min-width: 260px;
   max-width: min(320px, calc(100vw - 32px));
