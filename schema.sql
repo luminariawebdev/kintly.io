@@ -400,3 +400,16 @@ create policy "tasks_select" on public.tasks
     group_id = (select group_id from public.profiles where id = auth.uid())
     and (is_private is not true or created_by = auth.uid())
   );
+
+-- ─── Personal events ───────────────────────────────────────────────────────
+-- Mirrors the personal-todos pattern on tasks. is_private=true rows are
+-- only visible to their creator even though the table is group-scoped.
+alter table public.events add column if not exists is_private boolean default false;
+create index if not exists events_is_private_idx on public.events (is_private);
+
+drop policy if exists "events_select" on public.events;
+create policy "events_select" on public.events
+  for select using (
+    group_id = (select group_id from public.profiles where id = auth.uid())
+    and (is_private is not true or created_by = auth.uid())
+  );

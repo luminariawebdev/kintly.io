@@ -787,14 +787,30 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAdd
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse }) {
+function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPersonal, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
+  // 'group' shows shared events; 'personal' shows only events the
+  // current user created with is_private=true.
+  const [view, setView] = React.useState('group');
 
   const cells = buildCalendar(calYear, calMonth);
   const todayD = now.getDate();
   const isCurrentMonth = calYear === now.getFullYear() && calMonth === now.getMonth();
+
+  // Split the event list by visibility before recurrence expansion.
+  // Personal view shows ONLY the current user's private events; group
+  // view excludes private rows so they never show in the shared grid.
+  const scopedEvents = React.useMemo(() => {
+    if (view === 'personal') {
+      return events.filter(e => e.is_private && e.created_by === myId);
+    }
+    return events.filter(e => !e.is_private);
+  }, [events, view, myId]);
+
+  const groupOpenCount = events.filter(e => !e.is_private).length;
+  const personalOpenCount = events.filter(e => e.is_private && e.created_by === myId).length;
 
   // Expand any recurring events into their visible instances within a
   // 1-year window centered on today. Each instance carries the same
@@ -804,8 +820,8 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
   const expanded = React.useMemo(() => {
     const start = new Date(); start.setHours(0,0,0,0); start.setMonth(start.getMonth() - 6);
     const end   = new Date(); end.setHours(0,0,0,0);   end.setMonth(end.getMonth() + 12);
-    return expandRecurringEvents(events, start, end);
-  }, [events]);
+    return expandRecurringEvents(scopedEvents, start, end);
+  }, [scopedEvents]);
 
   const monthEvents = expanded.filter(e => {
     const d = new Date(e.date + 'T00:00:00');
@@ -882,6 +898,28 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
       </div>
 
       {!collapsed && (<>
+      {/* View toggle: shared group events vs the current user's
+          private events. Counts shown so the inactive tab still
+          surfaces what's queued. */}
+      <div className="task-view-toggle">
+        <button
+          type="button"
+          className={'task-view-tab' + (view === 'group' ? ' on' : '')}
+          onClick={() => setView('group')}
+        >
+          Group
+          <span className="task-view-count">{groupOpenCount}</span>
+        </button>
+        <button
+          type="button"
+          className={'task-view-tab' + (view === 'personal' ? ' on' : '')}
+          onClick={() => setView('personal')}
+        >
+          🔒 Personal
+          <span className="task-view-count">{personalOpenCount}</span>
+        </button>
+      </div>
+
       <div className="cal-bar">
         <button className="cal-nav" aria-label="Previous month" onClick={prevMonth}>‹</button>
         <div className="mo">{MONTH_NAMES[calMonth]} {calYear}</div>
@@ -935,8 +973,12 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onDayClick,
         ))}
       </div>
 
-      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 12 }}>
-        <span className="plus">+</span> Add event
+      <button
+        className="fb-btn"
+        onClick={view === 'personal' ? (onAddPersonal || onAdd) : onAdd}
+        style={{ marginTop: 12 }}
+      >
+        <span className="plus">+</span> {view === 'personal' ? 'Add personal event' : 'Add event'}
       </button>
 
       {/* Range tabs for the Upcoming list. "This week" = today through
@@ -2203,7 +2245,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
       <div className="field">
         <label>Title</label>
         <div style={{ position: 'relative' }}>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?  Type # to tag a Space" onKeyDown={e => e.key === 'Enter' && save()} />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?  Type # to tag a Space" onKeyDown={e => e.key === 'Enter' && save()} />
           <SpaceHashtagDropdown
             value={title}
             spaces={spaces}
@@ -2391,7 +2433,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
 }
 
 // ─── Add Event Modal ──────────────────────────────────────────────────────────
-function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spaces, initialSpaceId }) {
+function AddEventModal({ open, onClose, members, myId, onSave, initialDate, initialPrivate, spaces, initialSpaceId }) {
   const today = new Date().toISOString().slice(0, 10);
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -2400,6 +2442,9 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
   const [attendees, setAttendees] = React.useState([]);
+  // Personal toggle. When on, the event is only visible to the creator
+  // (enforced by RLS) and the attendees/RSVP/space pickers are hidden.
+  const [isPrivate, setIsPrivate] = React.useState(!!initialPrivate);
   // RSVP recipients — the group members you want to request an RSVP
   // from. They get the `event_invited` notification on save (which is
   // the RSVP request) and are merged into the attendee list so their
@@ -2436,9 +2481,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
       setRepeatFreq('none');
       setRepeatDays([]);
       setSpaceId(initialSpaceId || null);
+      setIsPrivate(!!initialPrivate);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialDate, initialSpaceId]);
+  }, [open, initialDate, initialSpaceId, initialPrivate]);
 
   const toggleAttendee = (id) => {
     setAttendees(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -2476,7 +2522,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
     // RSVP recipients are merged into the attendee list so addEvent's
     // notify() loop reaches them with `event_invited` (the RSVP
     // request) and their responses surface in the attendee list.
-    const finalAttendees = Array.from(new Set([...attendees, ...rsvpRecipients]));
+    const finalAttendees = isPrivate ? [] : Array.from(new Set([...attendees, ...rsvpRecipients]));
     await onSave({
       title: title.trim(),
       description: description.trim() || null,
@@ -2486,8 +2532,9 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
       end_time: endTime || null,
       attendees: finalAttendees,
       recurrence: getRecurrence(),
-      linkedTasks,
-      space_id: spaceId || null,
+      linkedTasks: isPrivate ? [] : linkedTasks,
+      space_id: isPrivate ? null : (spaceId || null),
+      is_private: isPrivate,
     });
     setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
     setRsvpRecipients([]);
@@ -2505,13 +2552,20 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
       <div className="field">
         <label>Title</label>
         <div style={{ position: 'relative' }}>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice  ·  Type # to tag a Space" />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice  ·  Type # to tag a Space" />
           <SpaceHashtagDropdown
             value={title}
             spaces={spaces}
             onChange={setTitle}
             onPickSpace={setSpaceId}
           />
+        </div>
+      </div>
+      <div className="field">
+        <label>Visibility</label>
+        <div className="date-row">
+          <button type="button" className={'pick' + (!isPrivate ? ' on' : '')} onClick={() => setIsPrivate(false)}>Shared with group</button>
+          <button type="button" className={'pick' + (isPrivate ? ' on' : '')} onClick={() => setIsPrivate(true)}>🔒 Personal · only you</button>
         </div>
       </div>
       <div className="field">
@@ -2583,6 +2637,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
           </button>
         </div>
       </div>
+      {!isPrivate && (<>
       <div className="field">
         <label>Attendees <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <div className="assignee-picker">
@@ -2683,6 +2738,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
           <span className="plus">+</span> Add task
         </button>
       </div>
+      </>)}
 
       {/* Repeat — same recurrence model used by tasks. When set, the
           calendar grid + upcoming list will expand this event into
@@ -2753,10 +2809,12 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, spac
         )}
       </div>
 
+      {!isPrivate && (
       <div className="field">
         <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
       </div>
+      )}
 
     </Modal>
     {/* Sibling pickers — see AddTaskModal for the explanation. Mounting
@@ -4936,7 +4994,6 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
       {editing && canEdit ? (
         <div style={{ marginBottom: 14 }}>
           <textarea
-            autoFocus
             value={draft}
             onChange={e => setDraft(e.target.value)}
             rows={5}
@@ -5739,7 +5796,6 @@ function AddListModal({ open, onClose, members, myId, initialTitle = '', spaces,
         <label>List name</label>
         <div style={{ position: 'relative' }}>
           <input
-            autoFocus
             value={title}
             onChange={e => setTitle(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
@@ -6229,7 +6285,6 @@ function AddSpaceModal({ open, onClose, members, myId, initial, onSave }) {
       <div className="field">
         <label>Name</label>
         <input
-          autoFocus
           value={title}
           onChange={e => setTitle(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
@@ -6730,6 +6785,8 @@ export function MainApp({ profile, onSettings }) {
   // True when the Add Task modal should open with the Personal toggle
   // pre-checked (e.g. the user clicked "+ Add personal todo").
   const [taskAddPrivate, setTaskAddPrivate] = React.useState(false);
+  // Same flag for the Add Event modal.
+  const [eventAddPrivate, setEventAddPrivate] = React.useState(false);
   const [detailMemberId, setDetailMemberId] = React.useState(null);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
@@ -7257,7 +7314,7 @@ export function MainApp({ profile, onSettings }) {
     };
 
     // Optional columns that may not exist in older schemas — strip them on error.
-    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps', 'space_id'];
+    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps', 'space_id', 'is_private'];
     const droppedCols = [];
 
     let row = null;
@@ -8328,7 +8385,8 @@ export function MainApp({ profile, onSettings }) {
             members={members}
             getProfile={getProfile}
             myId={profile?.id}
-            onAdd={() => { setEventInitDate(null); setModal('event'); }}
+            onAdd={() => { setEventInitDate(null); setEventAddPrivate(false); setModal('event'); }}
+            onAddPersonal={() => { setEventInitDate(null); setEventAddPrivate(true); setModal('event'); }}
             onDayClick={(iso) => setDayDetailsDate(iso)}
             onDelete={deleteEvent}
             onShowMonth={(payload) => setMonthModalData(payload)}
@@ -8351,7 +8409,17 @@ export function MainApp({ profile, onSettings }) {
         onSave={addTask}
         onUpdate={updateTask}
       />
-      <AddEventModal open={modal === 'event'} onClose={() => { setModal(null); setPendingSpaceId(null); }} members={members} myId={profile?.id} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addEvent} initialDate={eventInitDate} />
+      <AddEventModal
+        open={modal === 'event'}
+        onClose={() => { setModal(null); setPendingSpaceId(null); setEventAddPrivate(false); }}
+        members={members}
+        myId={profile?.id}
+        spaces={spaces}
+        initialSpaceId={pendingSpaceId}
+        initialPrivate={eventAddPrivate}
+        onSave={addEvent}
+        initialDate={eventInitDate}
+      />
       <AddNoteModal open={modal === 'note'} onClose={() => { setModal(null); setPendingSpaceId(null); }} profile={profile} members={members} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addNote} />
       <AddListModal
         open={listAddOpen}
