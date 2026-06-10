@@ -345,44 +345,48 @@ html { overscroll-behavior-x: none; }
 .fb-prof:hover { transform: translateY(-1px); background: var(--hover-tint); border-color: var(--hover-border); box-shadow: var(--shadow-medium); }
 .fb-prof:active { transform: translateY(0); }
 
-/* ── Pull-to-refresh ──────────────────────────────────────────
-   Sits between the sticky header (which stays fixed) and the
-   section wrap. Closed by default (height: 0). Touch handlers in
-   MainApp drive the height while the user drags. The ring fills
-   with stroke-dashoffset as you pull; once armed/refreshing it
-   becomes a continuous spinner. The widget stays centered in
-   whatever vertical space the pull has revealed, so it's
-   visible from the very first few px of drag. */
-.pull-refresh {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  background: var(--surface-glass);
-  color: var(--kinnekt-purple);
-  will-change: height;
-}
-.pull-refresh-ring-wrap {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+/* ── Refresh button ───────────────────────────────────────────
+   Sits in the top-right of the sticky header. Single tap fires
+   window.location.reload() after 700ms; the .spinning class
+   rotates the icon continuously during that window so the user
+   sees a clear loading beat. */
+.fb-refresh {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: var(--surface-primary);
-  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.18), 0 0 0 1px var(--border-soft);
+  border: 1px solid var(--border-glass);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: var(--shadow-soft);
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.2s var(--ease), box-shadow 0.25s var(--ease);
+  z-index: 3;
+}
+.fb-refresh:hover {
+  background: var(--hover-tint);
+  border-color: var(--hover-border);
+  box-shadow: var(--shadow-medium);
+}
+.fb-refresh:active { transform: translateY(-50%) scale(0.94); }
+.fb-refresh.spinning {
   color: var(--kinnekt-purple);
-  transition: transform 0.2s var(--ease), box-shadow 0.25s var(--ease);
+  border-color: rgba(106, 77, 255, 0.30);
+  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.25);
 }
-.pull-refresh.armed .pull-refresh-ring-wrap,
-.pull-refresh.refreshing .pull-refresh-ring-wrap {
-  transform: scale(1.08);
-  box-shadow: 0 6px 20px rgba(106, 77, 255, 0.32), 0 0 0 1px rgba(106, 77, 255, 0.30);
+.fb-refresh.spinning svg {
+  animation: fb-refresh-spin 0.85s linear infinite;
 }
-.pull-refresh.refreshing .pull-refresh-ring {
-  animation: pull-refresh-spin 0.85s linear infinite;
-}
-@keyframes pull-refresh-spin {
+@keyframes fb-refresh-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }

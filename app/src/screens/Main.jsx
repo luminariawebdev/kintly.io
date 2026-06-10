@@ -6847,93 +6847,14 @@ export function MainApp({ profile, onSettings }) {
   const [loading, setLoading] = React.useState(true);
   const scrollRef = React.useRef(null);
 
-  // ── Pull-to-refresh ─────────────────────────────────────────
-  // Drag down from the very top of the feed (scrollTop === 0) to
-  // reload. Listeners are attached natively (not via React props)
-  // because React 18 binds touch events as passive:true at the
-  // root, which can cause iOS Safari to drop touchmove updates
-  // when scrollTop reaches 0 — that was making the gesture look
-  // completely dead.
-  const PULL_TRIGGER = 55;
-  const PULL_MAX     = 110;
-  const PULL_RESIST  = 0.7;
-  const [pullY, setPullY] = React.useState(0);
+  // Manual refresh — button in the sticky header. Sets `refreshing`
+  // so the icon spins for ~700ms, then reloads the page.
   const [refreshing, setRefreshing] = React.useState(false);
-  const pullRef = React.useRef({ startY: 0, pulling: false, armed: false, lastPullY: 0 });
-
-  React.useEffect(() => {
-    // MainApp returns a different JSX while loading (no .fb-scroll),
-    // so scrollRef.current is null until loading flips false. Bail
-    // until then; the loading dep makes the effect re-run at that
-    // point so listeners actually attach.
-    if (loading) return;
-    const wrap = scrollRef.current;
-    if (!wrap) return;
-
-    const start = (e) => {
-      if (refreshing) return;
-      const t = e.touches ? e.touches[0] : e;
-      pullRef.current = {
-        startY: t.clientY,
-        pulling: true,
-        armed: wrap.scrollTop <= 0,
-        lastPullY: 0,
-      };
-    };
-
-    const move = (e) => {
-      const s = pullRef.current;
-      if (!s.pulling || refreshing) return;
-      const t = e.touches ? e.touches[0] : e;
-      // Re-arm if the user scrolled back to the top mid-gesture.
-      if (!s.armed && wrap.scrollTop <= 0) {
-        s.armed = true;
-        s.startY = t.clientY;
-      }
-      if (!s.armed) return;
-      const dy = t.clientY - s.startY;
-      if (dy <= 0) {
-        if (s.lastPullY !== 0) { s.lastPullY = 0; setPullY(0); }
-        return;
-      }
-      const effective = Math.min(PULL_MAX, dy * PULL_RESIST);
-      s.lastPullY = effective;
-      setPullY(effective);
-      // Block the browser's own native overscroll once we've taken
-      // over the gesture, so iOS doesn't try to bounce/refresh on
-      // top of us. Only after the gesture is clearly ours (armed +
-      // moving down) so we never disable normal vertical scrolling.
-      if (e.cancelable) e.preventDefault();
-    };
-
-    const end = () => {
-      const s = pullRef.current;
-      if (!s.pulling) return;
-      s.pulling = false;
-      if (refreshing) return;
-      if (s.lastPullY >= PULL_TRIGGER) {
-        setRefreshing(true);
-        setPullY(PULL_TRIGGER);
-        window.setTimeout(() => window.location.reload(), 900);
-      } else {
-        setPullY(0);
-      }
-    };
-
-    // passive:false on touchmove so we can preventDefault and stop
-    // iOS Safari's native rubber-band from interfering. The other
-    // two can stay passive (cheaper).
-    wrap.addEventListener('touchstart', start, { passive: true });
-    wrap.addEventListener('touchmove',  move,  { passive: false });
-    wrap.addEventListener('touchend',   end,   { passive: true });
-    wrap.addEventListener('touchcancel', end,  { passive: true });
-    return () => {
-      wrap.removeEventListener('touchstart', start);
-      wrap.removeEventListener('touchmove',  move);
-      wrap.removeEventListener('touchend',   end);
-      wrap.removeEventListener('touchcancel', end);
-    };
-  }, [refreshing, loading]);
+  const refreshNow = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    window.setTimeout(() => window.location.reload(), 700);
+  };
 
   // Publish the logged-in user's profile color as a global CSS
   // variable (`--me-color`) on the document root, so any element can
@@ -8305,51 +8226,25 @@ export function MainApp({ profile, onSettings }) {
                 <ProfileButton profile={profile} onClick={onSettings} />
               </div>
             </div>
+            {/* Refresh button — sits in the top-right corner of the
+                sticky header, vertically aligned with the bell +
+                profile. Clicking starts a spin animation and reloads
+                the page after 700ms so the loading beat is visible. */}
+            <button
+              type="button"
+              className={'fb-refresh' + (refreshing ? ' spinning' : '')}
+              onClick={refreshNow}
+              aria-label="Refresh"
+              title="Refresh"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-3.5-7.1" />
+                <polyline points="21 4 21 10 15 10" />
+              </svg>
+            </button>
           </div>
           <AnchorTabs active={tab} onChange={id => { setTab(id); scrollToSec(id); }} />
         </div>
-
-        {/* Pull-to-refresh indicator. Sits directly below the sticky
-            header (which stays fixed) and pushes the home feed down
-            as it grows. Progress ring fills with pull distance, then
-            transitions to a continuous spin during the actual reload. */}
-        {(() => {
-          const progress = Math.min(1, pullY / PULL_TRIGGER);
-          // Ring geometry — r=11 gives a 22px diameter ring inside
-          // the 32px-wide pill. Circumference = 2πr ≈ 69.12.
-          const RING_C = 2 * Math.PI * 11;
-          const dashOffset = RING_C * (1 - progress);
-          return (
-            <div
-              className={'pull-refresh' + (refreshing ? ' refreshing' : '') + (pullY >= PULL_TRIGGER ? ' armed' : '')}
-              style={{
-                height: pullY,
-                transition: pullRef.current.pulling ? 'none' : 'height 0.38s cubic-bezier(0.34, 1.36, 0.64, 1)',
-              }}
-              aria-hidden={pullY === 0 && !refreshing}
-            >
-              <div className="pull-refresh-ring-wrap">
-                <svg className="pull-refresh-ring" width="26" height="26" viewBox="0 0 28 28">
-                  {/* Track */}
-                  <circle cx="14" cy="14" r="11" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
-                  {/* Progress arc — rotates -90deg so it starts at 12 o'clock */}
-                  <circle
-                    cx="14"
-                    cy="14"
-                    r="11"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeDasharray={RING_C}
-                    strokeDashoffset={refreshing ? RING_C * 0.7 : dashOffset}
-                    transform="rotate(-90 14 14)"
-                  />
-                </svg>
-              </div>
-            </div>
-          );
-        })()}
 
         <div className="fb-sec-wrap">
           <NotesSection
