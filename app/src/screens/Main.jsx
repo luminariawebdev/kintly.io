@@ -973,13 +973,26 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPerson
         ))}
       </div>
 
-      <button
-        className="fb-btn"
-        onClick={view === 'personal' ? (onAddPersonal || onAdd) : onAdd}
-        style={{ marginTop: 12 }}
-      >
-        <span className="plus">+</span> {view === 'personal' ? 'Add personal event' : 'Add event'}
-      </button>
+      {/* Two explicit Add buttons so the user doesn't have to flip
+          the Group/Personal toggle just to drop something in the
+          other bucket. The button label is always clear about
+          which calendar the new event lands in. */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button
+          className="fb-btn"
+          onClick={onAdd}
+          style={{ flex: 1 }}
+        >
+          <span className="plus">+</span> Group event
+        </button>
+        <button
+          className="fb-btn"
+          onClick={onAddPersonal || onAdd}
+          style={{ flex: 1 }}
+        >
+          <span aria-hidden style={{ marginRight: 4 }}>🔒</span> Personal event
+        </button>
+      </div>
 
       {/* Range tabs for the Upcoming list. "This week" = today through
           Saturday, "This month" = today through end of the current
