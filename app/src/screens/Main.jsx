@@ -6862,6 +6862,11 @@ export function MainApp({ profile, onSettings }) {
   const pullRef = React.useRef({ startY: 0, pulling: false, armed: false, lastPullY: 0 });
 
   React.useEffect(() => {
+    // MainApp returns a different JSX while loading (no .fb-scroll),
+    // so scrollRef.current is null until loading flips false. Bail
+    // until then; the loading dep makes the effect re-run at that
+    // point so listeners actually attach.
+    if (loading) return;
     const wrap = scrollRef.current;
     if (!wrap) return;
 
@@ -6928,7 +6933,7 @@ export function MainApp({ profile, onSettings }) {
       wrap.removeEventListener('touchend',   end);
       wrap.removeEventListener('touchcancel', end);
     };
-  }, [refreshing]);
+  }, [refreshing, loading]);
 
   // Publish the logged-in user's profile color as a global CSS
   // variable (`--me-color`) on the document root, so any element can
