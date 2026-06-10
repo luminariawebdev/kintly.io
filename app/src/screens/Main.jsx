@@ -6897,9 +6897,11 @@ export function MainApp({ profile, onSettings }) {
     if (pullY >= PULL_TRIGGER) {
       setRefreshing(true);
       setPullY(PULL_TRIGGER);
-      // Brief delay so the spinner is visible before the reload
-      // wipes everything.
-      window.setTimeout(() => window.location.reload(), 350);
+      // Longer delay so the spinning loading state actually
+      // registers visually before the page reloads underneath
+      // it. iOS reload flashes white so without this the user
+      // never sees the "refreshing" beat.
+      window.setTimeout(() => window.location.reload(), 900);
     } else {
       setPullY(0);
     }
@@ -8298,14 +8300,14 @@ export function MainApp({ profile, onSettings }) {
               className={'pull-refresh' + (refreshing ? ' refreshing' : '') + (pullY >= PULL_TRIGGER ? ' armed' : '')}
               style={{
                 height: pullY,
-                transition: pullRef.current.pulling ? 'none' : 'height 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: pullRef.current.pulling ? 'none' : 'height 0.38s cubic-bezier(0.34, 1.36, 0.64, 1)',
               }}
               aria-hidden={pullY === 0 && !refreshing}
             >
               <div className="pull-refresh-ring-wrap">
-                <svg className="pull-refresh-ring" width="32" height="32" viewBox="0 0 28 28">
+                <svg className="pull-refresh-ring" width="26" height="26" viewBox="0 0 28 28">
                   {/* Track */}
-                  <circle cx="14" cy="14" r="11" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="2.5" />
+                  <circle cx="14" cy="14" r="11" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
                   {/* Progress arc — rotates -90deg so it starts at 12 o'clock */}
                   <circle
                     cx="14"
@@ -8313,7 +8315,7 @@ export function MainApp({ profile, onSettings }) {
                     r="11"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="2.5"
+                    strokeWidth="3"
                     strokeLinecap="round"
                     strokeDasharray={RING_C}
                     strokeDashoffset={refreshing ? RING_C * 0.7 : dashOffset}

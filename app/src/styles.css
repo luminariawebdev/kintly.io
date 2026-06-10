@@ -350,42 +350,37 @@ html { overscroll-behavior-x: none; }
    section wrap. Closed by default (height: 0). Touch handlers in
    MainApp drive the height while the user drags. The ring fills
    with stroke-dashoffset as you pull; once armed/refreshing it
-   becomes a continuous spinner. */
+   becomes a continuous spinner. The widget stays centered in
+   whatever vertical space the pull has revealed, so it's
+   visible from the very first few px of drag. */
 .pull-refresh {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  padding-bottom: 8px;
   overflow: hidden;
   background: var(--surface-glass);
-  color: var(--text-secondary);
+  color: var(--kinnekt-purple);
   will-change: height;
 }
 .pull-refresh-ring-wrap {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   background: var(--surface-primary);
-  box-shadow: 0 2px 8px rgba(15, 30, 60, 0.10), 0 0 0 1px var(--border-soft);
-  transition: background 0.2s var(--ease), color 0.2s var(--ease);
-}
-.pull-refresh-ring {
-  display: block;
-  /* During pull the SVG itself doesn't rotate — only the
-     stroke-dashoffset on the inner arc fills. */
-}
-.pull-refresh.armed .pull-refresh-ring-wrap {
+  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.18), 0 0 0 1px var(--border-soft);
   color: var(--kinnekt-purple);
+  transition: transform 0.2s var(--ease), box-shadow 0.25s var(--ease);
 }
+.pull-refresh.armed .pull-refresh-ring-wrap,
 .pull-refresh.refreshing .pull-refresh-ring-wrap {
-  color: var(--kinnekt-purple);
-  background: var(--surface-primary);
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(106, 77, 255, 0.32), 0 0 0 1px rgba(106, 77, 255, 0.30);
 }
 .pull-refresh.refreshing .pull-refresh-ring {
-  animation: pull-refresh-spin 0.8s linear infinite;
+  animation: pull-refresh-spin 0.85s linear infinite;
 }
 @keyframes pull-refresh-spin {
   from { transform: rotate(0deg); }
