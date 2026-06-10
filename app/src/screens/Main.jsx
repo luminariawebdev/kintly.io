@@ -8214,32 +8214,46 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         {/* Pull-to-refresh indicator. Sits directly below the sticky
-            header and above the home feed. Height is driven by the
-            current pull distance (or locked at the trigger height
-            while we're actively refreshing). */}
-        <div
-          className={'pull-refresh' + (refreshing ? ' refreshing' : '') + (pullY >= PULL_TRIGGER ? ' armed' : '')}
-          style={{
-            height: pullY,
-            transition: pullRef.current.pulling ? 'none' : 'height 0.25s cubic-bezier(0.22, 1, 0.36, 1)',
-          }}
-          aria-hidden={pullY === 0 && !refreshing}
-        >
-          <div
-            className="pull-refresh-spinner"
-            style={{ transform: refreshing ? 'none' : `rotate(${Math.min(360, pullY * 4)}deg)` }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12a9 9 0 1 1-3.5-7.1" />
-              <polyline points="21 4 21 10 15 10" />
-            </svg>
-          </div>
-          {!refreshing && pullY > 0 && (
-            <div className="pull-refresh-label">
-              {pullY >= PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh'}
+            header (which stays fixed) and pushes the home feed down
+            as it grows. Progress ring fills with pull distance, then
+            transitions to a continuous spin during the actual reload. */}
+        {(() => {
+          const progress = Math.min(1, pullY / PULL_TRIGGER);
+          // Ring geometry — r=11 gives a 22px diameter ring inside
+          // the 32px-wide pill. Circumference = 2πr ≈ 69.12.
+          const RING_C = 2 * Math.PI * 11;
+          const dashOffset = RING_C * (1 - progress);
+          return (
+            <div
+              className={'pull-refresh' + (refreshing ? ' refreshing' : '') + (pullY >= PULL_TRIGGER ? ' armed' : '')}
+              style={{
+                height: pullY,
+                transition: pullRef.current.pulling ? 'none' : 'height 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
+              aria-hidden={pullY === 0 && !refreshing}
+            >
+              <div className="pull-refresh-ring-wrap">
+                <svg className="pull-refresh-ring" width="32" height="32" viewBox="0 0 28 28">
+                  {/* Track */}
+                  <circle cx="14" cy="14" r="11" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="2.5" />
+                  {/* Progress arc — rotates -90deg so it starts at 12 o'clock */}
+                  <circle
+                    cx="14"
+                    cy="14"
+                    r="11"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray={RING_C}
+                    strokeDashoffset={refreshing ? RING_C * 0.7 : dashOffset}
+                    transform="rotate(-90 14 14)"
+                  />
+                </svg>
+              </div>
             </div>
-          )}
-        </div>
+          );
+        })()}
 
         <div className="fb-sec-wrap">
           <NotesSection

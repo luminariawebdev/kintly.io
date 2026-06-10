@@ -346,47 +346,46 @@ html { overscroll-behavior-x: none; }
 .fb-prof:active { transform: translateY(0); }
 
 /* ── Pull-to-refresh ──────────────────────────────────────────
-   Sits between the sticky header and the section wrap. Closed by
-   default (height: 0). Touch handlers in MainApp drive the height
-   while the user drags; release past PULL_TRIGGER triggers a
-   page reload. */
+   Sits between the sticky header (which stays fixed) and the
+   section wrap. Closed by default (height: 0). Touch handlers in
+   MainApp drive the height while the user drags. The ring fills
+   with stroke-dashoffset as you pull; once armed/refreshing it
+   becomes a continuous spinner. */
 .pull-refresh {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  gap: 10px;
+  padding-bottom: 8px;
   overflow: hidden;
   background: var(--surface-glass);
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-soft);
   will-change: height;
 }
-.pull-refresh-spinner {
+.pull-refresh-ring-wrap {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--surface-glass-strong);
-  color: var(--text-primary);
-  transition: transform 0.05s linear, background 0.2s var(--ease), color 0.2s var(--ease);
+  background: var(--surface-primary);
+  box-shadow: 0 2px 8px rgba(15, 30, 60, 0.10), 0 0 0 1px var(--border-soft);
+  transition: background 0.2s var(--ease), color 0.2s var(--ease);
 }
-.pull-refresh.armed .pull-refresh-spinner {
-  background: var(--brand-grad);
-  color: #FFFFFF;
-  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.25);
+.pull-refresh-ring {
+  display: block;
+  /* During pull the SVG itself doesn't rotate — only the
+     stroke-dashoffset on the inner arc fills. */
 }
-.pull-refresh-label {
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+.pull-refresh.armed .pull-refresh-ring-wrap {
+  color: var(--kinnekt-purple);
 }
-.pull-refresh.refreshing .pull-refresh-spinner {
-  background: var(--brand-grad);
-  color: #FFFFFF;
-  animation: pull-refresh-spin 0.9s linear infinite;
+.pull-refresh.refreshing .pull-refresh-ring-wrap {
+  color: var(--kinnekt-purple);
+  background: var(--surface-primary);
+}
+.pull-refresh.refreshing .pull-refresh-ring {
+  animation: pull-refresh-spin 0.8s linear infinite;
 }
 @keyframes pull-refresh-spin {
   from { transform: rotate(0deg); }
