@@ -266,6 +266,16 @@ export function Modal({ open, title, onClose, children, footer, compact }) {
   const sheetRef = React.useRef(null);
   const dragRef = React.useRef({ startY: 0, dragging: false, offset: 0 });
 
+  // Reset sheet's internal scrollTop to 0 each time it opens. iOS
+  // Safari's autoFocus on the first input + on-screen-keyboard popup
+  // was leaving the sheet scrolled partway down, so the user landed
+  // mid-form and had to scroll up to see the title.
+  React.useEffect(() => {
+    if (open && sheetRef.current) {
+      sheetRef.current.scrollTop = 0;
+    }
+  }, [open]);
+
   if (!open) return null;
 
   const onPointerDown = (e) => {

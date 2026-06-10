@@ -386,3 +386,17 @@ create policy "space_items_update" on public.space_items
 drop policy if exists "space_items_delete" on public.space_items;
 create policy "space_items_delete" on public.space_items
   for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+
+-- ─── Personal todos ─────────────────────────────────────────────────────────
+-- A task can be flagged is_private=true so it's only visible to the creator.
+-- Other group members never see private rows even though the table is
+-- group-scoped. Default false keeps existing tasks shared.
+alter table public.tasks add column if not exists is_private boolean default false;
+create index if not exists tasks_is_private_idx on public.tasks (is_private);
+
+drop policy if exists "tasks_select" on public.tasks;
+create policy "tasks_select" on public.tasks
+  for select using (
+    group_id = (select group_id from public.profiles where id = auth.uid())
+    and (is_private is not true or created_by = auth.uid())
+  );

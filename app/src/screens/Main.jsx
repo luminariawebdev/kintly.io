@@ -584,10 +584,13 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
 }
 
 // ─── Tasks Section ────────────────────────────────────────────────────────────
-function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
+function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
   const [showDone, setShowDone] = React.useState(false);
+  // Two-view toggle: 'group' shows the shared tasks grouped by
+  // assignee, 'personal' shows only this user's private todos.
+  const [view, setView] = React.useState('group');
 
-  const filtered = tasks.filter(t => {
+  const applyFilter = (list) => list.filter(t => {
     if (filter === 'all') return true;
     if (filter === 'today') {
       if (!t.due_date) return !t.completed;
@@ -602,8 +605,19 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
     return true;
   });
 
+  // Personal todos are flagged is_private and only ever surfaced to
+  // the creator (RLS enforces this server-side too). Everything else
+  // is "shared" — grouped by assignee like before.
+  const sharedTasks   = tasks.filter(t => !t.is_private);
+  const personalTasks = tasks.filter(t => t.is_private && t.created_by === myId);
+
+  const filtered = applyFilter(sharedTasks);
+  const filteredPersonal = applyFilter(personalTasks);
+
   const openItems = filtered.filter(t => !t.completed);
   const doneItems = filtered.filter(t => t.completed);
+  const openPersonal = filteredPersonal.filter(t => !t.completed);
+  const donePersonal = filteredPersonal.filter(t => t.completed);
 
   const grouped = members.map(m => ({
     member: m,
@@ -611,7 +625,8 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
   })).filter(g => g.items.length > 0);
 
   const unassigned = openItems.filter(t => !t.assigned_to);
-  const openCount = tasks.filter(t => !t.completed).length;
+  const openCount = sharedTasks.filter(t => !t.completed).length;
+  const personalCount = personalTasks.filter(t => !t.completed).length;
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-tasks">
@@ -621,17 +636,40 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
           <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
         <div className="fb-sec-hd-right">
-          <div className="fb-sec-meta">{openCount} open</div>
+          <div className="fb-sec-meta">{view === 'group' ? `${openCount} open` : `${personalCount} open`}</div>
         </div>
       </div>
 
       {!collapsed && (<>
+      {/* View toggle: shared group tasks vs the current user's
+          private todos. Counts shown so the inactive tab still
+          surfaces unread/pending work. */}
+      <div className="task-view-toggle">
+        <button
+          type="button"
+          className={'task-view-tab' + (view === 'group' ? ' on' : '')}
+          onClick={() => setView('group')}
+        >
+          Group
+          <span className="task-view-count">{openCount}</span>
+        </button>
+        <button
+          type="button"
+          className={'task-view-tab' + (view === 'personal' ? ' on' : '')}
+          onClick={() => setView('personal')}
+        >
+          🔒 Personal
+          <span className="task-view-count">{personalCount}</span>
+        </button>
+      </div>
+
       <div className="fb-chips">
         {[['week', 'This week'], ['all', 'All']].map(([k, label]) => (
           <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
         ))}
       </div>
 
+      {view === 'group' && (<>
       <button className="fb-btn" onClick={onAdd}>
         <span className="plus">+</span> Add task
       </button>
@@ -697,6 +735,52 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onDel
           )}
         </div>
       )}
+      </>)}
+
+      {/* ── Personal todos view ────────────────────────────────────
+          Private to the current user — RLS hides these rows from
+          every other group member. Same layout as a flat tasklist
+          since assignee is always "me". */}
+      {view === 'personal' && (<>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>🔒 Only you can see these.</div>
+        <button className="fb-btn" onClick={onAddPersonal || onAdd}>
+          <span className="plus">+</span> Add personal todo
+        </button>
+        {openPersonal.length === 0 && donePersonal.length === 0 ? (
+          <div className="kbd-hint" style={{ padding: '20px 0' }}>NO PERSONAL TODOS — ADD ONE ABOVE</div>
+        ) : (
+          <div className="fb-listbox">
+            <div className="fb-listbox-legend">Your private list</div>
+            {openPersonal.length > 0 && (
+              <div className="tasklist">
+                {openPersonal.map(t => (
+                  <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                ))}
+              </div>
+            )}
+            {donePersonal.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <button
+                  onClick={() => setShowDone(s => !s)}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 0, borderTop: '1px solid var(--rule)', cursor: 'pointer', font: 'inherit' }}
+                >
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.55 }}>
+                    Completed · {donePersonal.length}
+                  </span>
+                  <span style={{ opacity: 0.5, fontSize: 12 }}>{showDone ? '▴ hide' : '▾ show'}</span>
+                </button>
+                {showDone && (
+                  <div className="tasklist">
+                    {donePersonal.map(t => (
+                      <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </>)}
       </>)}
     </section>
   );
@@ -1189,7 +1273,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     } else if (refType === 'poll') {
       snippet = replyToNote.payload?.question || 'poll';
     } else {
-      snippet = (replyToNote.content || '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 120);
+      snippet = (replyToNote.content || '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 220);
     }
     return (
       <button
@@ -1998,7 +2082,8 @@ function TimePickerModal({ open, value, title, onClose, onPick }) {
 }
 
 // ─── Add Task Modal ───────────────────────────────────────────────────────────
-function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, onSave }) {
+function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, initial, initialPrivate, onSave, onUpdate }) {
+  const editing = !!initial?.id;
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [assignee, setAssignee] = React.useState(myId || null);
@@ -2008,15 +2093,40 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
   const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly + custom
   const [repeatTime, setRepeatTime] = React.useState('');     // HH:MM
   const [spaceId, setSpaceId] = React.useState(initialSpaceId || null);
+  // Personal toggle. When on, the task is only visible to the creator
+  // (enforced by RLS) and the assignee/space pickers are hidden — a
+  // personal todo doesn't need either since it's just for you.
+  const [isPrivate, setIsPrivate] = React.useState(!!initialPrivate);
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
   const [dueDateOpen,    setDueDateOpen]    = React.useState(false);
   const [repeatTimeOpen, setRepeatTimeOpen] = React.useState(false);
 
-  // Keep spaceId in sync when reopened (e.g. via "+ Add task" from inside a Space).
+  // When opened in edit mode, hydrate every field from the existing
+  // task. When opened fresh, fall back to defaults + initialSpaceId.
   React.useEffect(() => {
-    if (open) setSpaceId(initialSpaceId || null);
-  }, [open, initialSpaceId]);
+    if (!open) return;
+    if (initial && initial.id) {
+      setTitle(initial.title || '');
+      setDescription(initial.description || '');
+      setAssignee(initial.assigned_to ?? null);
+      if (initial.due_date) { setDueOpt('pick'); setDueDate(initial.due_date); }
+      else                  { setDueOpt('today'); setDueDate(''); }
+      const r = initial.recurrence;
+      if (r && r.freq) {
+        setRepeatFreq(r.freq);
+        setRepeatDays(Array.isArray(r.days) ? r.days : []);
+        setRepeatTime(r.time || '');
+      } else {
+        setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
+      }
+      setSpaceId(initial.space_id || null);
+      setIsPrivate(!!initial.is_private);
+    } else {
+      setSpaceId(initialSpaceId || null);
+      setIsPrivate(!!initialPrivate);
+    }
+  }, [open, initial, initialSpaceId, initialPrivate]);
 
   const getDueDate = () => {
     const d = new Date();
@@ -2045,21 +2155,29 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
     setDueOpt('today'); setDueDate('');
     setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
     setSpaceId(initialSpaceId || null);
+    setIsPrivate(!!initialPrivate);
   };
 
   const buildPayload = () => ({
     title: title.trim(),
     description: description.trim() || null,
-    assigned_to: assignee,
+    // Personal todos force assignee = creator and ignore space tagging
+    // — they're scoped to the current user only.
+    assigned_to: isPrivate ? myId : assignee,
     due_date: getDueDate(),
     recurrence: getRecurrence(),
-    space_id: spaceId || null,
+    space_id: isPrivate ? null : (spaceId || null),
+    is_private: isPrivate,
   });
 
   const save = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    await onSave(buildPayload());
+    if (editing) {
+      await onUpdate(initial.id, buildPayload());
+    } else {
+      await onSave(buildPayload());
+    }
     reset();
     setSaving(false);
     onClose();
@@ -2075,11 +2193,11 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
 
   return (
     <>
-    <Modal open={open} onClose={onClose} title={<>Add <em>task</em></>}
+    <Modal open={open} onClose={onClose} title={editing ? <>Edit <em>task</em></> : <>Add <em>task</em></>}
       footer={
         <>
-          <button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save task'}</button>
-          <button className="fb-link" onClick={saveAndAnother} style={{ alignSelf: 'center' }}>or save &amp; add another</button>
+          <button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : (editing ? 'Save changes' : 'Save task')}</button>
+          {!editing && <button className="fb-link" onClick={saveAndAnother} style={{ alignSelf: 'center' }}>or save &amp; add another</button>}
         </>
       }>
       <div className="field">
@@ -2092,6 +2210,13 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
             onChange={setTitle}
             onPickSpace={setSpaceId}
           />
+        </div>
+      </div>
+      <div className="field">
+        <label>Visibility</label>
+        <div className="date-row">
+          <button type="button" className={'pick' + (!isPrivate ? ' on' : '')} onClick={() => setIsPrivate(false)}>Shared with group</button>
+          <button type="button" className={'pick' + (isPrivate ? ' on' : '')} onClick={() => setIsPrivate(true)}>🔒 Personal · only you</button>
         </div>
       </div>
       <div className="field">
@@ -2108,6 +2233,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
           {description.length} / 500
         </div>
       </div>
+      {!isPrivate && (
       <div className="field">
         <label>Assign to</label>
         <div className="assignee-picker">
@@ -2120,6 +2246,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
           <button className={'pick unassign' + (assignee === null ? ' on' : '')} onClick={() => setAssignee(null)}>Unassigned</button>
         </div>
       </div>
+      )}
       <div className="field">
         <label>Due</label>
         <div className="date-row">
@@ -2229,10 +2356,12 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, on
         )}
       </div>
 
+      {!isPrivate && (
       <div className="field">
         <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
       </div>
+      )}
 
     </Modal>
     {/* Nested pickers are rendered as SIBLINGS to the parent Modal, not
@@ -4235,7 +4364,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit }) {
   const [cancelMode, setCancelMode] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [cancelling, setCancelling] = React.useState(false);
@@ -4439,6 +4568,13 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+          {onEdit && (task.created_by === myId || task.assigned_to === myId) && !task.cancelled_at && !cancelMode && (
+            <button
+              onClick={() => onEdit(task)}
+              className="copy-btn"
+              style={{ marginLeft: 0 }}
+            >Edit</button>
+          )}
           {task.created_by === myId && !task.cancelled_at && !cancelMode && onCancelTask && (
             <button
               onClick={() => setCancelMode(true)}
@@ -6590,6 +6726,10 @@ export function MainApp({ profile, onSettings }) {
   const [detailEventId, setDetailEventId] = React.useState(null);
   const [detailNoteId, setDetailNoteId] = React.useState(null);
   const [detailTaskId, setDetailTaskId] = React.useState(null);
+  const [taskEditTarget, setTaskEditTarget] = React.useState(null);
+  // True when the Add Task modal should open with the Personal toggle
+  // pre-checked (e.g. the user clicked "+ Add personal todo").
+  const [taskAddPrivate, setTaskAddPrivate] = React.useState(false);
   const [detailMemberId, setDetailMemberId] = React.useState(null);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
@@ -6818,10 +6958,48 @@ export function MainApp({ profile, onSettings }) {
         })
       .subscribe();
 
+    // Realtime for the core data tables — tasks, events, notes. Without
+    // this, a family member's add/update/delete wouldn't surface until
+    // the current user reloaded the app.
+    const coreChannel = supabase
+      .channel('kinnekt-core-' + profile.group_id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setTasks(prev => prev.filter(t => t.id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setTasks(prev => prev.some(t => t.id === row.id) ? prev : [row, ...prev]);
+          } else {
+            setTasks(prev => prev.map(t => t.id === row.id ? row : t));
+          }
+        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'events', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setEvents(prev => prev.filter(e => e.id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setEvents(prev => prev.some(e => e.id === row.id) ? prev : [...prev, row]);
+          } else {
+            setEvents(prev => prev.map(e => e.id === row.id ? row : e));
+          }
+        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notes', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setNotes(prev => prev.filter(n => n.id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setNotes(prev => prev.some(n => n.id === row.id) ? prev : [row, ...prev]);
+          } else {
+            setNotes(prev => prev.map(n => n.id === row.id ? row : n));
+          }
+        })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
       supabase.removeChannel(listsChannel);
       supabase.removeChannel(spacesChannel);
+      supabase.removeChannel(coreChannel);
     };
   }, [profile?.group_id, profile?.id]);
 
@@ -6887,11 +7065,11 @@ export function MainApp({ profile, onSettings }) {
     // `event_id` is the link to an event (event detail modal -> "Linked
     // tasks" -> create new task). Null when the task isn't tied to an
     // event, present otherwise. Strip-on-error mirrors recurrence.
-    const optional = ['description', 'recurrence', 'event_id', 'space_id'];
+    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
     const droppedCols = [];
     let row = null;
     let error = null;
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 7; i++) {
       ({ data: row, error } = await supabase.from('tasks').insert(payload).select().single());
       if (!error) break;
       let stripped = null;
@@ -6935,6 +7113,35 @@ export function MainApp({ profile, onSettings }) {
         by_color: profile.color,
       });
     }
+  };
+  const updateTask = async (id, patch) => {
+    const existing = tasks.find(t => t.id === id);
+    if (!existing) return { error: { message: 'Task not found' } };
+    const next = { ...existing, ...patch };
+    setTasks(prev => prev.map(t => t.id === id ? next : t));
+    // Optional columns: strip on error so the update still goes
+    // through on older schemas (same pattern as addTask).
+    let payload = { ...patch };
+    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
+    for (let i = 0; i < 7; i++) {
+      const { error } = await supabase.from('tasks').update(payload).eq('id', id);
+      if (!error) return { error: null };
+      const msg = (error.message || '').toLowerCase();
+      let stripped = null;
+      for (const col of optional) {
+        if (payload[col] !== undefined && msg.includes(col)) {
+          const { [col]: _, ...rest } = payload;
+          payload = rest;
+          stripped = col;
+          break;
+        }
+      }
+      if (!stripped) {
+        setTasks(prev => prev.map(t => t.id === id ? existing : t));
+        return { error };
+      }
+    }
+    return { error: null };
   };
   const deleteTask = async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
@@ -7964,7 +8171,7 @@ export function MainApp({ profile, onSettings }) {
             collapsed={collapsed.notes}
             onToggleCollapse={() => toggleCollapse('notes')}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => setModal('task')} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} filter={tasksFilter} setFilter={setTasksFilter} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => { setTaskAddPrivate(false); setModal('task'); }} onAddPersonal={() => { setTaskAddPrivate(true); setModal('task'); }} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* ListsSection is hidden — Spaces handles the same use case
               with more flexibility. The component, state, modals, and
               CRUD wiring all stay in place; just uncomment to bring it
@@ -8025,7 +8232,18 @@ export function MainApp({ profile, onSettings }) {
         </div>
       </div>
 
-      <AddTaskModal open={modal === 'task'} onClose={() => { setModal(null); setPendingSpaceId(null); }} members={members} myId={profile?.id} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addTask} />
+      <AddTaskModal
+        open={modal === 'task'}
+        onClose={() => { setModal(null); setPendingSpaceId(null); setTaskEditTarget(null); setTaskAddPrivate(false); }}
+        members={members}
+        myId={profile?.id}
+        spaces={spaces}
+        initialSpaceId={pendingSpaceId}
+        initial={taskEditTarget}
+        initialPrivate={taskAddPrivate}
+        onSave={addTask}
+        onUpdate={updateTask}
+      />
       <AddEventModal open={modal === 'event'} onClose={() => { setModal(null); setPendingSpaceId(null); }} members={members} myId={profile?.id} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addEvent} initialDate={eventInitDate} />
       <AddNoteModal open={modal === 'note'} onClose={() => { setModal(null); setPendingSpaceId(null); }} profile={profile} members={members} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addNote} />
       <AddListModal
@@ -8170,6 +8388,7 @@ export function MainApp({ profile, onSettings }) {
         onToggle={toggleTask}
         onDelete={deleteTask}
         onCancelTask={cancelTask}
+        onEdit={(t) => { setDetailTaskId(null); setTaskEditTarget(t); setModal('task'); }}
         onOpenNote={(n) => { setDetailTaskId(null); setDetailNoteId(n.id); }}
         onShowMember={(p) => { setDetailTaskId(null); setDetailMemberId(p.id); }}
       />
