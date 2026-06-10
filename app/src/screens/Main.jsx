@@ -6777,6 +6777,64 @@ export function MainApp({ profile, onSettings }) {
   const [loading, setLoading] = React.useState(true);
   const scrollRef = React.useRef(null);
 
+  // ── Pull-to-refresh ─────────────────────────────────────────
+  // Drag down from the very top of the feed (scrollTop === 0) to
+  // reload. pullY is the current pull distance in px (with light
+  // resistance), refreshing locks the indicator at the trigger
+  // height while window.location.reload() fires.
+  const PULL_TRIGGER = 70;
+  const PULL_MAX     = 110;
+  const [pullY, setPullY] = React.useState(0);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const pullRef = React.useRef({ startY: 0, pulling: false, armed: false });
+
+  const onScrollTouchStart = (e) => {
+    const wrap = scrollRef.current;
+    if (!wrap || refreshing) return;
+    pullRef.current = {
+      startY: e.touches[0].clientY,
+      pulling: true,
+      // Only "armed" if we start at the very top — otherwise a
+      // touchmove during a normal mid-feed scroll would yank the
+      // indicator open.
+      armed: wrap.scrollTop <= 0,
+    };
+  };
+
+  const onScrollTouchMove = (e) => {
+    const s = pullRef.current;
+    if (!s.pulling || refreshing) return;
+    const wrap = scrollRef.current;
+    if (!wrap) return;
+    // Re-arm if the user scrolled back up to the top mid-gesture.
+    if (!s.armed && wrap.scrollTop <= 0) {
+      s.armed = true;
+      s.startY = e.touches[0].clientY;
+    }
+    if (!s.armed) return;
+    const dy = e.touches[0].clientY - s.startY;
+    if (dy <= 0) { setPullY(0); return; }
+    // Resistance curve — pull feels heavier as it grows so the
+    // indicator never just shoots off the screen.
+    const effective = Math.min(PULL_MAX, dy * 0.5);
+    setPullY(effective);
+  };
+
+  const onScrollTouchEnd = () => {
+    const s = pullRef.current;
+    s.pulling = false;
+    if (refreshing) return;
+    if (pullY >= PULL_TRIGGER) {
+      setRefreshing(true);
+      setPullY(PULL_TRIGGER);
+      // Brief delay so the spinner is visible before the reload
+      // wipes everything.
+      window.setTimeout(() => window.location.reload(), 350);
+    } else {
+      setPullY(0);
+    }
+  };
+
   // Publish the logged-in user's profile color as a global CSS
   // variable (`--me-color`) on the document root, so any element can
   // reference it without prop-drilling. Used by the small "you" badge
@@ -8109,7 +8167,14 @@ export function MainApp({ profile, onSettings }) {
     <MyIdContext.Provider value={profile?.id || null}>
     <SpacesContext.Provider value={{ spaces, showSpace, getProfile }}>
     <div className="fb-screen">
-      <div className="fb-scroll" ref={scrollRef}>
+      <div
+        className="fb-scroll"
+        ref={scrollRef}
+        onTouchStart={onScrollTouchStart}
+        onTouchMove={onScrollTouchMove}
+        onTouchEnd={onScrollTouchEnd}
+        onTouchCancel={onScrollTouchEnd}
+      >
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-head">
             <div className="fb-stickyhead-right">
@@ -8146,6 +8211,34 @@ export function MainApp({ profile, onSettings }) {
             </div>
           </div>
           <AnchorTabs active={tab} onChange={id => { setTab(id); scrollToSec(id); }} />
+        </div>
+
+        {/* Pull-to-refresh indicator. Sits directly below the sticky
+            header and above the home feed. Height is driven by the
+            current pull distance (or locked at the trigger height
+            while we're actively refreshing). */}
+        <div
+          className={'pull-refresh' + (refreshing ? ' refreshing' : '') + (pullY >= PULL_TRIGGER ? ' armed' : '')}
+          style={{
+            height: pullY,
+            transition: pullRef.current.pulling ? 'none' : 'height 0.25s cubic-bezier(0.22, 1, 0.36, 1)',
+          }}
+          aria-hidden={pullY === 0 && !refreshing}
+        >
+          <div
+            className="pull-refresh-spinner"
+            style={{ transform: refreshing ? 'none' : `rotate(${Math.min(360, pullY * 4)}deg)` }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-3.5-7.1" />
+              <polyline points="21 4 21 10 15 10" />
+            </svg>
+          </div>
+          {!refreshing && pullY > 0 && (
+            <div className="pull-refresh-label">
+              {pullY >= PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh'}
+            </div>
+          )}
         </div>
 
         <div className="fb-sec-wrap">

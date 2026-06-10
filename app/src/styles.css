@@ -345,6 +345,54 @@ html { overscroll-behavior-x: none; }
 .fb-prof:hover { transform: translateY(-1px); background: var(--hover-tint); border-color: var(--hover-border); box-shadow: var(--shadow-medium); }
 .fb-prof:active { transform: translateY(0); }
 
+/* ── Pull-to-refresh ──────────────────────────────────────────
+   Sits between the sticky header and the section wrap. Closed by
+   default (height: 0). Touch handlers in MainApp drive the height
+   while the user drags; release past PULL_TRIGGER triggers a
+   page reload. */
+.pull-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  overflow: hidden;
+  background: var(--surface-glass);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-soft);
+  will-change: height;
+}
+.pull-refresh-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-glass-strong);
+  color: var(--text-primary);
+  transition: transform 0.05s linear, background 0.2s var(--ease), color 0.2s var(--ease);
+}
+.pull-refresh.armed .pull-refresh-spinner {
+  background: var(--brand-grad);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.25);
+}
+.pull-refresh-label {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.pull-refresh.refreshing .pull-refresh-spinner {
+  background: var(--brand-grad);
+  color: #FFFFFF;
+  animation: pull-refresh-spin 0.9s linear infinite;
+}
+@keyframes pull-refresh-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* ── Anchor tabs (glass) ──────────────────────────────────────── */
 .fb-tabs {
   display: flex;
