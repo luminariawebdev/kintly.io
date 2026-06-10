@@ -4568,7 +4568,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-          {onEdit && (task.created_by === myId || task.assigned_to === myId) && !task.cancelled_at && !cancelMode && (
+          {onEdit && task.created_by === myId && !task.cancelled_at && !cancelMode && (
             <button
               onClick={() => onEdit(task)}
               className="copy-btn"
