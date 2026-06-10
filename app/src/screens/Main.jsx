@@ -6849,63 +6849,86 @@ export function MainApp({ profile, onSettings }) {
 
   // ── Pull-to-refresh ─────────────────────────────────────────
   // Drag down from the very top of the feed (scrollTop === 0) to
-  // reload. pullY is the current pull distance in px (with light
-  // resistance), refreshing locks the indicator at the trigger
-  // height while window.location.reload() fires.
-  const PULL_TRIGGER = 70;
+  // reload. Listeners are attached natively (not via React props)
+  // because React 18 binds touch events as passive:true at the
+  // root, which can cause iOS Safari to drop touchmove updates
+  // when scrollTop reaches 0 — that was making the gesture look
+  // completely dead.
+  const PULL_TRIGGER = 55;
   const PULL_MAX     = 110;
+  const PULL_RESIST  = 0.7;
   const [pullY, setPullY] = React.useState(0);
   const [refreshing, setRefreshing] = React.useState(false);
-  const pullRef = React.useRef({ startY: 0, pulling: false, armed: false });
+  const pullRef = React.useRef({ startY: 0, pulling: false, armed: false, lastPullY: 0 });
 
-  const onScrollTouchStart = (e) => {
-    const wrap = scrollRef.current;
-    if (!wrap || refreshing) return;
-    pullRef.current = {
-      startY: e.touches[0].clientY,
-      pulling: true,
-      // Only "armed" if we start at the very top — otherwise a
-      // touchmove during a normal mid-feed scroll would yank the
-      // indicator open.
-      armed: wrap.scrollTop <= 0,
-    };
-  };
-
-  const onScrollTouchMove = (e) => {
-    const s = pullRef.current;
-    if (!s.pulling || refreshing) return;
+  React.useEffect(() => {
     const wrap = scrollRef.current;
     if (!wrap) return;
-    // Re-arm if the user scrolled back up to the top mid-gesture.
-    if (!s.armed && wrap.scrollTop <= 0) {
-      s.armed = true;
-      s.startY = e.touches[0].clientY;
-    }
-    if (!s.armed) return;
-    const dy = e.touches[0].clientY - s.startY;
-    if (dy <= 0) { setPullY(0); return; }
-    // Resistance curve — pull feels heavier as it grows so the
-    // indicator never just shoots off the screen.
-    const effective = Math.min(PULL_MAX, dy * 0.5);
-    setPullY(effective);
-  };
 
-  const onScrollTouchEnd = () => {
-    const s = pullRef.current;
-    s.pulling = false;
-    if (refreshing) return;
-    if (pullY >= PULL_TRIGGER) {
-      setRefreshing(true);
-      setPullY(PULL_TRIGGER);
-      // Longer delay so the spinning loading state actually
-      // registers visually before the page reloads underneath
-      // it. iOS reload flashes white so without this the user
-      // never sees the "refreshing" beat.
-      window.setTimeout(() => window.location.reload(), 900);
-    } else {
-      setPullY(0);
-    }
-  };
+    const start = (e) => {
+      if (refreshing) return;
+      const t = e.touches ? e.touches[0] : e;
+      pullRef.current = {
+        startY: t.clientY,
+        pulling: true,
+        armed: wrap.scrollTop <= 0,
+        lastPullY: 0,
+      };
+    };
+
+    const move = (e) => {
+      const s = pullRef.current;
+      if (!s.pulling || refreshing) return;
+      const t = e.touches ? e.touches[0] : e;
+      // Re-arm if the user scrolled back to the top mid-gesture.
+      if (!s.armed && wrap.scrollTop <= 0) {
+        s.armed = true;
+        s.startY = t.clientY;
+      }
+      if (!s.armed) return;
+      const dy = t.clientY - s.startY;
+      if (dy <= 0) {
+        if (s.lastPullY !== 0) { s.lastPullY = 0; setPullY(0); }
+        return;
+      }
+      const effective = Math.min(PULL_MAX, dy * PULL_RESIST);
+      s.lastPullY = effective;
+      setPullY(effective);
+      // Block the browser's own native overscroll once we've taken
+      // over the gesture, so iOS doesn't try to bounce/refresh on
+      // top of us. Only after the gesture is clearly ours (armed +
+      // moving down) so we never disable normal vertical scrolling.
+      if (e.cancelable) e.preventDefault();
+    };
+
+    const end = () => {
+      const s = pullRef.current;
+      if (!s.pulling) return;
+      s.pulling = false;
+      if (refreshing) return;
+      if (s.lastPullY >= PULL_TRIGGER) {
+        setRefreshing(true);
+        setPullY(PULL_TRIGGER);
+        window.setTimeout(() => window.location.reload(), 900);
+      } else {
+        setPullY(0);
+      }
+    };
+
+    // passive:false on touchmove so we can preventDefault and stop
+    // iOS Safari's native rubber-band from interfering. The other
+    // two can stay passive (cheaper).
+    wrap.addEventListener('touchstart', start, { passive: true });
+    wrap.addEventListener('touchmove',  move,  { passive: false });
+    wrap.addEventListener('touchend',   end,   { passive: true });
+    wrap.addEventListener('touchcancel', end,  { passive: true });
+    return () => {
+      wrap.removeEventListener('touchstart', start);
+      wrap.removeEventListener('touchmove',  move);
+      wrap.removeEventListener('touchend',   end);
+      wrap.removeEventListener('touchcancel', end);
+    };
+  }, [refreshing]);
 
   // Publish the logged-in user's profile color as a global CSS
   // variable (`--me-color`) on the document root, so any element can
@@ -8242,10 +8265,6 @@ export function MainApp({ profile, onSettings }) {
       <div
         className="fb-scroll"
         ref={scrollRef}
-        onTouchStart={onScrollTouchStart}
-        onTouchMove={onScrollTouchMove}
-        onTouchEnd={onScrollTouchEnd}
-        onTouchCancel={onScrollTouchEnd}
       >
         <div className="fb-stickyhead">
           <div className="fb-stickyhead-head">
