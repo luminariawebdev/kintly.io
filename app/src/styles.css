@@ -190,7 +190,7 @@ html { overscroll-behavior-x: none; }
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-soft);
-  padding-top: 118px;
+  padding-top: 145px;
 }
 .fb-stickyhead-row {
   display: grid;
@@ -218,10 +218,10 @@ html { overscroll-behavior-x: none; }
    the status bar reserve. */
 .fb-stickyhead-head {
   position: absolute;
-  top: 52px;
+  top: 72px;
   left: 0;
   right: 0;
-  height: 44px;
+  height: 48px;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -328,12 +328,12 @@ html { overscroll-behavior-x: none; }
 
 .fb-prof {
   justify-self: end;
-  width: 38px; height: 38px;
+  width: 48px; height: 48px;
   border-radius: var(--r-pill);
   border: 1px solid var(--border-glass);
   background: var(--surface-glass-strong);
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 700;
+  font-size: 16px; font-weight: 700;
   color: var(--text-primary);
   cursor: pointer;
   box-shadow: var(--shadow-soft);
@@ -2933,7 +2933,7 @@ html { overscroll-behavior-x: none; }
   display: inline-flex;
 }
 .fb-bell {
-  width: 38px; height: 38px;
+  width: 48px; height: 48px;
   border-radius: var(--r-pill);
   border: 1px solid var(--border-glass);
   background: var(--surface-glass-strong);
@@ -3286,7 +3286,7 @@ html { overscroll-behavior-x: none; }
 .dot.lg.avatar-emoji  { font-size: 22px; }
 .dot.xl.avatar-emoji  { font-size: 32px; }
 .fb-prof.has-avatar { background-color: transparent; background-repeat: no-repeat; }
-.fb-prof.has-emoji   { font-size: 36px; line-height: 1; }
+.fb-prof.has-emoji   { font-size: 45px; line-height: 1; }
 
 /* ────────────────────────────────────────────────────────────
    Mobile: collapse the desktop "iPhone mock" chrome and let
@@ -3332,19 +3332,19 @@ html { overscroll-behavior-x: none; }
      bar hidden, the 54px reserved for it is too much. Use the OS
      safe-area inset so it sits flush under any real notch. */
   .fb-stickyhead {
-    /* Real phone: 60px is enough room for the centered bell+profile
-       (44px) plus a small gap before the tab slider. Desktop's
-       118px assumes the iOS mock's dynamic island; mobile has no
-       mock so we tighten it. */
-    padding-top: 60px !important;
+    /* Real phone: room for the centered bell+profile (48px) plus
+       a small gap before the tab slider. Desktop's larger value
+       assumes the iOS mock's dynamic island; mobile has no mock
+       so we tighten it. */
+    padding-top: 72px !important;
   }
 
-  /* On desktop the bell + profile sit at top: 52px to clear the
-     mock's dynamic island. On a real phone there is no island —
-     anchor flush to the top of the sticky header. */
+  /* On desktop the bell + profile sit lower to clear the mock's
+     dynamic island. On a real phone there is no island — anchor
+     flush to the top of the sticky header. */
   .fb-stickyhead-head {
     top: 0 !important;
-    height: 44px !important;
+    height: 48px !important;
   }
 
   /* Notifications dropdown: by default the menu is positioned inside
