@@ -5,7 +5,13 @@ import { AnchorTabs, Modal, EmojiInput } from '../Components';
 const COLOR_MAP = {
   red:        '#E63946',
   coral:      '#FF6B35',
+  // peach / lemon / moss are offered on the signup screen — without
+  // entries here they fell through to the #999 gray fallback on every
+  // dot, bubble, and chip until the user changed colors in Settings.
+  peach:      '#FFC18C',
   amber:      '#FFD60A',
+  lemon:      '#F0E68C',
+  moss:       '#C8D685',
   green:      '#2DC653',
   teal:       '#00B4D8',
   blue:       '#4361EE',
@@ -29,6 +35,18 @@ const MyIdContext = React.createContext(null);
 // FeedPost) can render a SpaceTag chip — colored by the Space creator's
 // profile color — from just `spaceId`, without prop-drilling.
 const SpacesContext = React.createContext({ spaces: [], showSpace: null, getProfile: () => null });
+
+// Local-timezone ISO date helpers. `new Date().toISOString()` is UTC —
+// for US users any evening use made "Today" resolve to tomorrow's date
+// (due dates, default event dates, the date-picker highlight). These
+// format y-m-d from the *local* clock instead.
+const toLocalISO = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+const localTodayISO = () => toLocalISO(new Date());
 
 // Format an "HH:MM" 24-hour time string for display as 12-hour
 // w/ AM/PM. Returns '' for empty / invalid input so the caller can
@@ -446,15 +464,7 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
   const out = [];
   const startMs = windowStart.getTime();
   const endMs   = windowEnd.getTime();
-  // Helper: ISO yyyy-mm-dd in *local* time (avoids the UTC date-drift
-  // bug where new Date('2026-05-15').toISOString() can produce
-  // '2026-05-14' depending on timezone).
-  const toIso = (d) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
+  const toIso = toLocalISO;
   for (const e of rawEvents) {
     const r = e.recurrence;
     if (!r || !r.freq || r.freq === 'none') {
@@ -586,17 +596,15 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
 // ─── Tasks Section ────────────────────────────────────────────────────────────
 function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
   const [showDone, setShowDone] = React.useState(false);
+  // Personal view gets its own completed-toggle so expanding "Completed"
+  // in one view doesn't silently expand it in the other.
+  const [showDonePersonal, setShowDonePersonal] = React.useState(false);
   // Two-view toggle: 'group' shows the shared tasks grouped by
   // assignee, 'personal' shows only this user's private todos.
   const [view, setView] = React.useState('group');
 
   const applyFilter = (list) => list.filter(t => {
     if (filter === 'all') return true;
-    if (filter === 'today') {
-      if (!t.due_date) return !t.completed;
-      const diff = Math.round((new Date(t.due_date + 'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
-      return diff <= 0;
-    }
     if (filter === 'week') {
       if (!t.due_date) return true;
       const diff = Math.round((new Date(t.due_date + 'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
@@ -761,15 +769,15 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAdd
             {donePersonal.length > 0 && (
               <div style={{ marginTop: 18 }}>
                 <button
-                  onClick={() => setShowDone(s => !s)}
+                  onClick={() => setShowDonePersonal(s => !s)}
                   style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 0, borderTop: '1px solid var(--rule)', cursor: 'pointer', font: 'inherit' }}
                 >
                   <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.55 }}>
                     Completed · {donePersonal.length}
                   </span>
-                  <span style={{ opacity: 0.5, fontSize: 12 }}>{showDone ? '▴ hide' : '▾ show'}</span>
+                  <span style={{ opacity: 0.5, fontSize: 12 }}>{showDonePersonal ? '▴ hide' : '▾ show'}</span>
                 </button>
-                {showDone && (
+                {showDonePersonal && (
                   <div className="tasklist">
                     {donePersonal.map(t => (
                       <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
@@ -787,13 +795,13 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAdd
 }
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPersonal, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse }) {
+function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPersonal, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse, view, setView }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
   // 'group' shows shared events; 'personal' shows only events the
-  // current user created with is_private=true.
-  const [view, setView] = React.useState('group');
+  // current user created with is_private=true. State lives in MainApp
+  // so the day-details popup can scope its list to the same view.
 
   const cells = buildCalendar(calYear, calMonth);
   const todayD = now.getDate();
@@ -1939,7 +1947,7 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
 function DatePickerModal({ open, value, title, onClose, onPick, minDate }) {
   const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const todayObj  = React.useMemo(() => new Date(), []);
-  const todayIso  = todayObj.toISOString().slice(0, 10);
+  const todayIso  = toLocalISO(todayObj);
   const initial   = value ? new Date(value + 'T00:00:00') : todayObj;
   const [viewMonth, setViewMonth] = React.useState(initial.getMonth());
   const [viewYear,  setViewYear]  = React.useState(initial.getFullYear());
@@ -2178,17 +2186,24 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
       setSpaceId(initial.space_id || null);
       setIsPrivate(!!initial.is_private);
     } else {
+      // Fresh open — clear EVERY field, not just space/private. Without
+      // this, opening Edit task, cancelling, then tapping "+ Add task"
+      // reopened the form pre-filled with the old task's values.
+      setTitle(''); setDescription('');
+      setAssignee(myId || null);
+      setDueOpt('today'); setDueDate('');
+      setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
       setSpaceId(initialSpaceId || null);
       setIsPrivate(!!initialPrivate);
     }
-  }, [open, initial, initialSpaceId, initialPrivate]);
+  }, [open, initial, initialSpaceId, initialPrivate, myId]);
 
   const getDueDate = () => {
     const d = new Date();
-    if (dueOpt === 'today') return d.toISOString().slice(0, 10);
-    if (dueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
-    if (dueOpt === 'week') { d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
-    if (dueOpt === 'month') { d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); }
+    if (dueOpt === 'today') return toLocalISO(d);
+    if (dueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return toLocalISO(d); }
+    if (dueOpt === 'week') { d.setDate(d.getDate() + 7); return toLocalISO(d); }
+    if (dueOpt === 'month') { d.setMonth(d.getMonth() + 1); return toLocalISO(d); }
     if (dueOpt === 'pick') return dueDate || null;
     return null;
   };
@@ -2447,7 +2462,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
 
 // ─── Add Event Modal ──────────────────────────────────────────────────────────
 function AddEventModal({ open, onClose, members, myId, onSave, initialDate, initialPrivate, spaces, initialSpaceId }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayISO();
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [location, setLocation] = React.useState('');
@@ -2483,9 +2498,16 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
   const [startOpen, setStartOpen] = React.useState(false);
   const [endOpen,   setEndOpen]   = React.useState(false);
 
-  // Each time the modal opens, reset state
+  // Each time the modal opens, reset state — including the text fields
+  // and times. Those used to survive a cancel, so an abandoned draft
+  // reappeared the next time the sheet opened.
   React.useEffect(() => {
     if (open) {
+      setTitle('');
+      setDescription('');
+      setLocation('');
+      setStartTime('');
+      setEndTime('');
       setDate(initialDate || today);
       setAttendees([]);
       setRsvpRecipients([]);
@@ -2953,6 +2975,28 @@ function EventDetailsModal({
   // wires them up; standalone places like screens-tests can omit.
   tasks = [], onSetRsvp, onAddLinkedTask, onToggleTask, onOpenTask,
 }) {
+  // ── Hooks first (Rules of Hooks) ────────────────────────────────────
+  // These used to live below an `if (!open) return null` early return,
+  // which made the hook count differ between renders — it only worked
+  // by a React implementation quirk. `event` can be null here, so all
+  // derived values are null-guarded.
+  const rsvps = (event?.rsvps && typeof event.rsvps === 'object') ? event.rsvps : {};
+  const myRsvp = (myId && rsvps[myId]) || null;
+  // Local draft so tapping a chip stages the choice instead of
+  // committing it. The committed value still comes from `myRsvp`; a Save
+  // button appears whenever the draft diverges.
+  const [draftRsvp, setDraftRsvp] = React.useState(myRsvp);
+  const [savingRsvp, setSavingRsvp] = React.useState(false);
+  const [savedRsvpPulse, setSavedRsvpPulse] = React.useState(false);
+  // Full AddTaskModal opens on "+ Add task".
+  const [addLinkedTaskOpen, setAddLinkedTaskOpen] = React.useState(false);
+  // Re-sync the draft any time the event being viewed changes, or the
+  // server-side value updates (realtime delivers a new payload, etc.).
+  React.useEffect(() => {
+    setDraftRsvp(myRsvp);
+    setSavedRsvpPulse(false);
+  }, [event?.id, myRsvp]);
+
   if (!open || !event) return null;
   const p = getProfile(event.created_by);
   const color = getColor(p?.color || event.color);
@@ -2964,31 +3008,13 @@ function EventDetailsModal({
     : 'All day';
   const mapsUrl = event.location ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}` : null;
 
-  // RSVP state
-  const rsvps = (event.rsvps && typeof event.rsvps === 'object') ? event.rsvps : {};
-  const myRsvp = rsvps[myId] || null;
+  // RSVP display helpers
   const rsvpLabel = (v) => ({ yes: 'Going', maybe: 'Maybe', no: "Can't go" })[v] || null;
   const rsvpEmoji = (v) => ({ yes: '✅', maybe: '🤔', no: '❌' })[v] || null;
   const rsvpColor = (v) => ({ yes: '#2DC653', maybe: '#FFB100', no: '#E63946' })[v] || 'var(--text-muted)';
   // The RSVP block is visible to anyone in the group — even non-
   // attendees might want to opt in / decline a wider family event.
   const canRsvp = !!onSetRsvp && !!myId;
-
-  // Local draft so tapping a chip stages the choice instead of
-  // committing it. The committed value still comes from `myRsvp`; a Save
-  // button appears whenever the draft diverges. Brief "Saved" pulse on
-  // success gives the user the confirmation that the old auto-save
-  // silently lacked.
-  const [draftRsvp, setDraftRsvp] = React.useState(myRsvp);
-  const [savingRsvp, setSavingRsvp] = React.useState(false);
-  const [savedRsvpPulse, setSavedRsvpPulse] = React.useState(false);
-  // Re-sync the draft any time the event being viewed changes, or the
-  // server-side value updates (other family member RSVPs on your behalf,
-  // realtime delivers a new payload, etc.).
-  React.useEffect(() => {
-    setDraftRsvp(myRsvp);
-    setSavedRsvpPulse(false);
-  }, [event.id, myRsvp]);
   const rsvpDirty = draftRsvp !== myRsvp;
   const handleSaveRsvp = async () => {
     if (!onSetRsvp || savingRsvp) return;
@@ -3015,10 +3041,9 @@ function EventDetailsModal({
     return (a.due_date || '').localeCompare(b.due_date || '');
   });
 
-  // Full AddTaskModal opens on "+ Add task". onSave hands us the same
-  // payload shape AddTaskModal builds for top-level tasks — we just
-  // route it through onAddLinkedTask so event_id gets stamped on.
-  const [addLinkedTaskOpen, setAddLinkedTaskOpen] = React.useState(false);
+  // onSave hands us the same payload shape AddTaskModal builds for
+  // top-level tasks — we just route it through onAddLinkedTask so
+  // event_id gets stamped on.
   const handleAddLinkedTask = async (taskPayload) => {
     if (!taskPayload || !taskPayload.title || !onAddLinkedTask) return;
     await onAddLinkedTask(event.id, taskPayload);
@@ -3393,7 +3418,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
   // On save, the new event is inserted into the events table with a
   // note_id reference to this post (with a graceful fallback if the
   // events table doesn't have that column yet).
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = localTodayISO();
   const [makeEvent,      setMakeEvent]      = React.useState(false);
   const [eventTitle,     setEventTitle]     = React.useState('');
   const [eventDate,      setEventDate]      = React.useState(todayIso);
@@ -3730,10 +3755,10 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
 
   const getDueDate = () => {
     const d = new Date();
-    if (taskDueOpt === 'today') return d.toISOString().slice(0, 10);
-    if (taskDueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
-    if (taskDueOpt === 'week') { d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
-    if (taskDueOpt === 'month') { d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); }
+    if (taskDueOpt === 'today') return toLocalISO(d);
+    if (taskDueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return toLocalISO(d); }
+    if (taskDueOpt === 'week') { d.setDate(d.getDate() + 7); return toLocalISO(d); }
+    if (taskDueOpt === 'month') { d.setMonth(d.getMonth() + 1); return toLocalISO(d); }
     if (taskDueOpt === 'pick') return taskDueDate || null;
     return null;
   };
@@ -6423,7 +6448,7 @@ function SpaceDetailModal({
 
   const openTasks = spaceTasks.filter(t => !t.completed && !t.cancelled_at);
   const doneTasks = spaceTasks.filter(t => t.completed);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayISO();
   const upcoming = spaceEvents
     .filter(e => e.date >= today)
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -6727,7 +6752,7 @@ function SpacesSection({
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayISO();
   const countsFor = (spaceId) => ({
     openTasks: (tasks || []).filter(t => t.space_id === spaceId && !t.completed && !t.cancelled_at).length,
     upcomingEvents: (events || []).filter(e => e.space_id === spaceId && e.date >= today).length,
@@ -6800,6 +6825,10 @@ export function MainApp({ profile, onSettings }) {
   const [taskAddPrivate, setTaskAddPrivate] = React.useState(false);
   // Same flag for the Add Event modal.
   const [eventAddPrivate, setEventAddPrivate] = React.useState(false);
+  // Calendar Group/Personal toggle — lifted from CalendarSection so the
+  // DayDetailsModal can filter to the same scope (the grid chips were
+  // scoped but the day popup showed personal events even in Group view).
+  const [calView, setCalView] = React.useState('group');
   const [detailMemberId, setDetailMemberId] = React.useState(null);
   const [members, setMembers] = React.useState([]);
   const [tasks, setTasks] = React.useState([]);
@@ -7367,6 +7396,14 @@ export function MainApp({ profile, onSettings }) {
     }
   };
   const deleteEvent = async (id) => {
+    // A recurring event shares one row across every occurrence, so any
+    // delete removes the whole series. The swipe gesture made that a
+    // single accidental flick — confirm before nuking a series.
+    const ev = events.find(e => e.id === id);
+    if (ev?.recurrence?.freq && ev.recurrence.freq !== 'none') {
+      const ok = window.confirm(`"${ev.title}" repeats. Deleting it removes every occurrence — delete the whole series?`);
+      if (!ok) return;
+    }
     setEvents(prev => prev.filter(e => e.id !== id));
     await supabase.from('events').delete().eq('id', id);
   };
@@ -7939,6 +7976,9 @@ export function MainApp({ profile, onSettings }) {
         assigned_to: taskPayload.assigned_to,
         due_date: taskPayload.due_date,
         title: taskPayload.title,
+        // Carry the post's Space tag onto the linked task — previously
+        // this was dropped, so "Create task from post" lost the Space.
+        space_id: taskPayload.space_id || null,
       };
       // Try with note_id first; fall back to a plain insert if the
       // note_id column doesn't exist or any other note_id issue.
@@ -8001,6 +8041,8 @@ export function MainApp({ profile, onSettings }) {
         location:    eventPayload.location,
         description: eventPayload.description ?? null,
         attendees:   eventPayload.attendees   || [],
+        // Same Space-tag carry as the linked task above.
+        space_id:    eventPayload.space_id    || null,
       };
       let { data: evRow, error: evErr } = await supabase
         .from('events')
@@ -8327,6 +8369,8 @@ export function MainApp({ profile, onSettings }) {
             onShowEvent={(ev) => setDetailEventId(ev.id)}
             collapsed={collapsed.calendar}
             onToggleCollapse={() => toggleCollapse('calendar')}
+            view={calView}
+            setView={setCalView}
           />
         </div>
       </div>
@@ -8431,7 +8475,9 @@ export function MainApp({ profile, onSettings }) {
       <DayDetailsModal
         open={!!dayDetailsDate}
         date={dayDetailsDate}
-        events={expandedEvents}
+        events={expandedEvents.filter(e => calView === 'personal'
+          ? (e.is_private && e.created_by === profile?.id)
+          : !e.is_private)}
         members={members}
         getProfile={getProfile}
         myId={profile?.id}
