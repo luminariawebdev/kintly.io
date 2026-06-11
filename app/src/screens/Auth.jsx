@@ -53,6 +53,7 @@ function LoginForm({ onComplete }) {
   const [pw, setPw] = React.useState('');
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [resetSent, setResetSent] = React.useState(false);
 
   const submit = async () => {
     if (!email || !pw) { setErr('Please fill in all fields'); return; }
@@ -61,6 +62,22 @@ function LoginForm({ onComplete }) {
     const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
     if (error) { setErr(error.message); setLoading(false); }
     else onComplete();
+  };
+
+  // Sends the Supabase recovery email. The link lands back on the app,
+  // which fires a PASSWORD_RECOVERY auth event — App.jsx routes that to
+  // the ResetPasswordScreen below.
+  const sendReset = async () => {
+    if (resetSent) return;
+    if (!email) { setErr('Enter your email above first, then tap "Forgot password?"'); return; }
+    setLoading(true);
+    setErr('');
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    setLoading(false);
+    if (error) { setErr(error.message); return; }
+    setResetSent(true);
   };
 
   return (
@@ -76,9 +93,60 @@ function LoginForm({ onComplete }) {
       </div>
       <div className="auth-actions">
         <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
+        <button type="button" className="fb-link" onClick={sendReset} disabled={loading}>
+          {resetSent ? '✓ Reset link sent — check your email' : 'Forgot password?'}
+        </button>
       </div>
       <div className="auth-foot">kinnekt v1.0</div>
     </>
+  );
+}
+
+// Shown when the user arrives from a password-recovery email link.
+// Supabase signs them in with a temporary recovery session and fires a
+// PASSWORD_RECOVERY auth event; App.jsx routes here so they can set a
+// new password before continuing into the app.
+export function ResetPasswordScreen({ onDone }) {
+  const [pw, setPw] = React.useState('');
+  const [pw2, setPw2] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+
+  const submit = async () => {
+    if (pw.length < 6) { setErr('Password must be at least 6 characters'); return; }
+    if (pw !== pw2) { setErr('Passwords do not match'); return; }
+    setLoading(true);
+    setErr('');
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setLoading(false);
+    if (error) { setErr(error.message); return; }
+    onDone();
+  };
+
+  return (
+    <div className="fb-screen">
+      <div className="fb-scroll">
+        <div className="auth-wrap" style={{ paddingTop: 60 }}>
+          <div className="auth-mark">
+            <div className="marklogo" />
+            <h1>New <em>password</em></h1>
+            <p>Choose a new password for your account</p>
+          </div>
+          <div className="field">
+            <label>New password</label>
+            <input type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(''); }} placeholder="At least 6 characters" />
+          </div>
+          <div className={'field' + (err ? ' err' : '')}>
+            <label>Confirm password</label>
+            <input type="password" value={pw2} onChange={e => { setPw2(e.target.value); setErr(''); }} placeholder="Same again" onKeyDown={e => e.key === 'Enter' && submit()} />
+            {err && <div className="err-msg">{err}</div>}
+          </div>
+          <div className="auth-actions">
+            <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Saving…' : 'Save new password'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

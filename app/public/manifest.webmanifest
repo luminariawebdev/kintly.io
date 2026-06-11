@@ -1,0 +1,13 @@
+{
+  "name": "Kinnekt",
+  "short_name": "Kinnekt",
+  "description": "Shared tasks, plans & notes for your people",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E0E8FF",
+  "theme_color": "#6A4DFF",
+  "icons": [
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

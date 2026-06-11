@@ -1,7 +1,7 @@
 import React from 'react';
 import { IOSDevice } from './IOSFrame';
 import { supabase } from './lib/supabase';
-import { AuthScreen } from './screens/Auth';
+import { AuthScreen, ResetPasswordScreen } from './screens/Auth';
 import { MainApp } from './screens/Main';
 import { SettingsScreen } from './screens/Settings';
 
@@ -91,6 +91,12 @@ export function App() {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        // User arrived from a reset-password email link — let them set
+        // a new password before continuing into the app.
+        setScreen('reset-pw');
+        return;
+      }
       if (!session) {
         setScreen('auth');
         setProfile(null);
@@ -140,6 +146,15 @@ export function App() {
               initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
               onComplete={refreshProfile}
               onGroupReady={onGroupReady}
+            />
+          )}
+          {screen === 'reset-pw' && (
+            <ResetPasswordScreen
+              onDone={async () => {
+                const { data: { session } } = await supabase.auth.getSession();
+                if (session) loadProfile(session.user.id);
+                else setScreen('auth');
+              }}
             />
           )}
           {screen === 'app' && (

@@ -1636,7 +1636,56 @@ function ReplyComposer({ target, targetAuthor, myId, onCancel, onSubmit }) {
   );
 }
 
-const NotesSection = React.memo(function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, collapsed, onToggleCollapse }) {
+// ─── Quick Composer ───────────────────────────────────────────────────────────
+// One-line message input at the top of the Home Feed so firing off a
+// plain message is tap + type + send. The full "+ Post" modal stays
+// for Urgent / Photos / Polls / posts that create tasks or events.
+// No autoFocus — the keyboard waits for an intentional tap (iOS).
+function QuickComposer({ onPost }) {
+  const [text, setText] = React.useState('');
+  const [sending, setSending] = React.useState(false);
+  const submit = async () => {
+    const t = text.trim();
+    if (!t || sending) return;
+    setSending(true);
+    try {
+      await onPost(t);
+      setText('');
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <div className="quick-composer">
+      <input
+        className="quick-composer-input"
+        type="text"
+        value={text}
+        placeholder="Send a quick message…"
+        maxLength={500}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
+        disabled={sending}
+      />
+      <button
+        type="button"
+        className="quick-composer-send"
+        onClick={submit}
+        disabled={!text.trim() || sending}
+        aria-label="Send message"
+      >
+        {sending ? '…' : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M22 2L11 13" />
+            <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
+
+const NotesSection = React.memo(function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, onQuickPost, collapsed, onToggleCollapse }) {
   // Inline reply state — long-pressing a post and then tapping the
   // floating "Reply" pill stashes the target here, which makes the
   // ReplyComposer slide in at the top of the feed (no modal). The
@@ -1737,6 +1786,9 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
       </div>
 
       {!collapsed && (<>
+
+      {/* Quick composer — plain messages without opening the modal. */}
+      {onQuickPost && <QuickComposer onPost={onQuickPost} />}
 
       {/* Whole feed lives in one shaded glass box — same family as the
           Tasks "To-do" container — so the section reads as a single
@@ -4081,7 +4133,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 12px', width: '100%',
-              background: makeTask ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
+              background: makeTask ? 'var(--hover-tint)' : 'transparent',
               border: '1.5px solid var(--ink)', borderRadius: 8,
               cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
               color: 'var(--ink)', textAlign: 'left',
@@ -4100,7 +4152,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
       )}
 
       {makeTask && (postType === 'message' || postType === 'quick_update' || postType === 'announcement') && (
-        <div style={{ background: 'rgba(20, 20, 20, 0.03)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
+        <div style={{ background: 'var(--surface-glass)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
           <div className="field">
             <label>Task title</label>
             <input
@@ -4155,7 +4207,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 12px', width: '100%',
-              background: makeEvent ? 'rgba(20, 20, 20, 0.08)' : 'transparent',
+              background: makeEvent ? 'var(--hover-tint)' : 'transparent',
               border: '1.5px solid var(--ink)', borderRadius: 8,
               cursor: 'pointer', font: 'inherit', fontSize: 14, fontWeight: 600,
               color: 'var(--ink)', textAlign: 'left',
@@ -4174,7 +4226,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
       )}
 
       {makeEvent && (postType === 'announcement' || postType === 'quick_update') && (
-        <div style={{ background: 'rgba(20, 20, 20, 0.03)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
+        <div style={{ background: 'var(--surface-glass)', borderRadius: 8, padding: '12px', marginTop: 4 }}>
           <div className="field">
             <label>Event title</label>
             <input
@@ -4709,7 +4761,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
             placeholder="Reason (optional) — e.g. already taken care of"
             rows={2}
             maxLength={300}
-            style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 13, padding: '8px 10px', border: '1px solid rgba(122,24,24,0.30)', borderRadius: 8, background: 'rgba(255,255,255,0.6)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box' }}
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 13, padding: '8px 10px', border: '1px solid rgba(122,24,24,0.30)', borderRadius: 8, background: 'var(--surface-glass-strong)', color: 'var(--ink)', outline: 'none', boxSizing: 'border-box' }}
           />
           <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
             <button
@@ -8155,6 +8207,11 @@ export function MainApp({ profile, onSettings }) {
     });
   }, [addNote]);
 
+  // Stable wrapper for the feed's quick composer (plain messages).
+  const postQuickMessage = React.useCallback(async (content) => {
+    await addNote({ content, type: 'message', payload: null, pinned: false });
+  }, [addNote]);
+
   // Vote on a poll — updates the note's payload.votes
   const voteOnPoll = React.useCallback(async (noteId, optionId) => {
     const note = notes.find(n => n.id === noteId);
@@ -8298,9 +8355,18 @@ export function MainApp({ profile, onSettings }) {
   }, []);
 
   if (loading) {
+    // Shimmering skeleton in the rough shape of the real layout —
+    // reads as "almost there" instead of a blank wait.
     return (
-      <div className="fb-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ opacity: 0.4, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Loading…</div>
+      <div className="fb-screen">
+        <div className="skel-wrap" role="status" aria-label="Loading">
+          <div className="skel skel-header" />
+          <div className="skel skel-tabs" />
+          <div className="skel skel-card lg" />
+          <div className="skel skel-card" />
+          <div className="skel skel-card sm" />
+          <div className="skel skel-card lg" />
+        </div>
       </div>
     );
   }
@@ -8380,6 +8446,7 @@ export function MainApp({ profile, onSettings }) {
             onShowMember={showMemberDetail}
             onVote={voteOnPoll}
             onReply={postReply}
+            onQuickPost={postQuickMessage}
             collapsed={collapsed.notes}
             onToggleCollapse={toggleCollapseNotes}
           />
