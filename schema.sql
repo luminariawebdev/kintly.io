@@ -1,7 +1,13 @@
--- FamilyBoard schema
--- Run this in Supabase Dashboard → SQL Editor
+-- Kinnekt schema
+-- Run this in Supabase Dashboard → SQL Editor.
+--
+-- The whole file is idempotent and ordered by dependency, so it can be
+-- run top-to-bottom on a FRESH database or re-run safely on an existing
+-- one (create table if not exists / drop policy if exists / create or
+-- replace function / add column if not exists throughout).
 
--- Tables
+-- ─── Core tables (dependency order: groups → profiles → notes → tasks) ──────
+
 create table if not exists public.groups (
   id          uuid default gen_random_uuid() primary key,
   name        text not null,
@@ -17,6 +23,60 @@ create table if not exists public.profiles (
   group_id     uuid references public.groups,
   created_at   timestamptz default now()
 );
+alter table public.profiles add column if not exists avatar text;
+
+-- Helper to get the current user's group_id without RLS recursion.
+-- Defined before any policy that uses it.
+create or replace function public.my_group_id()
+returns uuid language sql security definer stable
+as $$
+  select group_id from public.profiles where id = auth.uid()
+$$;
+
+-- notes must exist before tasks (tasks.note_id references it).
+create table if not exists public.notes (
+  id         uuid default gen_random_uuid() primary key,
+  group_id   uuid references public.groups not null,
+  created_by uuid references public.profiles not null,
+  content    text,
+  pinned     boolean default false,
+  type       text default 'message',
+  payload    jsonb default '{}',
+  created_at timestamptz default now()
+);
+alter table public.notes add column if not exists type    text default 'message';
+alter table public.notes add column if not exists payload jsonb default '{}';
+-- content must allow empty strings (photos / polls / soft-deleted posts)
+alter table public.notes alter column content drop not null;
+
+create table if not exists public.events (
+  id          uuid default gen_random_uuid() primary key,
+  group_id    uuid references public.groups not null,
+  created_by  uuid references public.profiles not null,
+  title       text not null,
+  description text,
+  location    text,
+  date        date not null,
+  start_time  text,
+  end_time    text,
+  color       text default 'coral',
+  attendees   uuid[] default '{}',
+  recurrence  jsonb,
+  rsvps       jsonb default '{}',
+  note_id     uuid references public.notes on delete set null,
+  is_private  boolean default false,
+  created_at  timestamptz default now()
+);
+-- Upgrades for databases created from the older schema. is_private is
+-- added here (not just at the bottom) because the SELECT policy below
+-- references it.
+alter table public.events add column if not exists is_private boolean default false;
+alter table public.events add column if not exists description text;
+alter table public.events add column if not exists location    text;
+alter table public.events add column if not exists attendees   uuid[] default '{}';
+alter table public.events add column if not exists recurrence  jsonb;
+alter table public.events add column if not exists rsvps       jsonb default '{}';
+alter table public.events add column if not exists note_id     uuid references public.notes on delete set null;
 
 create table if not exists public.tasks (
   id                  uuid default gen_random_uuid() primary key,
@@ -24,6 +84,7 @@ create table if not exists public.tasks (
   created_by          uuid references public.profiles not null,
   assigned_to         uuid references public.profiles,
   note_id             uuid references public.notes on delete set null,
+  event_id            uuid references public.events on delete cascade,
   title               text not null,
   description         text,
   completed           boolean default false,
@@ -32,47 +93,17 @@ create table if not exists public.tasks (
   cancellation_reason text,
   due_date            date,
   recurrence          jsonb,
+  is_private          boolean default false,
   created_at          timestamptz default now()
 );
-
--- Comments on bulletin board notes — anyone in the group can post.
-create table if not exists public.note_comments (
-  id         uuid default gen_random_uuid() primary key,
-  note_id    uuid references public.notes on delete cascade not null,
-  group_id   uuid references public.groups not null,
-  created_by uuid references public.profiles not null,
-  content    text not null,
-  created_at timestamptz default now()
-);
-create index if not exists note_comments_note_idx on public.note_comments(note_id, created_at);
-alter table public.note_comments enable row level security;
-drop policy if exists "note_comments_select" on public.note_comments;
-drop policy if exists "note_comments_insert" on public.note_comments;
-drop policy if exists "note_comments_update" on public.note_comments;
-drop policy if exists "note_comments_delete" on public.note_comments;
-create policy "note_comments_select" on public.note_comments
-  for select using (group_id = public.my_group_id());
-create policy "note_comments_insert" on public.note_comments
-  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
-create policy "note_comments_update" on public.note_comments
-  for update using (created_by = auth.uid());
-create policy "note_comments_delete" on public.note_comments
-  for delete using (created_by = auth.uid());
-
-create table if not exists public.events (
-  id         uuid default gen_random_uuid() primary key,
-  group_id   uuid references public.groups not null,
-  created_by uuid references public.profiles not null,
-  title      text not null,
-  description text,
-  location   text,
-  date       date not null,
-  start_time text,
-  end_time   text,
-  color      text default 'coral',
-  attendees  uuid[] default '{}',
-  created_at timestamptz default now()
-);
+alter table public.tasks add column if not exists is_private          boolean default false;
+alter table public.tasks add column if not exists note_id             uuid references public.notes on delete set null;
+alter table public.tasks add column if not exists event_id            uuid references public.events on delete cascade;
+alter table public.tasks add column if not exists description         text;
+alter table public.tasks add column if not exists completed_at        timestamptz;
+alter table public.tasks add column if not exists cancelled_at        timestamptz;
+alter table public.tasks add column if not exists cancellation_reason text;
+alter table public.tasks add column if not exists recurrence          jsonb;
 
 create table if not exists public.notifications (
   id         uuid default gen_random_uuid() primary key,
@@ -85,107 +116,142 @@ create table if not exists public.notifications (
 );
 create index if not exists notifications_user_idx on public.notifications(user_id, created_at desc);
 
-alter table public.notifications enable row level security;
-
-create policy "notifications_select" on public.notifications
-  for select using (user_id = auth.uid());
-
-create policy "notifications_insert" on public.notifications
-  for insert with check (group_id = public.my_group_id());
-
-create policy "notifications_update" on public.notifications
-  for update using (user_id = auth.uid());
-
-create policy "notifications_delete" on public.notifications
-  for delete using (user_id = auth.uid());
-
-create table if not exists public.notes (
+-- Comments on bulletin board notes (legacy table — replies now live in
+-- notes.payload.reply_to, but the table is kept for older data).
+create table if not exists public.note_comments (
   id         uuid default gen_random_uuid() primary key,
+  note_id    uuid references public.notes on delete cascade not null,
   group_id   uuid references public.groups not null,
   created_by uuid references public.profiles not null,
   content    text not null,
-  pinned     boolean default false,
-  type       text default 'message',
-  payload    jsonb default '{}',
   created_at timestamptz default now()
 );
--- If upgrading from an older schema, run these:
-alter table public.notes add column if not exists type    text default 'message';
-alter table public.notes add column if not exists payload jsonb default '{}';
--- The notes.content column needs to allow empty strings (for photos/polls):
-alter table public.notes alter column content drop not null;
+create index if not exists note_comments_note_idx on public.note_comments(note_id, created_at);
 
--- Enable RLS
-alter table public.groups   enable row level security;
-alter table public.profiles enable row level security;
-alter table public.tasks    enable row level security;
-alter table public.events   enable row level security;
-alter table public.notes    enable row level security;
+-- ─── Row-level security ──────────────────────────────────────────────────────
 
--- Groups policies
+alter table public.groups        enable row level security;
+alter table public.profiles      enable row level security;
+alter table public.tasks         enable row level security;
+alter table public.events        enable row level security;
+alter table public.notes         enable row level security;
+alter table public.notifications enable row level security;
+alter table public.note_comments enable row level security;
+
+-- Groups
+drop policy if exists "groups_select" on public.groups;
 create policy "groups_select" on public.groups
   for select to authenticated using (true);
-
+drop policy if exists "groups_insert" on public.groups;
 create policy "groups_insert" on public.groups
   for insert to authenticated with check (true);
 
--- Helper function to get current user's group_id without triggering RLS recursion
-create or replace function public.my_group_id()
-returns uuid language sql security definer stable
-as $$
-  select group_id from public.profiles where id = auth.uid()
-$$;
-
--- Profiles policies
+-- Profiles
+drop policy if exists "profiles_select" on public.profiles;
 create policy "profiles_select" on public.profiles
   for select using (
     id = auth.uid() or
     group_id = public.my_group_id()
   );
-
+drop policy if exists "profiles_insert" on public.profiles;
 create policy "profiles_insert" on public.profiles
   for insert with check (id = auth.uid());
-
+drop policy if exists "profiles_update" on public.profiles;
 create policy "profiles_update" on public.profiles
   for update using (id = auth.uid());
 
--- Tasks policies (scoped to group)
+-- Tasks. SELECT hides other members' private todos. UPDATE/DELETE are
+-- restricted to the creator, the assignee, or anyone when unassigned —
+-- previously these were group-wide, so "only the creator can edit" was
+-- enforced in the UI only.
+drop policy if exists "tasks_select" on public.tasks;
 create policy "tasks_select" on public.tasks
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for select using (
+    group_id = public.my_group_id()
+    and (is_private is not true or created_by = auth.uid())
+  );
+drop policy if exists "tasks_insert" on public.tasks;
 create policy "tasks_insert" on public.tasks
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "tasks_update" on public.tasks;
 create policy "tasks_update" on public.tasks
-  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for update using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
+drop policy if exists "tasks_delete" on public.tasks;
 create policy "tasks_delete" on public.tasks
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
 
--- Events policies (scoped to group)
+-- Events. SELECT hides other members' private events. UPDATE stays
+-- group-scoped because the legacy RSVP fallback writes the rsvps column
+-- directly (the set_event_rsvp function below is the preferred path).
+-- DELETE is creator-only.
+drop policy if exists "events_select" on public.events;
 create policy "events_select" on public.events
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for select using (
+    group_id = public.my_group_id()
+    and (is_private is not true or created_by = auth.uid())
+  );
+drop policy if exists "events_insert" on public.events;
 create policy "events_insert" on public.events
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "events_update" on public.events;
+create policy "events_update" on public.events
+  for update using (group_id = public.my_group_id());
+drop policy if exists "events_delete" on public.events;
 create policy "events_delete" on public.events
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (created_by = auth.uid());
 
--- Notes policies (scoped to group)
+-- Notes. UPDATE stays group-scoped: pinning is a shared curation action
+-- and the poll-vote fallback writes payload directly. Hard DELETE is
+-- creator-only (the app soft-deletes via UPDATE anyway).
+drop policy if exists "notes_select" on public.notes;
 create policy "notes_select" on public.notes
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for select using (group_id = public.my_group_id());
+drop policy if exists "notes_insert" on public.notes;
 create policy "notes_insert" on public.notes
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "notes_update" on public.notes;
 create policy "notes_update" on public.notes
-  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
-
+  for update using (group_id = public.my_group_id());
+drop policy if exists "notes_delete" on public.notes;
 create policy "notes_delete" on public.notes
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (created_by = auth.uid());
 
--- Auto-create profile on signup
+-- Notifications
+drop policy if exists "notifications_select" on public.notifications;
+create policy "notifications_select" on public.notifications
+  for select using (user_id = auth.uid());
+drop policy if exists "notifications_insert" on public.notifications;
+create policy "notifications_insert" on public.notifications
+  for insert with check (group_id = public.my_group_id());
+drop policy if exists "notifications_update" on public.notifications;
+create policy "notifications_update" on public.notifications
+  for update using (user_id = auth.uid());
+drop policy if exists "notifications_delete" on public.notifications;
+create policy "notifications_delete" on public.notifications
+  for delete using (user_id = auth.uid());
+
+-- Note comments (legacy)
+drop policy if exists "note_comments_select" on public.note_comments;
+create policy "note_comments_select" on public.note_comments
+  for select using (group_id = public.my_group_id());
+drop policy if exists "note_comments_insert" on public.note_comments;
+create policy "note_comments_insert" on public.note_comments
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "note_comments_update" on public.note_comments;
+create policy "note_comments_update" on public.note_comments
+  for update using (created_by = auth.uid());
+drop policy if exists "note_comments_delete" on public.note_comments;
+create policy "note_comments_delete" on public.note_comments
+  for delete using (created_by = auth.uid());
+
+-- ─── Auto-create profile on signup ───────────────────────────────────────────
+
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
@@ -206,11 +272,9 @@ create trigger on_auth_user_created
   for each row execute procedure public.handle_new_user();
 
 -- ─── Shared Lists ─────────────────────────────────────────────────────────────
--- Collaborative lists: groceries, packing, school supplies, hardware, etc.
--- Each list belongs to a group. Items are checkable, assignable to a family
--- member, and re-orderable. `list_type` is just a hint for the UI icon — the
--- mechanics are the same for every kind. `event_id` makes lists linkable to
--- events for future use (the frontend writes null today).
+-- (Feature currently dormant in the UI — superseded by Spaces — but the
+-- tables stay so existing data survives and the feature can be revived.)
+
 create table if not exists public.shared_lists (
   id          uuid default gen_random_uuid() primary key,
   group_id    uuid references public.groups not null,
@@ -218,11 +282,13 @@ create table if not exists public.shared_lists (
   title       text not null,
   color       text default 'coral',
   list_type   text default 'general',
+  member_ids  uuid[] default '{}',
   event_id    uuid references public.events on delete set null,
   archived_at timestamptz,
   created_at  timestamptz default now(),
   updated_at  timestamptz default now()
 );
+alter table public.shared_lists add column if not exists member_ids uuid[] default '{}';
 create index if not exists shared_lists_group_idx
   on public.shared_lists (group_id, created_at desc);
 
@@ -244,10 +310,6 @@ create table if not exists public.shared_list_items (
 create index if not exists shared_list_items_list_idx
   on public.shared_list_items (list_id, position);
 
--- Activity history — short ledger of who did what. Kept simple: action is a
--- string ('list_created' | 'item_added' | 'item_completed' | 'item_removed'
--- | 'list_renamed' | 'list_deleted'), payload is free-form jsonb (item
--- titles, qty, etc.). Realtime INSERTs feed the "Recent activity" stream.
 create table if not exists public.shared_list_activity (
   id         uuid default gen_random_uuid() primary key,
   list_id    uuid references public.shared_lists on delete cascade not null,
@@ -264,48 +326,41 @@ alter table public.shared_lists         enable row level security;
 alter table public.shared_list_items    enable row level security;
 alter table public.shared_list_activity enable row level security;
 
--- shared_lists policies (group-scoped — same pattern as tasks/events)
 drop policy if exists "shared_lists_select" on public.shared_lists;
 create policy "shared_lists_select" on public.shared_lists
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for select using (group_id = public.my_group_id());
 drop policy if exists "shared_lists_insert" on public.shared_lists;
 create policy "shared_lists_insert" on public.shared_lists
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for insert with check (group_id = public.my_group_id());
 drop policy if exists "shared_lists_update" on public.shared_lists;
 create policy "shared_lists_update" on public.shared_lists
-  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for update using (group_id = public.my_group_id());
 drop policy if exists "shared_lists_delete" on public.shared_lists;
 create policy "shared_lists_delete" on public.shared_lists
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (group_id = public.my_group_id());
 
--- shared_list_items policies
 drop policy if exists "shared_list_items_select" on public.shared_list_items;
 create policy "shared_list_items_select" on public.shared_list_items
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for select using (group_id = public.my_group_id());
 drop policy if exists "shared_list_items_insert" on public.shared_list_items;
 create policy "shared_list_items_insert" on public.shared_list_items
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for insert with check (group_id = public.my_group_id());
 drop policy if exists "shared_list_items_update" on public.shared_list_items;
 create policy "shared_list_items_update" on public.shared_list_items
-  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for update using (group_id = public.my_group_id());
 drop policy if exists "shared_list_items_delete" on public.shared_list_items;
 create policy "shared_list_items_delete" on public.shared_list_items
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (group_id = public.my_group_id());
 
--- shared_list_activity policies (insert + select only; immutable ledger)
 drop policy if exists "shared_list_activity_select" on public.shared_list_activity;
 create policy "shared_list_activity_select" on public.shared_list_activity
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for select using (group_id = public.my_group_id());
 drop policy if exists "shared_list_activity_insert" on public.shared_list_activity;
 create policy "shared_list_activity_insert" on public.shared_list_activity
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for insert with check (group_id = public.my_group_id());
 
 -- ─── Spaces ───────────────────────────────────────────────────────────────────
--- A Space is a lightweight organizational container for a family topic
--- ("Italy Trip", "Garden", "Christmas"). Tasks, events, notes, and shared
--- lists can each optionally reference a space via space_id. Deleting a space
--- nulls those references rather than cascading — you don't lose the packing
--- list when you delete the trip. Archive via archived_at for soft-delete.
+
 create table if not exists public.spaces (
   id          uuid default gen_random_uuid() primary key,
   group_id    uuid references public.groups not null,
@@ -327,21 +382,21 @@ alter table public.spaces enable row level security;
 
 drop policy if exists "spaces_select" on public.spaces;
 create policy "spaces_select" on public.spaces
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for select using (group_id = public.my_group_id());
 drop policy if exists "spaces_insert" on public.spaces;
 create policy "spaces_insert" on public.spaces
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for insert with check (group_id = public.my_group_id());
 drop policy if exists "spaces_update" on public.spaces;
 create policy "spaces_update" on public.spaces
-  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for update using (group_id = public.my_group_id());
 drop policy if exists "spaces_delete" on public.spaces;
 create policy "spaces_delete" on public.spaces
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (group_id = public.my_group_id());
 
--- Cross-cutting space_id columns. Nullable, so existing rows are unaffected.
--- ON DELETE SET NULL keeps items intact when a space is hard-deleted.
+-- Cross-cutting space_id columns. ON DELETE SET NULL keeps items intact
+-- when a space is deleted.
 alter table public.tasks        add column if not exists space_id uuid references public.spaces on delete set null;
-alter table public.events       add column if not exists space_id uuid references public.spaces on delete set null;
+alter table public.events      add column if not exists space_id uuid references public.spaces on delete set null;
 alter table public.notes        add column if not exists space_id uuid references public.spaces on delete set null;
 alter table public.shared_lists add column if not exists space_id uuid references public.spaces on delete set null;
 
@@ -350,11 +405,7 @@ create index if not exists events_space_idx       on public.events (space_id);
 create index if not exists notes_space_idx        on public.notes (space_id);
 create index if not exists shared_lists_space_idx on public.shared_lists (space_id);
 
--- ─── Space items (built-in checklist) ──────────────────────────────────────
--- Folded the old standalone "Lists" feature into Spaces. Every Space can
--- carry a flat checklist of items (the simple "Groceries with milk @mom"
--- use case) right alongside its tagged tasks/events/notes. Shape mirrors
--- shared_list_items; items cascade-delete with the parent space.
+-- Space items (built-in checklist per space)
 create table if not exists public.space_items (
   id           uuid default gen_random_uuid() primary key,
   space_id     uuid references public.spaces on delete cascade not null,
@@ -376,40 +427,143 @@ create index if not exists space_items_space_idx
 alter table public.space_items enable row level security;
 drop policy if exists "space_items_select" on public.space_items;
 create policy "space_items_select" on public.space_items
-  for select using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for select using (group_id = public.my_group_id());
 drop policy if exists "space_items_insert" on public.space_items;
 create policy "space_items_insert" on public.space_items
-  for insert with check (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for insert with check (group_id = public.my_group_id());
 drop policy if exists "space_items_update" on public.space_items;
 create policy "space_items_update" on public.space_items
-  for update using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for update using (group_id = public.my_group_id());
 drop policy if exists "space_items_delete" on public.space_items;
 create policy "space_items_delete" on public.space_items
-  for delete using (group_id = (select group_id from public.profiles where id = auth.uid()));
+  for delete using (group_id = public.my_group_id());
 
--- ─── Personal todos ─────────────────────────────────────────────────────────
--- A task can be flagged is_private=true so it's only visible to the creator.
--- Other group members never see private rows even though the table is
--- group-scoped. Default false keeps existing tasks shared.
-alter table public.tasks add column if not exists is_private boolean default false;
-create index if not exists tasks_is_private_idx on public.tasks (is_private);
+-- ─── Personal todos / events ─────────────────────────────────────────────────
+-- is_private=true rows are only visible to their creator. The columns
+-- are defined with the tables above (the SELECT policies reference
+-- them); these are just the supporting indexes.
 
-drop policy if exists "tasks_select" on public.tasks;
-create policy "tasks_select" on public.tasks
-  for select using (
-    group_id = (select group_id from public.profiles where id = auth.uid())
-    and (is_private is not true or created_by = auth.uid())
-  );
-
--- ─── Personal events ───────────────────────────────────────────────────────
--- Mirrors the personal-todos pattern on tasks. is_private=true rows are
--- only visible to their creator even though the table is group-scoped.
-alter table public.events add column if not exists is_private boolean default false;
+create index if not exists tasks_is_private_idx  on public.tasks (is_private);
 create index if not exists events_is_private_idx on public.events (is_private);
 
-drop policy if exists "events_select" on public.events;
-create policy "events_select" on public.events
-  for select using (
-    group_id = (select group_id from public.profiles where id = auth.uid())
+-- ─── Atomic RSVP + poll voting ───────────────────────────────────────────────
+-- Both RSVPs and poll votes live in jsonb columns. The app used to
+-- read-modify-write the whole blob, so two members acting in the same
+-- moment clobbered each other. These functions do the merge server-side
+-- under a row lock, so concurrent writes serialize. The app calls them
+-- via supabase.rpc() and falls back to the old direct update if they
+-- don't exist yet.
+
+create or replace function public.set_event_rsvp(p_event_id uuid, p_status text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid    text := auth.uid()::text;
+  v_rsvps  jsonb;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_status is not null and p_status not in ('yes', 'maybe', 'no') then
+    raise exception 'invalid rsvp status %', p_status;
+  end if;
+
+  update public.events
+  set rsvps = case
+    when p_status is null
+      then coalesce(rsvps, '{}'::jsonb) - v_uid
+    else coalesce(rsvps, '{}'::jsonb) || jsonb_build_object(v_uid, p_status)
+  end
+  where id = p_event_id
+    and group_id = public.my_group_id()
     and (is_private is not true or created_by = auth.uid())
-  );
+  returning rsvps into v_rsvps;
+
+  return v_rsvps;
+end;
+$$;
+
+create or replace function public.vote_on_poll(p_note_id uuid, p_option_id text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid     text := auth.uid()::text;
+  v_payload jsonb;
+  v_votes   jsonb;
+  v_key     text;
+  v_had     boolean;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  -- Lock the row so concurrent votes queue instead of clobbering.
+  select payload into v_payload
+  from public.notes
+  where id = p_note_id
+    and group_id = public.my_group_id()
+    and type = 'poll'
+  for update;
+
+  if v_payload is null then
+    return null;
+  end if;
+
+  -- Ignore votes for options that don't exist on this poll.
+  if not coalesce(v_payload->'options', '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('id', p_option_id)) then
+    return v_payload;
+  end if;
+
+  v_votes := coalesce(v_payload->'votes', '{}'::jsonb);
+  -- Toggle-off semantics: voting for the option I'm already on clears my vote.
+  v_had := coalesce(v_votes->p_option_id, '[]'::jsonb) @> to_jsonb(v_uid);
+
+  -- Remove me from every option…
+  for v_key in select jsonb_object_keys(v_votes) loop
+    v_votes := jsonb_set(v_votes, array[v_key],
+      coalesce((
+        select jsonb_agg(e)
+        from jsonb_array_elements(v_votes->v_key) e
+        where e <> to_jsonb(v_uid)
+      ), '[]'::jsonb));
+  end loop;
+
+  -- …then re-add to the chosen option unless this was a toggle-off.
+  if not v_had then
+    v_votes := jsonb_set(v_votes, array[p_option_id],
+      coalesce(v_votes->p_option_id, '[]'::jsonb) || to_jsonb(v_uid));
+  end if;
+
+  v_payload := jsonb_set(v_payload, '{votes}', v_votes);
+  update public.notes set payload = v_payload where id = p_note_id;
+  return v_payload;
+end;
+$$;
+
+-- ─── Realtime ────────────────────────────────────────────────────────────────
+-- postgres_changes only fires for tables in the supabase_realtime
+-- publication. Without this block a fresh project gets silent no-op
+-- realtime sync. duplicate_object = already added → skip.
+
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'tasks', 'events', 'notes', 'notifications',
+    'shared_lists', 'shared_list_items', 'shared_list_activity',
+    'spaces', 'space_items'
+  ]
+  loop
+    begin
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    exception when duplicate_object then
+      null;
+    end;
+  end loop;
+end $$;

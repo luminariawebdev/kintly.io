@@ -6935,10 +6935,10 @@ export function MainApp({ profile, onSettings }) {
       supabase.from('notes').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
     ]).then(([m, t, e, n]) => {
       const allTasks = t.data || [];
-      // Auto-delete completed tasks older than 72 hours (only those the
-      // current user is allowed to delete via RLS — typically tasks
-      // assigned to them or unassigned). Others stay until their owner
-      // signs in and triggers their own cleanup pass.
+      // Auto-delete completed tasks older than 72 hours. With the
+      // tightened tasks_delete RLS policy (creator / assignee /
+      // unassigned), the server quietly skips rows this user can't
+      // delete; those vanish when their owner's cleanup pass runs.
       const cutoff = Date.now() - 72 * 60 * 60 * 1000;
       const stale = allTasks.filter(task =>
         task.completed && task.completed_at && new Date(task.completed_at).getTime() < cutoff
@@ -7813,10 +7813,26 @@ export function MainApp({ profile, onSettings }) {
       nextRsvps[me] = status;
     }
     setEvents(prev => prev.map(e => e.id === eventId ? { ...e, rsvps: nextRsvps } : e));
-    const { error } = await supabase
-      .from('events')
-      .update({ rsvps: nextRsvps })
-      .eq('id', eventId);
+    // Atomic path — set_event_rsvp (schema.sql) merges just my key
+    // server-side under a row lock, so two members RSVPing in the same
+    // moment can't clobber each other. Falls back to the legacy
+    // whole-blob update if the function hasn't been created yet.
+    const { data: serverRsvps, error: rpcErr } = await supabase
+      .rpc('set_event_rsvp', { p_event_id: eventId, p_status: status ?? null });
+    let error = rpcErr;
+    if (!rpcErr) {
+      error = null;
+      if (serverRsvps && typeof serverRsvps === 'object') {
+        // Reconcile with the authoritative merge result (it may include
+        // another member's concurrent RSVP that we don't have locally).
+        setEvents(prev => prev.map(e => e.id === eventId ? { ...e, rsvps: serverRsvps } : e));
+      }
+    } else {
+      ({ error } = await supabase
+        .from('events')
+        .update({ rsvps: nextRsvps })
+        .eq('id', eventId));
+    }
     if (error) {
       // Revert on failure (most likely cause: rsvps column not added yet)
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, rsvps: prevRsvps } : e));
@@ -8099,6 +8115,18 @@ export function MainApp({ profile, onSettings }) {
     const newPayload = { ...payload, votes: newVotes };
     // Optimistic UI
     setNotes(prev => prev.map(n => n.id === noteId ? { ...n, payload: newPayload } : n));
+    // Atomic path — vote_on_poll (schema.sql) re-reads the votes under
+    // a row lock and merges server-side, so concurrent votes from two
+    // family members serialize instead of overwriting each other.
+    const { data: serverPayload, error: rpcErr } = await supabase
+      .rpc('vote_on_poll', { p_note_id: noteId, p_option_id: optionId });
+    if (!rpcErr) {
+      if (serverPayload && typeof serverPayload === 'object') {
+        setNotes(prev => prev.map(n => n.id === noteId ? { ...n, payload: serverPayload } : n));
+      }
+      return;
+    }
+    // Fallback for databases where the function hasn't been created yet.
     const { error } = await supabase.from('notes').update({ payload: newPayload }).eq('id', noteId);
     if (error) {
       // Revert on failure
