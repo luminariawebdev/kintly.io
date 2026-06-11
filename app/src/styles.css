@@ -543,8 +543,6 @@ html { overscroll-behavior-x: none; }
   border-radius: 50%;
   border: 1px solid var(--border-glass);
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0;
@@ -593,8 +591,6 @@ html { overscroll-behavior-x: none; }
   font-family: 'Inter', system-ui, sans-serif;
   font-weight: 500;
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   cursor: pointer;
   color: var(--text-secondary);
   transition: all 0.25s var(--ease);
@@ -620,8 +616,6 @@ html { overscroll-behavior-x: none; }
   background: var(--surface-glass);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-pill);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 .task-view-tab {
   flex: 1;
@@ -671,8 +665,6 @@ html { overscroll-behavior-x: none; }
   gap: 8px;
   border: 1px solid var(--border-glass);
   background: var(--surface-glass);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   color: var(--text-primary);
   border-radius: var(--r-md);
   padding: 13px 22px;
@@ -788,8 +780,6 @@ html { overscroll-behavior-x: none; }
   width: 36px; height: 36px;
   border: 1px solid var(--border-glass);
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   color: var(--text-primary);
   border-radius: 50%;
   cursor: pointer;
@@ -819,8 +809,6 @@ html { overscroll-behavior-x: none; }
 .cal-grid {
   display: grid; grid-template-columns: repeat(7, 1fr);
   background: var(--surface-glass);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -880,8 +868,6 @@ html { overscroll-behavior-x: none; }
   display: grid; grid-template-columns: 56px 1fr auto; gap: 12px;
   align-items: center;
   background: var(--surface-glass-strong);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-md);
   padding: 12px 14px;
@@ -1670,8 +1656,6 @@ html { overscroll-behavior-x: none; }
   margin: 6px 0 18px;
   padding: 12px 0;
   background: var(--surface-glass);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-soft);
@@ -1693,8 +1677,6 @@ html { overscroll-behavior-x: none; }
   background:
     linear-gradient(180deg, rgba(106, 77, 255, 0.11), rgba(106, 77, 255, 0.04)),
     var(--surface-glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid rgba(106, 77, 255, 0.28);
   border-radius: var(--r-lg);
   box-shadow:
@@ -2070,8 +2052,6 @@ html { overscroll-behavior-x: none; }
   font-weight: 700;
   letter-spacing: 0.04em;
   pointer-events: none;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 /* Photos: details view — each photo gets its own full-width row so
@@ -2354,8 +2334,6 @@ html { overscroll-behavior-x: none; }
   margin-top: 32px;
   padding: 26px 16px 18px;
   background: var(--surface-glass);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-soft);
@@ -2410,8 +2388,6 @@ html { overscroll-behavior-x: none; }
 .field input,
 .field textarea {
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-md);
   padding: 12px 16px;
@@ -2509,8 +2485,6 @@ html { overscroll-behavior-x: none; }
 .pick {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
   padding: 9px 16px;
   border-radius: var(--r-pill);
@@ -2883,8 +2857,6 @@ html { overscroll-behavior-x: none; }
   letter-spacing: 0;
   color: var(--text-primary);
   background: var(--surface-glass-strong);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-md);
   cursor: pointer;
@@ -2904,8 +2876,6 @@ html { overscroll-behavior-x: none; }
   letter-spacing: 0;
   color: #7A1818;
   background: rgba(122, 24, 24, 0.06);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   border: 1.5px solid #7A1818;
   border-radius: var(--r-md);
   cursor: pointer;
@@ -3130,8 +3100,6 @@ html { overscroll-behavior-x: none; }
   gap: 6px;
   padding: 6px 12px;
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
   border-radius: 999px;
   font-size: 13px;
@@ -3394,8 +3362,6 @@ html { overscroll-behavior-x: none; }
   border: 1px solid var(--border-glass);
   border-radius: var(--r-md);
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   color: var(--text-primary);
   font-family: inherit;
   font-size: 15px;
@@ -3704,8 +3670,6 @@ html { overscroll-behavior-x: none; }
    (the list's color) for the left accent stripe. */
 .list-card {
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -4001,8 +3965,6 @@ html { overscroll-behavior-x: none; }
 /* One Space card — a single tappable row with emoji + title + counts. */
 .space-card {
   background: var(--surface-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   overflow: hidden;

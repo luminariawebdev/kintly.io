@@ -594,7 +594,11 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
 }
 
 // ─── Tasks Section ────────────────────────────────────────────────────────────
-function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
+// The four big sections are memoized so MainApp-level state churn that
+// doesn't touch their props (bell menu, scroll-driven tab sync, modal
+// opens) skips re-rendering hundreds of rows. MainApp passes only
+// useCallback'd handlers and primitive/stable values for this to work.
+const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
   const [showDone, setShowDone] = React.useState(false);
   // Personal view gets its own completed-toggle so expanding "Completed"
   // in one view doesn't silently expand it in the other.
@@ -792,10 +796,10 @@ function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAdd
       </>)}
     </section>
   );
-}
+});
 
 // ─── Calendar Section ─────────────────────────────────────────────────────────
-function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPersonal, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse, view, setView }) {
+const CalendarSection = React.memo(function CalendarSection({ events, expandedEvents, members, getProfile, myId, onAdd, onAddPersonal, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse, view, setView }) {
   const now = new Date();
   const [calYear, setCalYear] = React.useState(now.getFullYear());
   const [calMonth, setCalMonth] = React.useState(now.getMonth());
@@ -807,29 +811,20 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPerson
   const todayD = now.getDate();
   const isCurrentMonth = calYear === now.getFullYear() && calMonth === now.getMonth();
 
-  // Split the event list by visibility before recurrence expansion.
-  // Personal view shows ONLY the current user's private events; group
-  // view excludes private rows so they never show in the shared grid.
-  const scopedEvents = React.useMemo(() => {
-    if (view === 'personal') {
-      return events.filter(e => e.is_private && e.created_by === myId);
-    }
-    return events.filter(e => !e.is_private);
-  }, [events, view, myId]);
-
   const groupOpenCount = events.filter(e => !e.is_private).length;
   const personalOpenCount = events.filter(e => e.is_private && e.created_by === myId).length;
 
-  // Expand any recurring events into their visible instances within a
-  // 1-year window centered on today. Each instance carries the same
-  // `id` as its master so EventDetailsModal lookups + RSVPs still hit
-  // a single row. The window is wide enough that scrolling the
-  // calendar a few months either way still shows occurrences.
+  // MainApp already expands recurring events into per-occurrence
+  // instances (expandedEvents) for the day modal — reuse that result
+  // here instead of running the expansion a second time, and just
+  // scope it to the Group/Personal toggle. Expansion preserves
+  // is_private/created_by, so filtering after expanding is equivalent.
   const expanded = React.useMemo(() => {
-    const start = new Date(); start.setHours(0,0,0,0); start.setMonth(start.getMonth() - 6);
-    const end   = new Date(); end.setHours(0,0,0,0);   end.setMonth(end.getMonth() + 12);
-    return expandRecurringEvents(scopedEvents, start, end);
-  }, [scopedEvents]);
+    if (view === 'personal') {
+      return expandedEvents.filter(e => e.is_private && e.created_by === myId);
+    }
+    return expandedEvents.filter(e => !e.is_private);
+  }, [expandedEvents, view, myId]);
 
   const monthEvents = expanded.filter(e => {
     const d = new Date(e.date + 'T00:00:00');
@@ -1100,7 +1095,7 @@ function CalendarSection({ events, members, getProfile, myId, onAdd, onAddPerson
       </>)}
     </section>
   );
-}
+});
 
 // ─── Notes Section ────────────────────────────────────────────────────────────
 // Collapse / expand chevron used in every section header.
@@ -1239,9 +1234,10 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
   // the viewer is the post's author (same gate as the swipe-to-delete
   // affordance). Tapping Delete soft-deletes the post — the row stays
   // in the feed as a "deleted" tombstone so reply chains still resolve.
-  const ActionBar = () => {
-    if (!actionBarOpen) return null;
-    return (
+  // NOTE: held as plain JSX (not an inner component) — defining a
+  // component inside render gives React a new type every pass, which
+  // unmounted and remounted this subtree on every feed re-render.
+  const actionBar = !actionBarOpen ? null : (
       <div
         className="bubble-action-bar"
         role="menu"
@@ -1277,7 +1273,6 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
         )}
       </div>
     );
-  };
 
   // Shared bubble caption — sits BELOW every bubble, on the same side
   // as the bubble (right for "me", left for "them"). Avatar precedes
@@ -1293,36 +1288,33 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
   // by the same author, this bubble has a continuation below it
   // and the caption should appear there instead. Pinned posts pass
   // nextNote=null, so each pinned bubble keeps its own caption.
-  const Caption = () => {
-    if (nextNote && nextNote.created_by === n.created_by) return null;
-    return (
-      <div
-        className="chat-caption"
-        onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
-      >
-        <Dot profile={author} />
-        {isMe ? (
-          <span className="chat-caption-name" style={{ color: 'var(--me-color)' }}>you</span>
-        ) : (
-          <span className="chat-caption-name" style={{ color: authorColor }}>
-            {author?.display_name}
-          </span>
-        )}
-      </div>
-    );
-  };
+  const caption = (nextNote && nextNote.created_by === n.created_by) ? null : (
+    <div
+      className="chat-caption"
+      onClick={(e) => { e.stopPropagation(); if (author) onShowMember?.(author); }}
+    >
+      <Dot profile={author} />
+      {isMe ? (
+        <span className="chat-caption-name" style={{ color: 'var(--me-color)' }}>you</span>
+      ) : (
+        <span className="chat-caption-name" style={{ color: authorColor }}>
+          {author?.display_name}
+        </span>
+      )}
+    </div>
+  );
 
   // "↩ Replying to …" header — rendered above the bubble when this
   // post is a reply to another post. Clicking it opens the original
   // post's detail modal so the user can see the full context.
-  // The reply bubble owns all reply UI. <ReplyInset /> renders as a
+  // The reply bubble owns all reply UI. The inset renders as a
   // DOM child of the chat-bubble div (the responder's bubble) — a
   // white pill quoting the original post: row 1 is [emoji + name],
   // row 2 is a snippet of the original message. Clicking opens the
   // original's detail modal. Returns null for non-reply posts so
   // non-reply bubbles are untouched.
-  const ReplyInset = () => {
-    if (!replyToNote) return null;
+  let replyInset = null;
+  if (replyToNote) {
     const refColor = getColor(replyToAuthor?.color);
     const refType = replyToNote.type || 'message';
     const refDeleted = !!(replyToNote.payload && replyToNote.payload.deleted);
@@ -1338,7 +1330,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     } else {
       snippet = (replyToNote.content || '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 220);
     }
-    return (
+    replyInset = (
       <button
         type="button"
         className="chat-bubble-reply-inset"
@@ -1360,14 +1352,14 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
         )}
       </button>
     );
-  };
+  }
 
   // ── Announcement: full-width red, bold/italic, no bubble ────────────────
   if (type === 'announcement') {
     return (
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className="post-press-wrap">
-          <ActionBar />
+          {actionBar}
           <div
             className={'announcement-card' + (actionBarOpen ? ' pressed' : '')}
             onClick={handleBubbleClick}
@@ -1409,19 +1401,19 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap">
-            <ActionBar />
+            {actionBar}
             <div
               className={'chat-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
               onClick={handleBubbleClick}
               {...pressHandlers}
             >
-              <ReplyInset />
+              {replyInset}
               <div className="quick-update-label">REMINDER</div>
               <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
               <div className="chat-time">{when}</div>
             </div>
-            <Caption />
+            {caption}
           </div>
         </div>
       </SwipeToDelete>
@@ -1435,14 +1427,14 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap">
-            <ActionBar />
+            {actionBar}
             <div
               className={'chat-bubble photo-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
               onClick={handleBubbleClick}
               {...pressHandlers}
             >
-              <ReplyInset />
+              {replyInset}
               <div className={'photo-grid count-' + Math.min(photos.length, 4)}>
                 {photos.length > 1 && (
                   <span className="photo-count-badge" aria-hidden>
@@ -1464,7 +1456,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               )}
               <div className="chat-time">{when}</div>
             </div>
-            <Caption />
+            {caption}
           </div>
         </div>
       </SwipeToDelete>
@@ -1482,7 +1474,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
           <div className="chat-bubble-wrap" style={{ maxWidth: '86%' }}>
-            <ActionBar />
+            {actionBar}
             <div
               className={'chat-bubble poll-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
               style={{ '--bubble-c': authorColor }}
@@ -1493,7 +1485,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               }}
               {...pressHandlers}
             >
-              <ReplyInset />
+              {replyInset}
               <div className="poll-label">POLL</div>
               <div className="poll-question">{question}</div>
               <div className="poll-options">
@@ -1522,7 +1514,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
                 <span className="chat-time" style={{ marginTop: 0 }}>{when}</span>
               </div>
             </div>
-            <Caption />
+            {caption}
           </div>
         </div>
       </SwipeToDelete>
@@ -1537,14 +1529,14 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
     <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
       <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
         <div className="chat-bubble-wrap">
-          <ActionBar />
+          {actionBar}
           <div
             className={'chat-bubble has-tail' + (actionBarOpen ? ' pressed' : '')}
             style={{ '--bubble-c': authorColor }}
             onClick={handleBubbleClick}
             {...pressHandlers}
           >
-            <ReplyInset />
+            {replyInset}
             <div className="chat-text">{renderWithMentions(n.content, isMe, members)}</div>
             <div className="chat-time">{when}</div>
           </div>
@@ -1553,7 +1545,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
               <SpaceTag spaceId={n.space_id} />
             </div>
           )}
-          <Caption />
+          {caption}
         </div>
       </div>
     </SwipeToDelete>
@@ -1644,7 +1636,7 @@ function ReplyComposer({ target, targetAuthor, myId, onCancel, onSubmit }) {
   );
 }
 
-function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, collapsed, onToggleCollapse }) {
+const NotesSection = React.memo(function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, collapsed, onToggleCollapse }) {
   // Inline reply state — long-pressing a post and then tapping the
   // floating "Reply" pill stashes the target here, which makes the
   // ReplyComposer slide in at the top of the feed (no modal). The
@@ -1696,13 +1688,16 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
   //   • every Urgent (announcement) — auto-pinned, lives only here
   //   • every Reminder (quick_update) — auto-pinned, lives only here
   //   • any other non-message post that the user pinned manually
+  // Sorts use plain string compare — created_at is ISO-8601, which is
+  // already lexicographically ordered, so there's no need to allocate
+  // two Date objects per comparison on every render.
   const pinned = notes
     .filter(n => {
       const type = n.type || 'message';
       if (type === 'announcement' || type === 'quick_update') return true;
       return n.pinned && type !== 'message';
     })
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
 
   // Main feed: NEWEST first (top). Anything in the Pinned section is
   // explicitly excluded — pinned items live ONLY in pinned so they
@@ -1715,7 +1710,11 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
       if (n.pinned && type !== 'message') return false; // manually-pinned non-messages
       return true;
     })
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+
+  // O(1) reply-target lookups — the feed loop used notes.find() per
+  // post, which was quadratic in feed length.
+  const noteById = React.useMemo(() => new Map(notes.map(n => [n.id, n])), [notes]);
 
   // Slice both lists to their current limits — the "load more" pill
   // bumps the limit by *_STEP each click; the "see less" pill resets
@@ -1853,7 +1852,7 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
                 // "↩ Replying to …" link above the bubble.
                 const replyToId = n.payload && n.payload.reply_to;
                 const replyToNote = replyToId
-                  ? notes.find(x => x.id === replyToId) || null
+                  ? noteById.get(replyToId) || null
                   : null;
                 const replyToAuthor = replyToNote
                   ? getProfile(replyToNote.created_by)
@@ -1937,7 +1936,7 @@ function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTog
       </>)}
     </section>
   );
-}
+});
 
 // ─── Date Picker Modal ────────────────────────────────────────────────────────
 // Full-size calendar grid date picker, sized like the rest of the
@@ -6732,11 +6731,11 @@ function SpaceDetailModal({
   );
 }
 
-function SpacesSection({
+const SpacesSection = React.memo(function SpacesSection({
   spaces, tasks, events, notes, lists, listItems, spaceItems,
   members, getProfile, myId,
   collapsed, onToggleCollapse,
-  onAddSpace, onDeleteSpace, onOpenAddModal, onOpenDetail,
+  onDeleteSpace, onOpenAddModal, onOpenDetail,
 }) {
   const visible = (spaces || [])
     .filter(s => {
@@ -6807,9 +6806,14 @@ function SpacesSection({
       </>)}
     </section>
   );
-}
+});
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
+// 'lists' is temporarily hidden — Spaces covers the same use case better.
+// Restore by adding it back here AND in the scroll-sync ids array AND in
+// the JSX render below (search for "ListsSection is hidden").
+const SECTION_ORDER = ['notes', 'tasks', 'spaces', 'calendar'];
+
 export function MainApp({ profile, onSettings }) {
   const [tab, setTab] = React.useState('notes');
   const [modal, setModal] = React.useState(null);
@@ -6876,13 +6880,22 @@ export function MainApp({ profile, onSettings }) {
   const [loading, setLoading] = React.useState(true);
   const scrollRef = React.useRef(null);
 
-  // Manual refresh — button in the sticky header. Sets `refreshing`
-  // so the icon spins for ~700ms, then reloads the page.
+  // Manual refresh — button in the sticky header. Re-runs the same
+  // queries the initial load uses (fetchAll below) instead of reloading
+  // the page: no white flash, no bundle re-download, scroll position
+  // kept. The icon spins until the data lands (min ~500ms so the tap
+  // visibly did something even on a fast network).
   const [refreshing, setRefreshing] = React.useState(false);
-  const refreshNow = () => {
+  const refreshNow = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    window.setTimeout(() => window.location.reload(), 700);
+    const started = Date.now();
+    try {
+      await fetchAll();
+    } finally {
+      const wait = Math.max(0, 500 - (Date.now() - started));
+      window.setTimeout(() => setRefreshing(false), wait);
+    }
   };
 
   // Publish the logged-in user's profile color as a global CSS
@@ -6896,17 +6909,29 @@ export function MainApp({ profile, onSettings }) {
     if (c) document.documentElement.style.setProperty('--me-color', c);
   }, [profile?.color]);
 
+  // Scroll-to-section. Stable (useCallback) so the per-section
+  // callbacks below — and through them the React.memo'd sections —
+  // keep the same identity across unrelated re-renders.
+  const suppressScrollSync = React.useRef(0);
+  const scrollToSec = React.useCallback((id, smooth = true) => {
+    const wrap = scrollRef.current;
+    if (!wrap) return;
+    const el = wrap.querySelector('#sec-' + id);
+    if (!el) return;
+    const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
+    const top = wrap.scrollTop + (el.getBoundingClientRect().top - wrap.getBoundingClientRect().top) - headH + 1;
+    // Suppress scroll-driven setTab while the smooth scroll is animating
+    suppressScrollSync.current = Date.now() + 700;
+    wrap.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+  }, []);
+
   // Per-section collapse state. Clicking the chevron in a section header
   // collapses that section's body and (if there's a next section) smooth-
   // scrolls to it — a quick way to walk Home Feed → Tasks → Calendar.
   const [collapsed, setCollapsed] = React.useState({
     notes: false, tasks: false, calendar: false, lists: false, spaces: false,
   });
-  // 'lists' temporarily hidden — Spaces covers the same use case better.
-  // Restore by adding it back here AND in the scroll-sync ids array AND in
-  // the JSX render below (search for "ListsSection is hidden").
-  const SECTION_ORDER = ['notes', 'tasks', 'spaces', 'calendar'];
-  const toggleCollapse = (id) => {
+  const toggleCollapse = React.useCallback((id) => {
     const wasCollapsed = collapsed[id];
     setCollapsed(prev => ({ ...prev, [id]: !prev[id] }));
     // Wait two frames so React commits the state change and the browser
@@ -6924,42 +6949,33 @@ export function MainApp({ profile, onSettings }) {
       const next = SECTION_ORDER[i + 1];
       if (next) scrollAfterLayout(next);
     }
-  };
+  }, [collapsed, scrollToSec]);
+  const toggleCollapseNotes    = React.useCallback(() => toggleCollapse('notes'),    [toggleCollapse]);
+  const toggleCollapseTasks    = React.useCallback(() => toggleCollapse('tasks'),    [toggleCollapse]);
+  const toggleCollapseSpaces   = React.useCallback(() => toggleCollapse('spaces'),   [toggleCollapse]);
+  const toggleCollapseCalendar = React.useCallback(() => toggleCollapse('calendar'), [toggleCollapse]);
 
-  React.useEffect(() => {
+  // Stable modal-opener / detail-opener callbacks — same reasoning:
+  // inline lambdas in the section JSX defeated React.memo.
+  const openAddNote          = React.useCallback(() => setModal('note'), []);
+  const openAddTask          = React.useCallback(() => { setTaskAddPrivate(false); setModal('task'); }, []);
+  const openAddPersonalTask  = React.useCallback(() => { setTaskAddPrivate(true); setModal('task'); }, []);
+  const openAddEvent         = React.useCallback(() => { setEventInitDate(null); setEventAddPrivate(false); setModal('event'); }, []);
+  const openAddPersonalEvent = React.useCallback(() => { setEventInitDate(null); setEventAddPrivate(true); setModal('event'); }, []);
+  const openAddSpaceModal    = React.useCallback(() => { setSpaceEditTarget(null); setSpaceAddOpen(true); }, []);
+  const showTaskDetail       = React.useCallback((t) => setDetailTaskId(t.id), []);
+  const showEventDetail      = React.useCallback((ev) => setDetailEventId(ev.id), []);
+  const showNoteDetail       = React.useCallback((n) => setDetailNoteId(n.id), []);
+  const showMemberDetail     = React.useCallback((p) => setDetailMemberId(p.id), []);
+
+  // One data-load pass, shared by the initial mount and the header
+  // refresh button. Resolves when the core tables (members / tasks /
+  // events / notes) have landed; the secondary tables ride along as
+  // fire-and-forget so a missing migration never blocks the app.
+  const fetchAll = React.useCallback(async () => {
     if (!profile?.group_id) return;
-    Promise.all([
-      supabase.from('profiles').select('*').eq('group_id', profile.group_id),
-      supabase.from('tasks').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
-      supabase.from('events').select('*').eq('group_id', profile.group_id).order('date', { ascending: true }),
-      supabase.from('notes').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
-    ]).then(([m, t, e, n]) => {
-      const allTasks = t.data || [];
-      // Auto-delete completed tasks older than 72 hours. With the
-      // tightened tasks_delete RLS policy (creator / assignee /
-      // unassigned), the server quietly skips rows this user can't
-      // delete; those vanish when their owner's cleanup pass runs.
-      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
-      const stale = allTasks.filter(task =>
-        task.completed && task.completed_at && new Date(task.completed_at).getTime() < cutoff
-      );
-      const fresh = stale.length === 0
-        ? allTasks
-        : allTasks.filter(task => !stale.some(s => s.id === task.id));
-      setMembers(m.data || []);
-      setTasks(fresh);
-      setEvents(e.data || []);
-      setNotes(n.data || []);
-      setLoading(false);
-      if (stale.length > 0) {
-        // Fire-and-forget — RLS will reject any we can't delete
-        supabase.from('tasks').delete().in('id', stale.map(s => s.id));
-      }
-    });
 
-    // Shared Lists — separate Promise.all so a missing migration doesn't
-    // block the rest of the app. Both queries silently fall back to []
-    // if the tables don't exist (the section will show "No lists yet").
+    // Shared Lists — silently fall back to [] if the tables don't exist.
     Promise.all([
       supabase.from('shared_lists').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
       supabase.from('shared_list_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true }),
@@ -6968,23 +6984,54 @@ export function MainApp({ profile, onSettings }) {
       if (!i.error) setListItems(i.data || []);
     });
 
-    // Spaces — same defensive pattern; falls back to [] if the table
-    // hasn't been migrated. Section renders an empty state in that case.
+    // Spaces + space items — same defensive pattern.
     supabase.from('spaces').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false })
       .then(({ data, error }) => { if (!error) setSpaces(data || []); });
-
-    // Space items — flat checklists living inside each space. Same
-    // defensive load; silently empty if the migration hasn't run yet.
     supabase.from('space_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true })
       .then(({ data, error }) => { if (!error) setSpaceItems(data || []); });
 
-    // Load notifications (silently no-op if table missing)
+    // Notifications (silently no-op if table missing)
     supabase.from('notifications')
       .select('*')
       .eq('user_id', profile.id)
       .order('created_at', { ascending: false })
       .limit(50)
       .then(({ data }) => { if (data) setNotifications(data); });
+
+    const [m, t, e, n] = await Promise.all([
+      supabase.from('profiles').select('*').eq('group_id', profile.group_id),
+      supabase.from('tasks').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
+      supabase.from('events').select('*').eq('group_id', profile.group_id).order('date', { ascending: true }),
+      // Notes carry base64 photos in their payloads, so an unbounded
+      // select was the slowest query in the app by far. 100 newest is
+      // far more than the feed's load-more pills ever reveal.
+      supabase.from('notes').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }).limit(100),
+    ]);
+    const allTasks = t.data || [];
+    // Auto-delete completed tasks older than 72 hours. With the
+    // tightened tasks_delete RLS policy (creator / assignee /
+    // unassigned), the server quietly skips rows this user can't
+    // delete; those vanish when their owner's cleanup pass runs.
+    const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+    const stale = allTasks.filter(task =>
+      task.completed && task.completed_at && new Date(task.completed_at).getTime() < cutoff
+    );
+    const fresh = stale.length === 0
+      ? allTasks
+      : allTasks.filter(task => !stale.some(s => s.id === task.id));
+    setMembers(m.data || []);
+    setTasks(fresh);
+    setEvents(e.data || []);
+    setNotes(n.data || []);
+    setLoading(false);
+    if (stale.length > 0) {
+      supabase.from('tasks').delete().in('id', stale.map(s => s.id));
+    }
+  }, [profile?.group_id, profile?.id]);
+
+  React.useEffect(() => {
+    if (!profile?.group_id) return;
+    fetchAll();
 
     // Realtime subscription to new notifications for this user
     const channel = supabase
@@ -7109,7 +7156,7 @@ export function MainApp({ profile, onSettings }) {
       supabase.removeChannel(spacesChannel);
       supabase.removeChannel(coreChannel);
     };
-  }, [profile?.group_id, profile?.id]);
+  }, [profile?.group_id, profile?.id, fetchAll]);
 
   // Close bell menu on outside click
   React.useEffect(() => {
@@ -7134,10 +7181,13 @@ export function MainApp({ profile, onSettings }) {
     await supabase.from('notifications').update({ read: true }).eq('id', id);
   };
 
-  const getProfile = id => members.find(m => m.id === id);
+  // Handlers passed into the React.memo'd sections are wrapped in
+  // useCallback so an unrelated MainApp state change (bell open, tab
+  // sync, a modal toggling) doesn't re-render every section.
+  const getProfile = React.useCallback((id) => members.find(m => m.id === id), [members]);
 
   // Task CRUD
-  const toggleTask = async (id, completed) => {
+  const toggleTask = React.useCallback(async (id, completed) => {
     if (!completed) playPop(); // play only when checking ON
     const next = !completed;
     const completedAt = next ? new Date().toISOString() : null;
@@ -7147,7 +7197,7 @@ export function MainApp({ profile, onSettings }) {
     if (error && /completed_at/i.test(error.message || '')) {
       await supabase.from('tasks').update({ completed: next }).eq('id', id);
     }
-  };
+  }, []);
   const notify = async (targetIds, type, payload) => {
     if (!targetIds || targetIds.length === 0) return;
     const rows = targetIds.map(uid => ({
@@ -7251,10 +7301,10 @@ export function MainApp({ profile, onSettings }) {
     }
     return { error: null };
   };
-  const deleteTask = async (id) => {
+  const deleteTask = React.useCallback(async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
     await supabase.from('tasks').delete().eq('id', id);
-  };
+  }, []);
 
   const cancelTask = async (id, reason) => {
     const task = tasks.find(t => t.id === id);
@@ -7395,7 +7445,7 @@ export function MainApp({ profile, onSettings }) {
       }
     }
   };
-  const deleteEvent = async (id) => {
+  const deleteEvent = React.useCallback(async (id) => {
     // A recurring event shares one row across every occurrence, so any
     // delete removes the whole series. The swipe gesture made that a
     // single accidental flick — confirm before nuking a series.
@@ -7406,7 +7456,7 @@ export function MainApp({ profile, onSettings }) {
     }
     setEvents(prev => prev.filter(e => e.id !== id));
     await supabase.from('events').delete().eq('id', id);
-  };
+  }, [events]);
 
   // ─── Shared Lists CRUD ───────────────────────────────────────────────────
   // Activity logging — best-effort fire-and-forget. Failures are silent
@@ -7603,7 +7653,7 @@ export function MainApp({ profile, onSettings }) {
     }
   };
 
-  const deleteSpace = async (id) => {
+  const deleteSpace = React.useCallback(async (id) => {
     const existing = spaces.find(s => s.id === id);
     setSpaces(prev => prev.filter(s => s.id !== id));
     // Locally null space_id on tagged items so the UI updates instantly.
@@ -7617,7 +7667,7 @@ export function MainApp({ profile, onSettings }) {
       if (existing) setSpaces(prev => prev.some(s => s.id === id) ? prev : [existing, ...prev]);
       alert('Could not delete space: ' + error.message);
     }
-  };
+  }, [spaces]);
 
   const addListItem = async (listId, parsed) => {
     if (!listId || !parsed?.title || !profile?.group_id) return;
@@ -7881,7 +7931,7 @@ export function MainApp({ profile, onSettings }) {
   //           or: addNote({content, type, payload, pinned}, taskPayload, eventPayload)
   // `eventPayload`, when provided, also inserts a row into events with a
   // note_id reference (with a graceful fallback if that column is missing).
-  const addNote = async (arg, taskPayload, eventPayload) => {
+  const addNote = React.useCallback(async (arg, taskPayload, eventPayload) => {
     const isObj = arg && typeof arg === 'object' && !Array.isArray(arg);
     const content = isObj ? (arg.content || '') : (arg || '');
     const type    = isObj ? (arg.type || 'message') : 'message';
@@ -8090,10 +8140,23 @@ export function MainApp({ profile, onSettings }) {
         });
       }
     }
-  };
+  // notify is intentionally not a dep — it only reads `profile`, which
+  // is, so the captured copy is never meaningfully stale.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile, members, notes, tasksFilter]);
+
+  // Stable wrapper for the feed's inline reply composer.
+  const postReply = React.useCallback(async (replyToId, content) => {
+    await addNote({
+      content,
+      type: 'message',
+      payload: { reply_to: replyToId },
+      pinned: false,
+    });
+  }, [addNote]);
 
   // Vote on a poll — updates the note's payload.votes
-  const voteOnPoll = async (noteId, optionId) => {
+  const voteOnPoll = React.useCallback(async (noteId, optionId) => {
     const note = notes.find(n => n.id === noteId);
     if (!note || note.type !== 'poll') return;
     const payload = note.payload || {};
@@ -8137,7 +8200,7 @@ export function MainApp({ profile, onSettings }) {
         alert('Could not save vote: ' + error.message);
       }
     }
-  };
+  }, [notes, profile]);
 
   // Soft-delete a note in the home feed. The note row stays in the
   // table so reply chains still resolve (otherwise a "replying to …"
@@ -8147,7 +8210,7 @@ export function MainApp({ profile, onSettings }) {
   // bubble. Only the author can delete — the call sites already
   // guard this via `canDelete = n.created_by === myId`, but we
   // re-check here as a backstop.
-  const deleteNote = async (id) => {
+  const deleteNote = React.useCallback(async (id) => {
     const current = notes.find(n => n.id === id);
     if (!current) return;
     if (current.created_by !== profile?.id) return;
@@ -8172,7 +8235,7 @@ export function MainApp({ profile, onSettings }) {
       setNotes(prev => prev.map(n => n.id === id ? current : n));
       alert('Could not delete post: ' + error.message);
     }
-  };
+  }, [notes, profile?.id]);
   const deleteNotification = async (id) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
     await supabase.from('notifications').delete().eq('id', id);
@@ -8190,25 +8253,13 @@ export function MainApp({ profile, onSettings }) {
       alert('Could not clear notifications: ' + error.message);
     }
   };
-  const togglePin = async (id, pinned) => {
+  const togglePin = React.useCallback(async (id, pinned) => {
     setNotes(prev => prev.map(n => n.id === id ? { ...n, pinned: !pinned } : n));
     await supabase.from('notes').update({ pinned: !pinned }).eq('id', id);
-  };
+  }, []);
 
-  // Scroll sync
-  const suppressScrollSync = React.useRef(0);
-  const scrollToSec = (id, smooth = true) => {
-    const wrap = scrollRef.current;
-    if (!wrap) return;
-    const el = wrap.querySelector('#sec-' + id);
-    if (!el) return;
-    const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
-    const top = wrap.scrollTop + (el.getBoundingClientRect().top - wrap.getBoundingClientRect().top) - headH + 1;
-    // Suppress scroll-driven setTab while the smooth scroll is animating
-    suppressScrollSync.current = Date.now() + 700;
-    wrap.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
-  };
-
+  // Scroll sync (scrollToSec + suppressScrollSync are defined up with
+  // the collapse handlers).
   React.useEffect(() => {
     if (loading) return;
     const wrap = scrollRef.current;
@@ -8322,24 +8373,17 @@ export function MainApp({ profile, onSettings }) {
             members={members}
             getProfile={getProfile}
             myId={profile?.id}
-            onAdd={() => setModal('note')}
+            onAdd={openAddNote}
             onDelete={deleteNote}
             onTogglePin={togglePin}
-            onOpenNote={(n) => setDetailNoteId(n.id)}
-            onShowMember={(p) => setDetailMemberId(p.id)}
+            onOpenNote={showNoteDetail}
+            onShowMember={showMemberDetail}
             onVote={voteOnPoll}
-            onReply={async (replyToId, content) => {
-              await addNote({
-                content,
-                type: 'message',
-                payload: { reply_to: replyToId },
-                pinned: false,
-              });
-            }}
+            onReply={postReply}
             collapsed={collapsed.notes}
-            onToggleCollapse={() => toggleCollapse('notes')}
+            onToggleCollapse={toggleCollapseNotes}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={() => { setTaskAddPrivate(false); setModal('task'); }} onAddPersonal={() => { setTaskAddPrivate(true); setModal('task'); }} onDelete={deleteTask} onShowTask={(t) => setDetailTaskId(t.id)} collapsed={collapsed.tasks} onToggleCollapse={() => toggleCollapse('tasks')} filter={tasksFilter} setFilter={setTasksFilter} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* ListsSection is hidden — Spaces handles the same use case
               with more flexibility. The component, state, modals, and
               CRUD wiring all stay in place; just uncomment to bring it
@@ -8378,25 +8422,25 @@ export function MainApp({ profile, onSettings }) {
             getProfile={getProfile}
             myId={profile?.id}
             collapsed={collapsed.spaces}
-            onToggleCollapse={() => toggleCollapse('spaces')}
-            onAddSpace={addSpace}
+            onToggleCollapse={toggleCollapseSpaces}
             onDeleteSpace={deleteSpace}
-            onOpenAddModal={() => { setSpaceEditTarget(null); setSpaceAddOpen(true); }}
+            onOpenAddModal={openAddSpaceModal}
             onOpenDetail={setSpaceDetailItem}
           />
           <CalendarSection
             events={events}
+            expandedEvents={expandedEvents}
             members={members}
             getProfile={getProfile}
             myId={profile?.id}
-            onAdd={() => { setEventInitDate(null); setEventAddPrivate(false); setModal('event'); }}
-            onAddPersonal={() => { setEventInitDate(null); setEventAddPrivate(true); setModal('event'); }}
-            onDayClick={(iso) => setDayDetailsDate(iso)}
+            onAdd={openAddEvent}
+            onAddPersonal={openAddPersonalEvent}
+            onDayClick={setDayDetailsDate}
             onDelete={deleteEvent}
-            onShowMonth={(payload) => setMonthModalData(payload)}
-            onShowEvent={(ev) => setDetailEventId(ev.id)}
+            onShowMonth={setMonthModalData}
+            onShowEvent={showEventDetail}
             collapsed={collapsed.calendar}
-            onToggleCollapse={() => toggleCollapse('calendar')}
+            onToggleCollapse={toggleCollapseCalendar}
             view={calView}
             setView={setCalView}
           />
