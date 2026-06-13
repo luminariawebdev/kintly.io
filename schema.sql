@@ -57,6 +57,7 @@ create table if not exists public.events (
   description text,
   location    text,
   date        date not null,
+  end_date    date,
   start_time  text,
   end_time    text,
   color       text default 'coral',
@@ -77,6 +78,7 @@ alter table public.events add column if not exists attendees   uuid[] default '{
 alter table public.events add column if not exists recurrence  jsonb;
 alter table public.events add column if not exists rsvps       jsonb default '{}';
 alter table public.events add column if not exists note_id     uuid references public.notes on delete set null;
+alter table public.events add column if not exists end_date    date;
 
 create table if not exists public.tasks (
   id                  uuid default gen_random_uuid() primary key,

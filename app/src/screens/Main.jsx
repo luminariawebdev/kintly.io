@@ -466,6 +466,20 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
   const endMs   = windowEnd.getTime();
   const toIso = toLocalISO;
   for (const e of rawEvents) {
+    // Multi-day event: expand the single row into one entry per day.
+    if (e.end_date && e.end_date > e.date) {
+      const [sy, sm, sd] = e.date.split('-').map(Number);
+      const [ey, em, ed] = e.end_date.split('-').map(Number);
+      const spanStart = new Date(Math.max(startMs, new Date(sy, sm - 1, sd).getTime()));
+      const spanEnd   = new Date(Math.min(endMs,   new Date(ey, em - 1, ed).getTime()));
+      let cur = new Date(spanStart); cur.setHours(0,0,0,0);
+      while (cur.getTime() <= spanEnd.getTime()) {
+        out.push({ ...e, date: toIso(cur), _isMultiDay: true });
+        cur.setDate(cur.getDate() + 1);
+      }
+      continue;
+    }
+
     const r = e.recurrence;
     if (!r || !r.freq || r.freq === 'none') {
       out.push(e);
@@ -2518,6 +2532,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
   const [description, setDescription] = React.useState('');
   const [location, setLocation] = React.useState('');
   const [date, setDate] = React.useState(initialDate || today);
+  const [endDate, setEndDate] = React.useState(initialDate || today);
   const [startTime, setStartTime] = React.useState('');
   const [endTime, setEndTime] = React.useState('');
   const [attendees, setAttendees] = React.useState([]);
@@ -2545,9 +2560,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
   const [spaceId, setSpaceId] = React.useState(initialSpaceId || null);
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
-  const [dateOpen,  setDateOpen]  = React.useState(false);
-  const [startOpen, setStartOpen] = React.useState(false);
-  const [endOpen,   setEndOpen]   = React.useState(false);
+  const [dateOpen,    setDateOpen]    = React.useState(false);
+  const [endDateOpen, setEndDateOpen] = React.useState(false);
+  const [startOpen,   setStartOpen]   = React.useState(false);
+  const [endOpen,     setEndOpen]     = React.useState(false);
 
   // Each time the modal opens, reset state — including the text fields
   // and times. Those used to survive a cancel, so an abandoned draft
@@ -2560,6 +2576,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
       setStartTime('');
       setEndTime('');
       setDate(initialDate || today);
+      setEndDate(initialDate || today);
       setAttendees([]);
       setRsvpRecipients([]);
       setLinkedTasks([]);
@@ -2614,6 +2631,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
       description: description.trim() || null,
       location: location.trim() || null,
       date,
+      end_date: endDate > date ? endDate : null,
       start_time: startTime || null,
       end_time: endTime || null,
       attendees: finalAttendees,
@@ -2622,7 +2640,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
       space_id: isPrivate ? null : (spaceId || null),
       is_private: isPrivate,
     });
-    setTitle(''); setDescription(''); setLocation(''); setDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
+    setTitle(''); setDescription(''); setLocation(''); setDate(today); setEndDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
     setRsvpRecipients([]);
     setLinkedTasks([]); setAddLinkedTaskOpen(false);
     setRepeatFreq('none'); setRepeatDays([]);
@@ -2677,25 +2695,43 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
           maxLength={200}
         />
       </div>
-      <div className="field">
-        <label>Date</label>
-        <button
-          type="button"
-          onClick={() => setDateOpen(true)}
-          className="dp-trigger"
-        >
-          <span aria-hidden style={{ fontSize: 15 }}>📅</span>
-          <span style={{ flex: 1, textAlign: 'left' }}>
-            {date
-              ? new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
-              : 'Pick a date'}
-          </span>
-          <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
-        </button>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div className="field">
+          <label>Start date</label>
+          <button
+            type="button"
+            onClick={() => setDateOpen(true)}
+            className="dp-trigger"
+          >
+            <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              {date
+                ? new Date(date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                : 'Pick'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
+        </div>
+        <div className="field">
+          <label>End date</label>
+          <button
+            type="button"
+            onClick={() => setEndDateOpen(true)}
+            className="dp-trigger"
+          >
+            <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              {endDate
+                ? new Date(endDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                : 'Pick'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
+        </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="field">
-          <label>Starts</label>
+          <label>Start time <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
           <button
             type="button"
             onClick={() => setStartOpen(true)}
@@ -2703,13 +2739,13 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
           >
             <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
             <span style={{ flex: 1, textAlign: 'left' }}>
-              {formatTime12(startTime) || 'Start'}
+              {formatTime12(startTime) || 'None'}
             </span>
             <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
           </button>
         </div>
         <div className="field">
-          <label>Ends</label>
+          <label>End time <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
           <button
             type="button"
             onClick={() => setEndOpen(true)}
@@ -2717,7 +2753,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
           >
             <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
             <span style={{ flex: 1, textAlign: 'left' }}>
-              {formatTime12(endTime) || 'End'}
+              {formatTime12(endTime) || 'None'}
             </span>
             <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
           </button>
@@ -2909,9 +2945,16 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
     <DatePickerModal
       open={dateOpen}
       value={date}
-      title="Event date"
+      title="Start date"
       onClose={() => setDateOpen(false)}
-      onPick={(iso) => setDate(iso)}
+      onPick={(iso) => { setDate(iso); if (iso > endDate) setEndDate(iso); }}
+    />
+    <DatePickerModal
+      open={endDateOpen}
+      value={endDate}
+      title="End date"
+      onClose={() => setEndDateOpen(false)}
+      onPick={(iso) => { setEndDate(iso); if (iso < date) setDate(iso); }}
     />
     <TimePickerModal
       open={startOpen}
@@ -2951,12 +2994,21 @@ function fmtTime(t) {
   return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
 }
 
+function fmtDateShort(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 function EventCard({ event, members, getProfile, myId, onDelete, onClick }) {
   const p = getProfile(event.created_by);
   const color = getColor(p?.color || event.color);
-  const timeStr = event.start_time
-    ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
-    : 'All day';
+  const isMultiDay = event.end_date && event.end_date > event.date;
+  const timeStr = isMultiDay
+    ? `${fmtDateShort(event.date)} – ${fmtDateShort(event.end_date)}`
+    : event.start_time
+      ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
+      : 'All day';
   return (
     <SwipeToDelete onDelete={() => onDelete(event.id)} disabled={event.created_by !== myId}>
     <div
@@ -3053,10 +3105,13 @@ function EventDetailsModal({
   const color = getColor(p?.color || event.color);
   const [y, m, d] = event.date.split('-').map(Number);
   const jsDate = new Date(y, m - 1, d);
-  const longDate = jsDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  const timeStr = event.start_time
-    ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}`
-    : 'All day';
+  const isMultiDay = event.end_date && event.end_date > event.date;
+  const longDate = isMultiDay
+    ? `${jsDate.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })} – ${new Date(...event.end_date.split('-').map((n,i) => i===1?Number(n)-1:Number(n))).toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}`
+    : jsDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const timeStr = isMultiDay
+    ? (event.start_time ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}` : null)
+    : (event.start_time ? `${fmtTime(event.start_time)}${event.end_time ? ` – ${fmtTime(event.end_time)}` : ''}` : 'All day');
   const mapsUrl = event.location ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}` : null;
 
   // RSVP display helpers
@@ -7249,6 +7304,77 @@ export function MainApp({ profile, onSettings }) {
     if (error && /completed_at/i.test(error.message || '')) {
       await supabase.from('tasks').update({ completed: next }).eq('id', id);
     }
+
+    // When checking a recurring task as done, spawn the next occurrence.
+    // We look up the task from local state after the optimistic update.
+    if (next) {
+      setTasks(prev => {
+        const task = prev.find(t => t.id === id);
+        if (!task) return prev;
+        const r = task.recurrence;
+        if (!r || !r.freq || r.freq === 'none') return prev;
+
+        // Compute the next due date from the current due_date (or today if missing).
+        const base = task.due_date ? new Date(task.due_date + 'T12:00:00') : new Date();
+        let nextDate = null;
+
+        if (r.freq === 'daily') {
+          nextDate = new Date(base);
+          nextDate.setDate(nextDate.getDate() + 1);
+        } else if (r.freq === 'monthly') {
+          nextDate = new Date(base);
+          nextDate.setMonth(nextDate.getMonth() + 1);
+        } else if ((r.freq === 'weekly' || r.freq === 'custom') && Array.isArray(r.days) && r.days.length > 0) {
+          const sorted = [...r.days].sort((a, b) => a - b);
+          const curDay = base.getDay(); // 0-6
+          // Find the next weekday in the pattern after curDay
+          const nextDay = sorted.find(d => d > curDay) ?? sorted[0];
+          const diff = nextDay > curDay ? nextDay - curDay : 7 - curDay + nextDay;
+          nextDate = new Date(base);
+          nextDate.setDate(nextDate.getDate() + diff);
+        }
+
+        if (!nextDate) return prev;
+
+        const pad = n => String(n).padStart(2, '0');
+        const nextDueDate = `${nextDate.getFullYear()}-${pad(nextDate.getMonth() + 1)}-${pad(nextDate.getDate())}`;
+
+        // Insert the new occurrence asynchronously (can't await inside setTasks).
+        const { title, description, assigned_to, recurrence, group_id, created_by, space_id, is_private, event_id } = task;
+        const newTask = {
+          title, description, assigned_to, recurrence,
+          group_id, created_by, space_id, is_private,
+          due_date: nextDueDate,
+          completed: false,
+        };
+        if (event_id) newTask.event_id = event_id;
+
+        const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
+        (async () => {
+          let payload = { ...newTask };
+          let row = null;
+          let insErr = null;
+          for (let i = 0; i < 7; i++) {
+            ({ data: row, error: insErr } = await supabase.from('tasks').insert(payload).select().single());
+            if (!insErr) break;
+            const msg = (insErr.message || '').toLowerCase();
+            let stripped = false;
+            for (const col of optional) {
+              if (payload[col] !== undefined && msg.includes(col)) {
+                const { [col]: _, ...rest } = payload;
+                payload = rest;
+                stripped = true;
+                break;
+              }
+            }
+            if (!stripped) break;
+          }
+          if (row) setTasks(p => [row, ...p]);
+        })();
+
+        return prev; // optimistic state unchanged until insert resolves
+      });
+    }
   }, []);
   const notify = async (targetIds, type, payload) => {
     if (!targetIds || targetIds.length === 0) return;
@@ -7409,7 +7535,7 @@ export function MainApp({ profile, onSettings }) {
     };
 
     // Optional columns that may not exist in older schemas — strip them on error.
-    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps', 'space_id', 'is_private'];
+    const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps', 'space_id', 'is_private', 'end_date'];
     const droppedCols = [];
 
     let row = null;
