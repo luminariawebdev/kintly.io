@@ -1,7 +1,8 @@
 import React from 'react';
 import { supabase } from '../lib/supabase';
 import { PALETTE } from '../lib/colors';
-import { EmojiInput } from '../Components';
+import { VERSION_LABEL } from '../lib/build';
+import { EmojiInput, KinnektLogo } from '../Components';
 
 export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) {
   const [step, setStep] = React.useState(initialStep);
@@ -15,7 +16,7 @@ export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) 
       <div className="fb-scroll">
         <div className="auth-wrap">
           <div className="auth-mark">
-            <div className="marklogo" />
+            <div style={{ marginBottom: 18 }}><KinnektLogo size={64} /></div>
             <h1>kinnekt.</h1>
             <p>// Shared tasks, plans &amp; notes for your people</p>
           </div>
@@ -41,6 +42,8 @@ function LoginForm({ onComplete }) {
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [resetSent, setResetSent] = React.useState(false);
+  const [resetErr, setResetErr] = React.useState('');
+  const emailRef = React.useRef(null);
 
   const submit = async () => {
     if (!email || !pw) { setErr('Please fill in all fields'); return; }
@@ -53,17 +56,23 @@ function LoginForm({ onComplete }) {
 
   // Sends the Supabase recovery email. The link lands back on the app,
   // which fires a PASSWORD_RECOVERY auth event — App.jsx routes that to
-  // the ResetPasswordScreen below.
+  // the ResetPasswordScreen. Reset feedback uses its OWN state so it
+  // shows by the button instead of reddening the password field — you
+  // don't need a password to reset one.
   const sendReset = async () => {
-    if (resetSent) return;
-    if (!email) { setErr('Enter your email above first, then tap "Forgot password?"'); return; }
+    if (resetSent || loading) return;
+    setResetErr('');
+    if (!email) {
+      setResetErr('Enter your email above, then tap "Forgot password?" again.');
+      emailRef.current?.focus();
+      return;
+    }
     setLoading(true);
-    setErr('');
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: window.location.origin,
     });
     setLoading(false);
-    if (error) { setErr(error.message); return; }
+    if (error) { setResetErr(error.message); return; }
     setResetSent(true);
   };
 
@@ -71,7 +80,7 @@ function LoginForm({ onComplete }) {
     <>
       <div className="field">
         <label>Email</label>
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" onKeyDown={e => e.key === 'Enter' && submit()} />
+        <input ref={emailRef} type="email" value={email} onChange={e => { setEmail(e.target.value); setErr(''); setResetErr(''); }} placeholder="you@example.com" onKeyDown={e => e.key === 'Enter' && submit()} />
       </div>
       <div className={'field' + (err ? ' err' : '')}>
         <label>Password</label>
@@ -81,10 +90,18 @@ function LoginForm({ onComplete }) {
       <div className="auth-actions">
         <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
         <button type="button" className="fb-link" onClick={sendReset} disabled={loading}>
-          {resetSent ? '✓ Reset link sent — check your email' : 'Forgot password?'}
+          {resetSent ? '✓ Reset link sent' : 'Forgot password?'}
         </button>
+        {resetErr && (
+          <div className="err-msg" style={{ textAlign: 'center', marginTop: 2 }}>{resetErr}</div>
+        )}
+        {resetSent && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', marginTop: 2, lineHeight: 1.45 }}>
+            We emailed a reset link to <strong>{email}</strong>. Open it on this device to set a new password.
+          </div>
+        )}
       </div>
-      <div className="auth-foot">kinnekt v1.0</div>
+      <div className="auth-foot">{VERSION_LABEL}</div>
     </>
   );
 }
@@ -115,7 +132,7 @@ export function ResetPasswordScreen({ onDone }) {
       <div className="fb-scroll">
         <div className="auth-wrap" style={{ paddingTop: 60 }}>
           <div className="auth-mark">
-            <div className="marklogo" />
+            <div style={{ marginBottom: 18 }}><KinnektLogo size={64} /></div>
             <h1>New <em>password</em></h1>
             <p>Choose a new password for your account</p>
           </div>
@@ -342,7 +359,7 @@ function GroupSetupScreen({ onGroupReady }) {
             </>
           )}
 
-          <div className="auth-foot" style={{ marginTop: 24 }}>kinnekt v1.0</div>
+          <div className="auth-foot" style={{ marginTop: 24 }}>{VERSION_LABEL}</div>
         </div>
       </div>
     </div>
@@ -498,7 +515,7 @@ export function ProfileSetupScreen({ profile, onComplete }) {
             <button className="fb-btn solid" onClick={save} disabled={loading}>{loading ? 'Saving…' : 'Enter group →'}</button>
           </div>
 
-          <div className="auth-foot" style={{ marginTop: 22 }}>kinnekt v1.0</div>
+          <div className="auth-foot" style={{ marginTop: 22 }}>{VERSION_LABEL}</div>
         </div>
       </div>
     </div>

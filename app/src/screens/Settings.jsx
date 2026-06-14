@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { ThemeContext } from '../App';
 import { KinnektLogo, EmojiInput } from '../Components';
 import { PALETTE as COLORS } from '../lib/colors';
+import { VERSION_LABEL } from '../lib/build';
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
   const theme = React.useContext(ThemeContext);
@@ -460,7 +461,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
             </div>
           </div>
 
-          <div className="auth-foot" style={{ marginTop: 22 }}>kinnekt v1.0</div>
+          <div className="auth-foot" style={{ marginTop: 22 }}>{VERSION_LABEL}</div>
         </div>
 
         {avatarPickerOpen && (
