@@ -100,6 +100,12 @@ function renderWithMentions(text, isMe, members) {
   });
 }
 
+// Plain-text form of @[Name] mentions ("@Name") for attributes like
+// title tooltips, where JSX spans can't go.
+function plainMentions(text) {
+  return (text || '').replace(/@\[([^\]]+)\]/g, '@$1');
+}
+
 // KinnektLogo moved to ../Components and consumed by SettingsScreen — the
 // brand mark lives on the Settings page now, not the top sticky header, so
 // the slider/tab bar can ride flush near the top of the screen.
@@ -327,10 +333,14 @@ function Dot({ profile, size = '', style }) {
     );
   }
   if (avatar) {
+    // Emoji avatar: drop the colored circle + ring so the emoji shows
+    // bare ("escapes" the dot). The color circle is only for members
+    // with no avatar. (Settings uses its own avatar markup, so its
+    // circle-with-emoji is unaffected.)
     return (
       <span
         className={base + ' avatar-emoji'}
-        style={{ '--c': color, background: color, ...style }}
+        style={{ ...style }}
       >{avatar}</span>
     );
   }
@@ -363,15 +373,15 @@ function MemberName({ profile, isMe, style, className }) {
   // just look at the global MyIdContext so the helper "just works"
   // without prop-drilling.
   const me = isMe ?? (ctxMyId && profile.id === ctxMyId);
-  if (me) {
-    // The `.me-name` class supplies the profile-color treatment, but
-    // a parent context can override the color via CSS specificity —
-    // e.g. `.pick.on .me-name` flips to white so the text reads on
-    // the brand-gradient picker background.
-    const cls = ['me-name', className].filter(Boolean).join(' ');
-    return <span className={cls} style={style}>you</span>;
-  }
-  return <span className={className} style={style}>{profile.display_name}</span>;
+  const color = getColor(profile.color);
+  const text = me ? 'you' : profile.display_name;
+  // `.member-name` gives the colored rounded-pill treatment so a name
+  // always reads in its owner's color (the pill is neutralized inside
+  // picker/member chips via CSS, where the chip is already the box).
+  // `.me-name` is kept so the existing `.pick.on .me-name → white`
+  // override still applies for the logged-in user.
+  const cls = ['member-name', me ? 'me-name' : '', className].filter(Boolean).join(' ');
+  return <span className={cls} style={{ '--member-c': color, '--me-color': color, ...style }}>{text}</span>;
 }
 
 function ProfileButton({ profile, onClick }) {
@@ -563,8 +573,37 @@ function computeNextDue(task) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// Completed tasks auto-vanish 72h after they're checked off (the DB purge
+// lives in fetchAll; the Tasks section also hides them live at this mark).
+const COMPLETED_TTL_MS = 72 * 60 * 60 * 1000;
+
+// Remaining time before a completed task disappears, e.g. "2d 6h" / "5h".
+// null when there's no completed_at (older rows) or it's already past due.
+function completedTtlLabel(completedAt, now = Date.now()) {
+  if (!completedAt) return null;
+  const remaining = COMPLETED_TTL_MS - (now - new Date(completedAt).getTime());
+  if (remaining <= 0) return null;
+  const hours = Math.ceil(remaining / (60 * 60 * 1000));
+  if (hours >= 24) {
+    const d = Math.floor(hours / 24);
+    const h = hours % 24;
+    return h ? `${d}d ${h}h` : `${d}d`;
+  }
+  return `${hours}h`;
+}
+
+// Force a re-render on a fixed interval (used so the completed-task
+// countdown ticks down even when nothing else changes — every 6 hours).
+function useRerenderEvery(ms) {
+  const [, force] = React.useReducer(x => (x + 1) % 1e9, 0);
+  React.useEffect(() => {
+    const id = setInterval(force, ms);
+    return () => clearInterval(id);
+  }, [ms]);
+}
+
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
+function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl }) {
   const color = getColor(assignee?.color);
   const isCancelled = !!task.cancelled_at;
   const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
@@ -621,7 +660,12 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
         </div>
         {task.due_date && !isCancelled && (
           <div style={{ fontSize: 11, marginTop: 2, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: overdue ? '#E27457' : 'var(--ink-mid)' }}>
-            {formatDue(task.due_date)}
+            {formatDue(task.due_date)}{task.due_time ? ` · ${formatTime12(task.due_time)}` : ''}
+          </div>
+        )}
+        {ttl && (
+          <div style={{ fontSize: 10, marginTop: 3, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This completed task auto-removes 72h after completion">
+            <span aria-hidden>🗑</span> disappears in {ttl}
           </div>
         )}
         {task.space_id && (
@@ -647,6 +691,13 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   // assignee, 'personal' shows only this user's private todos.
   const [view, setView] = React.useState('group');
 
+  // Re-render every 6h so the completed-task "disappears in …" countdown
+  // ticks down and rows past the 72h mark drop out, even with the app
+  // left open. `now` is read fresh each render.
+  useRerenderEvery(6 * 60 * 60 * 1000);
+  const now = Date.now();
+  const isFresh = (t) => !t.completed_at || (now - new Date(t.completed_at).getTime()) < COMPLETED_TTL_MS;
+
   const applyFilter = (list) => list.filter(t => {
     if (filter === 'all') return true;
     if (filter === 'week') {
@@ -667,9 +718,9 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   const filteredPersonal = applyFilter(personalTasks);
 
   const openItems = filtered.filter(t => !t.completed);
-  const doneItems = filtered.filter(t => t.completed);
+  const doneItems = filtered.filter(t => t.completed && isFresh(t));
   const openPersonal = filteredPersonal.filter(t => !t.completed);
-  const donePersonal = filteredPersonal.filter(t => t.completed);
+  const donePersonal = filteredPersonal.filter(t => t.completed && isFresh(t));
 
   const grouped = members.map(m => ({
     member: m,
@@ -739,8 +790,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               <div className="assignee-hd">
                 <div className="left">
                   <Dot profile={g.member} size="lg" />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{g.member.display_name}</span>
-                  {g.member.id === myId && <span className="userbadge"><span className="you">you</span></span>}
+                  <MemberName profile={g.member} isMe={g.member.id === myId} style={{ fontSize: 14 }} />
                 </div>
                 <span className="count">{g.items.length}</span>
               </div>
@@ -779,7 +829,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               {showDone && (
                 <div className="tasklist">
                   {doneItems.map(t => (
-                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} />
                   ))}
                 </div>
               )}
@@ -824,7 +874,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
                 {showDonePersonal && (
                   <div className="tasklist">
                     {donePersonal.map(t => (
-                      <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                      <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} />
                     ))}
                   </div>
                 )}
@@ -2236,17 +2286,21 @@ function TimePickerModal({ open, value, title, onClose, onPick }) {
 }
 
 // ─── Add Task Modal ───────────────────────────────────────────────────────────
-function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, initial, initialPrivate, onSave, onUpdate }) {
+function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, initial, initialPrivate, onSave, onUpdate, events }) {
   const editing = !!initial?.id;
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [assignee, setAssignee] = React.useState(myId || null);
   const [dueOpt, setDueOpt] = React.useState('today');
   const [dueDate, setDueDate] = React.useState('');
+  const [dueTime, setDueTime] = React.useState(''); // HH:MM, optional time-of-day
   const [repeatFreq, setRepeatFreq] = React.useState('none'); // none | daily | weekly | monthly | custom
   const [repeatDays, setRepeatDays] = React.useState([]);     // 0-6 (Sun-Sat) for weekly + custom
-  const [repeatTime, setRepeatTime] = React.useState('');     // HH:MM
   const [spaceId, setSpaceId] = React.useState(initialSpaceId || null);
+  // Link to an existing calendar event. Only offered when `events` is
+  // passed (the top-level task form); the nested "linked task" forms
+  // inside the event modals stamp event_id themselves, so they omit it.
+  const [eventId, setEventId] = React.useState(null);
   // Personal toggle. When on, the task is only visible to the creator
   // (enforced by RLS) and the assignee/space pickers are hidden — a
   // personal todo doesn't need either since it's just for you.
@@ -2254,7 +2308,9 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
   const [saving, setSaving] = React.useState(false);
   // Custom date / time picker open state (replaces native popups).
   const [dueDateOpen,    setDueDateOpen]    = React.useState(false);
-  const [repeatTimeOpen, setRepeatTimeOpen] = React.useState(false);
+  const [dueTimeOpen,    setDueTimeOpen]    = React.useState(false);
+  const [eventPickerOpen, setEventPickerOpen] = React.useState(false);
+  const linkedEvent = Array.isArray(events) ? events.find(e => e.id === eventId) : null;
 
   // When opened in edit mode, hydrate every field from the existing
   // task. When opened fresh, fall back to defaults + initialSpaceId.
@@ -2266,15 +2322,18 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
       setAssignee(initial.assigned_to ?? null);
       if (initial.due_date) { setDueOpt('pick'); setDueDate(initial.due_date); }
       else                  { setDueOpt('today'); setDueDate(''); }
+      // Fall back to a legacy recurrence.time so existing repeating tasks
+      // keep their time in the (now unified) due-time field.
+      setDueTime(initial.due_time || initial.recurrence?.time || '');
       const r = initial.recurrence;
       if (r && r.freq) {
         setRepeatFreq(r.freq);
         setRepeatDays(Array.isArray(r.days) ? r.days : []);
-        setRepeatTime(r.time || '');
       } else {
-        setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
+        setRepeatFreq('none'); setRepeatDays([]);
       }
       setSpaceId(initial.space_id || null);
+      setEventId(initial.event_id || null);
       setIsPrivate(!!initial.is_private);
     } else {
       // Fresh open — clear EVERY field, not just space/private. Without
@@ -2282,9 +2341,10 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
       // reopened the form pre-filled with the old task's values.
       setTitle(''); setDescription('');
       setAssignee(myId || null);
-      setDueOpt('today'); setDueDate('');
-      setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
+      setDueOpt('today'); setDueDate(''); setDueTime('');
+      setRepeatFreq('none'); setRepeatDays([]);
       setSpaceId(initialSpaceId || null);
+      setEventId(null);
       setIsPrivate(!!initialPrivate);
     }
   }, [open, initial, initialSpaceId, initialPrivate, myId]);
@@ -2302,7 +2362,8 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
   const getRecurrence = () => {
     if (repeatFreq === 'none') return null;
     const r = { freq: repeatFreq };
-    if (repeatTime) r.time = repeatTime;
+    // The recurrence time IS the task's due time — no separate field.
+    if (dueTime) r.time = dueTime;
     if (repeatFreq === 'weekly' || repeatFreq === 'custom') r.days = repeatDays.slice().sort();
     return r;
   };
@@ -2313,9 +2374,10 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
 
   const reset = () => {
     setTitle(''); setDescription(''); setAssignee(myId || null);
-    setDueOpt('today'); setDueDate('');
-    setRepeatFreq('none'); setRepeatDays([]); setRepeatTime('');
+    setDueOpt('today'); setDueDate(''); setDueTime('');
+    setRepeatFreq('none'); setRepeatDays([]);
     setSpaceId(initialSpaceId || null);
+    setEventId(null);
     setIsPrivate(!!initialPrivate);
   };
 
@@ -2326,8 +2388,13 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
     // — they're scoped to the current user only.
     assigned_to: isPrivate ? myId : assignee,
     due_date: getDueDate(),
+    due_time: dueTime || null,
     recurrence: getRecurrence(),
     space_id: isPrivate ? null : (spaceId || null),
+    // Link to an existing event. Only meaningful for shared tasks; the
+    // nested linked-task forms (no `events` prop) leave this null and the
+    // parent stamps the real event_id afterward.
+    event_id: (isPrivate || !events) ? null : (eventId || null),
     is_private: isPrivate,
   });
 
@@ -2431,6 +2498,32 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
             <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
           </button>
         )}
+        {/* Optional time-of-day. Tap to set; tap the × to clear back to
+            an all-day (date-only) task. */}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button
+            type="button"
+            onClick={() => setDueTimeOpen(true)}
+            className="dp-trigger"
+            style={{ flex: 1 }}
+          >
+            <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              {formatTime12(dueTime) || 'Add a time · optional'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
+          {dueTime && (
+            <button
+              type="button"
+              onClick={() => setDueTime('')}
+              className="dp-trigger"
+              style={{ flex: '0 0 auto', width: 44, justifyContent: 'center' }}
+              aria-label="Clear time"
+              title="Clear time"
+            >×</button>
+          )}
+        </div>
       </div>
 
       <div className="field">
@@ -2497,30 +2590,27 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
           </div>
         )}
 
-        {repeatFreq !== 'none' && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
-              At time <span style={{ fontWeight: 400, opacity: 0.6 }}>· optional</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setRepeatTimeOpen(true)}
-              className="dp-trigger"
-            >
-              <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
-              <span style={{ flex: 1, textAlign: 'left' }}>
-                {formatTime12(repeatTime) || 'Pick a time'}
-              </span>
-              <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
-            </button>
-          </div>
-        )}
       </div>
 
       {!isPrivate && (
       <div className="field">
         <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
+      </div>
+      )}
+
+      {!isPrivate && Array.isArray(events) && events.length > 0 && (
+      <div className="field">
+        <label>Link to event <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <button type="button" onClick={() => setEventPickerOpen(true)} className="dp-trigger">
+          <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+          <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {linkedEvent
+              ? <>{renderWithMentions(linkedEvent.title, false, members)}{linkedEvent.date ? ` · ${eventPickerDate(linkedEvent.date)}` : ''}</>
+              : 'None'}
+          </span>
+          <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+        </button>
       </div>
       )}
 
@@ -2541,11 +2631,19 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
       onPick={(iso) => setDueDate(iso)}
     />
     <TimePickerModal
-      open={repeatTimeOpen}
-      value={repeatTime}
-      title="Repeat at"
-      onClose={() => setRepeatTimeOpen(false)}
-      onPick={(t) => setRepeatTime(t)}
+      open={dueTimeOpen}
+      value={dueTime}
+      title="Due time"
+      onClose={() => setDueTimeOpen(false)}
+      onPick={(t) => setDueTime(t)}
+    />
+    <EventPickerModal
+      open={eventPickerOpen}
+      value={eventId}
+      events={events}
+      members={members}
+      onClose={() => setEventPickerOpen(false)}
+      onPick={(id) => { setEventId(id); setEventPickerOpen(false); }}
     />
     </>
   );
@@ -4667,9 +4765,10 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   const color = getColor(assignee?.color);
   const overdue = !task.completed && dueDateOverdue(task.due_date);
   const canActOnTask = !task.assigned_to || task.assigned_to === myId;
-  const dueLabel = task.due_date ? formatDue(task.due_date) : null;
+  const dueTimeLabel = task.due_time ? formatTime12(task.due_time) : '';
+  const dueLabel = task.due_date ? (formatDue(task.due_date) + (dueTimeLabel ? ` · ${dueTimeLabel}` : '')) : null;
   const dueLongLabel = task.due_date
-    ? new Date(task.due_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    ? (new Date(task.due_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) + (dueTimeLabel ? ` at ${dueTimeLabel}` : ''))
     : null;
   const createdAt = task.created_at
     ? new Date(task.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -6328,6 +6427,76 @@ function SpacePicker({ value, spaces, onChange }) {
   );
 }
 
+// Compact "Mon Jun 14" / "Mon Jun 14, 2026" label for an event date.
+function eventPickerDate(iso, withYear) {
+  if (!iso) return '';
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en-US',
+    withYear ? { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }
+             : { month: 'short', day: 'numeric' });
+}
+
+// De-dupe an events list (expansion instances share a master id) and sort
+// nearest-first (upcoming ascending, then past descending).
+function dedupeSortEvents(events) {
+  const seen = new Set();
+  const unique = (events || []).filter(e => {
+    if (!e || seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
+  const todayIso = localTodayISO();
+  return unique.slice().sort((a, b) => {
+    const aUp = (a.date || '') >= todayIso;
+    const bUp = (b.date || '') >= todayIso;
+    if (aUp !== bUp) return aUp ? -1 : 1;
+    return aUp ? (a.date || '').localeCompare(b.date || '') : (b.date || '').localeCompare(a.date || '');
+  });
+}
+
+// Bottom-sheet picker to link a task to an existing calendar event.
+// Opened from a trigger in AddTaskModal (same pattern as the date/time
+// pickers) so the form stays uncluttered instead of listing every event.
+function EventPickerModal({ open, value, events, members, onClose, onPick }) {
+  if (!open) return null;
+  const sorted = dedupeSortEvents(events);
+  const rowStyle = (on) => ({
+    display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+    padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+    border: '1.5px solid ' + (on ? 'var(--kinnekt-purple, #6A4DFF)' : 'var(--rule)'),
+    background: on ? 'var(--hover-tint)' : 'var(--surface-glass-strong)',
+    color: 'var(--ink)', font: 'inherit', textAlign: 'left',
+  });
+  return (
+    <Modal open={open} onClose={onClose} title={<>Link to <em>event</em></>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <button type="button" style={rowStyle(!value)} onClick={() => onPick(null)}>
+          <span style={{ flex: 1, color: 'var(--text-muted)' }}>None — not linked</span>
+          {!value && <span aria-hidden>✓</span>}
+        </button>
+        {sorted.map(e => {
+          const on = value === e.id;
+          return (
+            <button key={e.id} type="button" style={rowStyle(on)} onClick={() => onPick(e.id)} title={plainMentions(e.title)}>
+              <span aria-hidden style={{ fontSize: 16 }}>📅</span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: 'block', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {renderWithMentions(e.title, false, members)}
+                </span>
+                {e.date && (
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+                    {eventPickerDate(e.date, true)}
+                  </span>
+                )}
+              </span>
+              {on && <span aria-hidden>✓</span>}
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
 // Inline `#space` autocomplete dropdown for plain <input> fields.
 // Detects a trailing `#word` token and shows matching Spaces. On pick,
 // strips the `#word` from the input value and sets the Space tag via
@@ -7207,7 +7376,7 @@ export function MainApp({ profile, onSettings }) {
     // tightened tasks_delete RLS policy (creator / assignee /
     // unassigned), the server quietly skips rows this user can't
     // delete; those vanish when their owner's cleanup pass runs.
-    const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+    const cutoff = Date.now() - COMPLETED_TTL_MS;
     const stale = allTasks.filter(task =>
       task.completed && task.completed_at && new Date(task.completed_at).getTime() < cutoff
     );
@@ -7426,11 +7595,11 @@ export function MainApp({ profile, onSettings }) {
           let payload = {
             title: s.title, description: s.description, assigned_to: s.assigned_to,
             recurrence: s.recurrence, group_id: s.group_id, created_by: s.created_by,
-            space_id: s.space_id, is_private: s.is_private,
+            space_id: s.space_id, is_private: s.is_private, due_time: s.due_time,
             due_date: nextDue, completed: false,
           };
           if (s.event_id) payload.event_id = s.event_id;
-          const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
+          const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
           let row = null, insErr = null;
           for (let i = 0; i < 7; i++) {
             ({ data: row, error: insErr } = await supabase.from('tasks').insert(payload).select().single());
@@ -7484,7 +7653,7 @@ export function MainApp({ profile, onSettings }) {
     // `event_id` is the link to an event (event detail modal -> "Linked
     // tasks" -> create new task). Null when the task isn't tied to an
     // event, present otherwise. Strip-on-error mirrors recurrence.
-    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
+    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
     const droppedCols = [];
     let row = null;
     let error = null;
@@ -7541,7 +7710,7 @@ export function MainApp({ profile, onSettings }) {
     // Optional columns: strip on error so the update still goes
     // through on older schemas (same pattern as addTask).
     let payload = { ...patch };
-    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
+    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
     for (let i = 0; i < 7; i++) {
       const { error } = await supabase.from('tasks').update(payload).eq('id', id);
       if (!error) return { error: null };
@@ -8773,6 +8942,7 @@ export function MainApp({ profile, onSettings }) {
         members={members}
         myId={profile?.id}
         spaces={spaces}
+        events={events}
         initialSpaceId={pendingSpaceId}
         initial={taskEditTarget}
         initialPrivate={taskAddPrivate}

@@ -102,6 +102,7 @@ create table if not exists public.tasks (
   cancelled_at        timestamptz,
   cancellation_reason text,
   due_date            date,
+  due_time            text,
   recurrence          jsonb,
   is_private          boolean default false,
   created_at          timestamptz default now()
@@ -114,6 +115,7 @@ alter table public.tasks add column if not exists completed_at        timestampt
 alter table public.tasks add column if not exists cancelled_at        timestamptz;
 alter table public.tasks add column if not exists cancellation_reason text;
 alter table public.tasks add column if not exists recurrence          jsonb;
+alter table public.tasks add column if not exists due_time            text;
 
 create table if not exists public.notifications (
   id         uuid default gen_random_uuid() primary key,
@@ -610,11 +612,11 @@ begin
 
   insert into public.tasks
     (group_id, created_by, assigned_to, note_id, event_id, title,
-     description, due_date, recurrence, is_private, space_id, completed)
+     description, due_date, due_time, recurrence, is_private, space_id, completed)
   values
     (v_src.group_id, v_src.created_by, v_src.assigned_to, v_src.note_id,
      v_src.event_id, v_src.title, v_src.description, p_next_due,
-     v_src.recurrence, v_src.is_private, v_src.space_id, false)
+     v_src.due_time, v_src.recurrence, v_src.is_private, v_src.space_id, false)
   returning * into v_new;
 
   return v_new;

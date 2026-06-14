@@ -2559,6 +2559,37 @@ html { overscroll-behavior-x: none; }
   color: #FFFFFF;
   -webkit-text-fill-color: #FFFFFF;
 }
+
+/* `.member-name` — a person's name always reads in their profile color
+   inside a small rounded pill (matches the @mention chip), so identity
+   is consistent everywhere. */
+.member-name {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 9px;
+  background: #FFFFFF;
+  border: 1px solid var(--border-soft);
+  color: var(--member-c, var(--text-primary));
+  -webkit-text-fill-color: var(--member-c, var(--text-primary));
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(15, 30, 60, 0.06);
+}
+/* Inside an interactive picker chip / member chip the container is
+   already the box — drop the inner pill so we don't double-box. */
+.pick .member-name,
+.assignee-picker .member-name,
+.member-chip .member-name {
+  background: none;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+.pick.on .member-name {
+  color: #FFFFFF;
+  -webkit-text-fill-color: #FFFFFF;
+}
 .pick.unassign { font-style: italic; color: var(--text-muted); }
 .pick.unassign.on { color: #FFFFFF; font-style: normal; }
 
@@ -3272,12 +3303,19 @@ html { overscroll-behavior-x: none; }
   align-items: center;
   justify-content: center;
   line-height: 1;
-  font-size: 14px;
+  font-size: 15px;
+  /* Bare emoji — no colored circle, no white ring. overflow:visible so
+     the glyph can spill past the nominal dot box ("escape" the circle). */
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible;
 }
 .dot.lg.avatar-emoji  { font-size: 22px; }
 .dot.xl.avatar-emoji  { font-size: 32px; }
 .fb-prof.has-avatar { background-color: transparent; background-repeat: no-repeat; }
-.fb-prof.has-emoji   { font-size: 45px; line-height: 1; }
+/* Keep the emoji comfortably inside the 48px circle (it's clipped by
+   overflow:hidden, so an oversized glyph reads as "cut off"). */
+.fb-prof.has-emoji   { font-size: 30px; line-height: 1; }
 
 /* ────────────────────────────────────────────────────────────
    Mobile: collapse the desktop "iPhone mock" chrome and let
