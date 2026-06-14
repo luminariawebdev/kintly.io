@@ -796,7 +796,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
       {view === 'personal' && (<>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>🔒 Only you can see these.</div>
         <button className="fb-btn" onClick={onAddPersonal || onAdd}>
-          <span className="plus">+</span> Add personal todo
+          <span className="plus">+</span> Add personal task
         </button>
         {openPersonal.length === 0 && donePersonal.length === 0 ? (
           <div className="kbd-hint" style={{ padding: '20px 0' }}>NO PERSONAL TODOS — ADD ONE ABOVE</div>
@@ -2552,8 +2552,13 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
 }
 
 // ─── Add Event Modal ──────────────────────────────────────────────────────────
-function AddEventModal({ open, onClose, members, myId, onSave, initialDate, initialPrivate, spaces, initialSpaceId }) {
+function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial, initialDate, initialPrivate, spaces, initialSpaceId }) {
   const today = localTodayISO();
+  // Edit mode when an existing event is passed in. Hydrates the form
+  // from it and routes save through onUpdate instead of onSave. The
+  // RSVP-invite and linked-task staging blocks are creation-only, so
+  // they're hidden while editing.
+  const editing = !!initial?.id;
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [location, setLocation] = React.useState('');
@@ -2595,7 +2600,32 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
   // and times. Those used to survive a cancel, so an abandoned draft
   // reappeared the next time the sheet opened.
   React.useEffect(() => {
-    if (open) {
+    if (!open) return;
+    if (initial && initial.id) {
+      // Edit: hydrate from the existing event.
+      setTitle(initial.title || '');
+      setDescription(initial.description || '');
+      setLocation(initial.location || '');
+      setStartTime(initial.start_time || '');
+      setEndTime(initial.end_time || '');
+      setDate(initial.date || today);
+      setEndDate(initial.end_date || initial.date || today);
+      setAttendees(Array.isArray(initial.attendees) ? initial.attendees : []);
+      setRsvpRecipients([]);
+      setLinkedTasks([]);
+      setAddLinkedTaskOpen(false);
+      const r = initial.recurrence;
+      if (r && r.freq && r.freq !== 'none') {
+        setRepeatFreq(r.freq);
+        setRepeatDays(Array.isArray(r.days) ? r.days : []);
+      } else {
+        setRepeatFreq('none');
+        setRepeatDays([]);
+      }
+      setSpaceId(initial.space_id || null);
+      setIsPrivate(!!initial.is_private);
+    } else {
+      // Create: blank slate (stale drafts must not survive a cancel).
       setTitle('');
       setDescription('');
       setLocation('');
@@ -2613,7 +2643,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
       setIsPrivate(!!initialPrivate);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialDate, initialSpaceId, initialPrivate]);
+  }, [open, initial, initialDate, initialSpaceId, initialPrivate]);
 
   const toggleAttendee = (id) => {
     setAttendees(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -2652,20 +2682,38 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
     // notify() loop reaches them with `event_invited` (the RSVP
     // request) and their responses surface in the attendee list.
     const finalAttendees = isPrivate ? [] : Array.from(new Set([...attendees, ...rsvpRecipients]));
-    await onSave({
-      title: title.trim(),
-      description: description.trim() || null,
-      location: location.trim() || null,
-      date,
-      end_date: endDate > date ? endDate : null,
-      start_time: startTime || null,
-      end_time: endTime || null,
-      attendees: finalAttendees,
-      recurrence: getRecurrence(),
-      linkedTasks: isPrivate ? [] : linkedTasks,
-      space_id: isPrivate ? null : (spaceId || null),
-      is_private: isPrivate,
-    });
+    if (editing) {
+      // Update core fields only. Linked-task creation and RSVP invites
+      // are creation-time actions, so they're not re-run on edit.
+      await onUpdate(initial.id, {
+        title: title.trim(),
+        description: description.trim() || null,
+        location: location.trim() || null,
+        date,
+        end_date: endDate > date ? endDate : null,
+        start_time: startTime || null,
+        end_time: endTime || null,
+        attendees: isPrivate ? [] : attendees,
+        recurrence: getRecurrence(),
+        space_id: isPrivate ? null : (spaceId || null),
+        is_private: isPrivate,
+      });
+    } else {
+      await onSave({
+        title: title.trim(),
+        description: description.trim() || null,
+        location: location.trim() || null,
+        date,
+        end_date: endDate > date ? endDate : null,
+        start_time: startTime || null,
+        end_time: endTime || null,
+        attendees: finalAttendees,
+        recurrence: getRecurrence(),
+        linkedTasks: isPrivate ? [] : linkedTasks,
+        space_id: isPrivate ? null : (spaceId || null),
+        is_private: isPrivate,
+      });
+    }
     setTitle(''); setDescription(''); setLocation(''); setDate(today); setEndDate(today); setStartTime(''); setEndTime(''); setAttendees([]);
     setRsvpRecipients([]);
     setLinkedTasks([]); setAddLinkedTaskOpen(false);
@@ -2677,8 +2725,8 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
 
   return (
     <>
-    <Modal open={open} onClose={onClose} title={<>Add <em>event</em></>}
-      footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save event'}</button>}>
+    <Modal open={open} onClose={onClose} title={editing ? <>Edit <em>event</em></> : <>Add <em>event</em></>}
+      footer={<button className="fb-btn solid" onClick={save} disabled={saving}>{saving ? 'Saving…' : (editing ? 'Save changes' : 'Save event')}</button>}>
       <div className="field">
         <label>Title</label>
         <div style={{ position: 'relative' }}>
@@ -2803,6 +2851,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
         </div>
       </div>
 
+      {/* Send RSVP + Linked tasks are creation-only actions (they fire
+          notifications / create new task rows), so they're hidden when
+          editing an existing event. */}
+      {!editing && (<>
       {/* Send RSVP — pick exactly who should respond. Selected members
           get an `event_invited` notification (the RSVP request) on save
           and are merged into the attendee list so their responses show
@@ -2886,6 +2938,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, initialDate, init
           <span className="plus">+</span> Add task
         </button>
       </div>
+      </>)}
       </>)}
 
       {/* Repeat — same recurrence model used by tasks. When set, the
@@ -3098,7 +3151,7 @@ function formatEventRecurrence(r) {
 
 // ─── Event Details Modal (single event) ───────────────────────────────────────
 function EventDetailsModal({
-  open, event, members, getProfile, myId, onClose, onDelete, onShowMember,
+  open, event, members, getProfile, myId, onClose, onDelete, onEdit, onShowMember,
   // New for RSVP + linked tasks. Backwards-compatible — older callers
   // that don't pass these just won't see those features. The MainApp
   // wires them up; standalone places like screens-tests can omit.
@@ -3412,7 +3465,14 @@ function EventDetailsModal({
       </div>
 
       {event.created_by === myId && (
-        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+          {onEdit ? (
+            <button
+              type="button"
+              className="fb-btn"
+              onClick={() => onEdit(event)}
+            >Edit event</button>
+          ) : <span />}
           <button
             onClick={() => { onDelete(event.id); onClose(); }}
             className="danger-btn"
@@ -6957,8 +7017,10 @@ export function MainApp({ profile, onSettings }) {
   const [detailNoteId, setDetailNoteId] = React.useState(null);
   const [detailTaskId, setDetailTaskId] = React.useState(null);
   const [taskEditTarget, setTaskEditTarget] = React.useState(null);
+  // Existing event being edited — opens the Add Event modal in edit mode.
+  const [eventEditTarget, setEventEditTarget] = React.useState(null);
   // True when the Add Task modal should open with the Personal toggle
-  // pre-checked (e.g. the user clicked "+ Add personal todo").
+  // pre-checked (e.g. the user clicked "+ Add personal task").
   const [taskAddPrivate, setTaskAddPrivate] = React.useState(false);
   // Same flag for the Add Event modal.
   const [eventAddPrivate, setEventAddPrivate] = React.useState(false);
@@ -7093,8 +7155,8 @@ export function MainApp({ profile, onSettings }) {
   const openAddNote          = React.useCallback(() => setModal('note'), []);
   const openAddTask          = React.useCallback(() => { setTaskAddPrivate(false); setModal('task'); }, []);
   const openAddPersonalTask  = React.useCallback(() => { setTaskAddPrivate(true); setModal('task'); }, []);
-  const openAddEvent         = React.useCallback(() => { setEventInitDate(null); setEventAddPrivate(false); setModal('event'); }, []);
-  const openAddPersonalEvent = React.useCallback(() => { setEventInitDate(null); setEventAddPrivate(true); setModal('event'); }, []);
+  const openAddEvent         = React.useCallback(() => { setEventEditTarget(null); setEventInitDate(null); setEventAddPrivate(false); setModal('event'); }, []);
+  const openAddPersonalEvent = React.useCallback(() => { setEventEditTarget(null); setEventInitDate(null); setEventAddPrivate(true); setModal('event'); }, []);
   const openAddSpaceModal    = React.useCallback(() => { setSpaceEditTarget(null); setSpaceAddOpen(true); }, []);
   const showTaskDetail       = React.useCallback((t) => setDetailTaskId(t.id), []);
   const showEventDetail      = React.useCallback((ev) => setDetailEventId(ev.id), []);
@@ -7655,6 +7717,38 @@ export function MainApp({ profile, onSettings }) {
         await addLinkedTask(row.id, t);
       }
     }
+  };
+  // Edit an existing event. Optimistic, with the same strip-on-error
+  // retry addEvent uses so an older schema (missing a column) still
+  // saves the columns it does have. Rolls back local state on hard fail.
+  const updateEvent = async (id, patch) => {
+    const existing = events.find(e => e.id === id);
+    if (!existing) return { error: { message: 'Event not found' } };
+    setEvents(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e)
+      .sort((a, b) => a.date.localeCompare(b.date)));
+    let payload = { ...patch };
+    const optional = ['description', 'location', 'attendees', 'recurrence', 'space_id', 'is_private', 'end_date'];
+    for (let i = 0; i < 8; i++) {
+      const { error } = await supabase.from('events').update(payload).eq('id', id);
+      if (!error) return { error: null };
+      const msg = (error.message || '').toLowerCase();
+      let stripped = null;
+      for (const col of optional) {
+        if (payload[col] !== undefined && msg.includes(col)) {
+          const { [col]: _, ...rest } = payload;
+          payload = rest;
+          stripped = col;
+          break;
+        }
+      }
+      if (!stripped) {
+        setEvents(prev => prev.map(e => e.id === id ? existing : e)
+          .sort((a, b) => a.date.localeCompare(b.date)));
+        alert('Could not save changes: ' + error.message);
+        return { error };
+      }
+    }
+    return { error: null };
   };
   const deleteEvent = React.useCallback(async (id) => {
     // A recurring event shares one row across every occurrence, so any
@@ -8687,13 +8781,15 @@ export function MainApp({ profile, onSettings }) {
       />
       <AddEventModal
         open={modal === 'event'}
-        onClose={() => { setModal(null); setPendingSpaceId(null); setEventAddPrivate(false); }}
+        onClose={() => { setModal(null); setPendingSpaceId(null); setEventAddPrivate(false); setEventEditTarget(null); }}
         members={members}
         myId={profile?.id}
         spaces={spaces}
         initialSpaceId={pendingSpaceId}
         initialPrivate={eventAddPrivate}
+        initial={eventEditTarget}
         onSave={addEvent}
+        onUpdate={updateEvent}
         initialDate={eventInitDate}
       />
       <AddNoteModal open={modal === 'note'} onClose={() => { setModal(null); setPendingSpaceId(null); }} profile={profile} members={members} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addNote} />
@@ -8747,7 +8843,7 @@ export function MainApp({ profile, onSettings }) {
         onEdit={(s) => { setSpaceDetailItem(null); setSpaceEditTarget(s); setSpaceAddOpen(true); }}
         onArchive={(s) => { archiveSpace(s); setSpaceDetailItem(null); }}
         onAddTask={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('task');  }}
-        onAddEvent={(s) => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('event'); }}
+        onAddEvent={(s) => { setEventEditTarget(null); setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('event'); }}
         onAddNote={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('note');  }}
         onAddList={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setListAddOpen(true); }}
         onShowTask={(t)  => { setSpaceDetailItem(null); setDetailTaskId(t.id);  }}
@@ -8780,7 +8876,7 @@ export function MainApp({ profile, onSettings }) {
         getProfile={getProfile}
         myId={profile?.id}
         onClose={() => setDayDetailsDate(null)}
-        onAddEvent={() => { setEventInitDate(dayDetailsDate); setDayDetailsDate(null); setModal('event'); }}
+        onAddEvent={() => { setEventEditTarget(null); setEventInitDate(dayDetailsDate); setDayDetailsDate(null); setModal('event'); }}
         onDelete={(id) => deleteEvent(id)}
         onShowEvent={(e) => setDetailEventId(e.id)}
       />
@@ -8804,6 +8900,7 @@ export function MainApp({ profile, onSettings }) {
         myId={profile?.id}
         onClose={() => setDetailEventId(null)}
         onDelete={(id) => deleteEvent(id)}
+        onEdit={(ev) => { setDetailEventId(null); setEventEditTarget(ev); setModal('event'); }}
         onShowMember={(p) => { setDetailEventId(null); setDetailMemberId(p.id); }}
         tasks={tasks}
         onSetRsvp={setRsvp}
