@@ -1,20 +1,7 @@
 import React from 'react';
 import { supabase } from '../lib/supabase';
-
-const COLORS = [
-  { id: 'coral',       hex: '#FF9F8A', label: 'Coral' },
-  { id: 'peach',       hex: '#FFC18C', label: 'Peach' },
-  { id: 'amber',       hex: '#FFD787', label: 'Apricot' },
-  { id: 'lemon',       hex: '#F0E68C', label: 'Lemon' },
-  { id: 'moss',        hex: '#C8D685', label: 'Chartreuse' },
-  { id: 'green',       hex: '#98D4A8', label: 'Mint' },
-  { id: 'teal',        hex: '#7FCDC1', label: 'Turquoise' },
-  { id: 'blue',        hex: '#87BDE8', label: 'Sky' },
-  { id: 'periwinkle',  hex: '#A8AEE5', label: 'Periwinkle' },
-  { id: 'plum',        hex: '#BFA0E5', label: 'Lavender' },
-  { id: 'lilac',       hex: '#DAAEDA', label: 'Lilac' },
-  { id: 'rose',        hex: '#F2A4C2', label: 'Rose' },
-];
+import { PALETTE } from '../lib/colors';
+import { EmojiInput } from '../Components';
 
 export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) {
   const [step, setStep] = React.useState(initialStep);
@@ -151,36 +138,27 @@ export function ResetPasswordScreen({ onDone }) {
 }
 
 function SignupForm({ onComplete }) {
-  const [name, setName] = React.useState('');
   const [email, setEmail] = React.useState('');
   const [pw, setPw] = React.useState('');
-  const [color, setColor] = React.useState('coral');
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
 
+  // Account creation collects only credentials now. Name, color, and
+  // avatar are chosen later, in the profile-setup prompt that appears
+  // right after the member creates or joins a group — that's where the
+  // group roster is known, so taken colors can be ruled out.
   const submit = async () => {
-    if (!name || !email || !pw) { setErr('Please fill in all fields'); return; }
+    if (!email || !pw) { setErr('Please fill in all fields'); return; }
     if (pw.length < 6) { setErr('Password must be at least 6 characters'); return; }
     setLoading(true);
     setErr('');
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password: pw,
-      options: { data: { display_name: name, color } },
-    });
-
+    const { error } = await supabase.auth.signUp({ email, password: pw });
     if (error) { setErr(error.message); setLoading(false); return; }
 
-    // Ensure profile exists (trigger may be slightly delayed)
-    if (data.user) {
-      await new Promise(r => setTimeout(r, 800));
-      const { data: existing } = await supabase.from('profiles').select('id').eq('id', data.user.id).single();
-      if (!existing) {
-        await supabase.from('profiles').insert({ id: data.user.id, display_name: name, color });
-      }
-    }
-
+    // The handle_new_user trigger creates the profile row (placeholder
+    // name from the email, profile_complete = false). The setup prompt
+    // fills in the real values, so there's nothing to insert here.
     setLoading(false);
     onComplete();
   };
@@ -188,34 +166,16 @@ function SignupForm({ onComplete }) {
   return (
     <>
       <div className="field">
-        <label>Your name</label>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="First name or nickname" />
-        <div style={{
-          fontSize: 11,
-          fontStyle: 'italic',
-          color: 'var(--kinnekt-coral)',
-          marginTop: 6,
-          letterSpacing: '0.01em',
-        }}>
-          ⚠ This name is final and cannot be changed.
-        </div>
-      </div>
-      <div className="field">
-        <label>Your color</label>
-        <div className="swatches" style={{ paddingTop: 6 }}>
-          {COLORS.map(c => (
-            <span key={c.id} className={'swatch' + (color === c.id ? ' on' : '')} style={{ '--c': c.hex }} onClick={() => setColor(c.id)} title={c.label} />
-          ))}
-        </div>
-      </div>
-      <div className="field">
         <label>Email</label>
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
+        <input type="email" value={email} onChange={e => { setEmail(e.target.value); setErr(''); }} placeholder="you@example.com" onKeyDown={e => e.key === 'Enter' && submit()} />
       </div>
       <div className={'field' + (err ? ' err' : '')}>
         <label>Password</label>
         <input type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(''); }} placeholder="At least 6 characters" onKeyDown={e => e.key === 'Enter' && submit()} />
         {err && <div className="err-msg">{err}</div>}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: -4, marginBottom: 4, lineHeight: 1.4 }}>
+        You'll set your name, color, and avatar right after you join or create a group.
       </div>
       <div className="auth-actions">
         <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Creating account…' : 'Create account'}</button>
@@ -383,6 +343,161 @@ function GroupSetupScreen({ onGroupReady }) {
           )}
 
           <div className="auth-foot" style={{ marginTop: 24 }}>kinnekt v1.0</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shown once, right after a member creates or joins a group. This is
+// where they pick the name / color / avatar that the rest of the group
+// sees — colors already claimed by other members are ruled out so two
+// people can't end up the same color. Saving flips profile_complete so
+// the member is never prompted again.
+export function ProfileSetupScreen({ profile, onComplete }) {
+  const [name, setName] = React.useState('');
+  const [color, setColor] = React.useState(null);
+  const [avatar, setAvatar] = React.useState('');
+  const [taken, setTaken] = React.useState({}); // { colorId: displayName }
+  const [showEmoji, setShowEmoji] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+
+  // Load colors already claimed by the other members of this group, and
+  // default the picker to the first color nobody has taken.
+  React.useEffect(() => {
+    if (!profile?.group_id) return;
+    let cancelled = false;
+    supabase
+      .from('profiles')
+      .select('id, display_name, color')
+      .eq('group_id', profile.group_id)
+      .neq('id', profile.id)
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        const map = {};
+        data.forEach(m => { if (m.color) map[m.color] = m.display_name || 'Someone'; });
+        setTaken(map);
+        const firstFree = PALETTE.find(c => !map[c.id]);
+        setColor(prev => prev || (firstFree ? firstFree.id : null));
+      });
+    return () => { cancelled = true; };
+  }, [profile?.group_id, profile?.id]);
+
+  const save = async () => {
+    if (!name.trim()) { setErr('Enter your name'); return; }
+    if (!color) { setErr('Pick a color'); return; }
+    if (taken[color]) { setErr('That color is taken — pick another'); return; }
+    setLoading(true);
+    setErr('');
+    let { error } = await supabase
+      .from('profiles')
+      .update({ display_name: name.trim(), color, avatar: avatar || null, profile_complete: true })
+      .eq('id', profile.id);
+    // Degrade gracefully if a column hasn't been migrated yet.
+    if (error && /avatar/i.test(error.message || '')) {
+      ({ error } = await supabase.from('profiles')
+        .update({ display_name: name.trim(), color, profile_complete: true }).eq('id', profile.id));
+    }
+    if (error && /profile_complete/i.test(error.message || '')) {
+      ({ error } = await supabase.from('profiles')
+        .update({ display_name: name.trim(), color, avatar: avatar || null }).eq('id', profile.id));
+    }
+    setLoading(false);
+    if (error) { setErr(error.message); return; }
+    onComplete();
+  };
+
+  const avatarIsImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
+  const selectedHex = (PALETTE.find(c => c.id === color) || {}).hex || '#9aa0a6';
+
+  return (
+    <div className="fb-screen">
+      <div className="fb-scroll">
+        <div className="auth-wrap" style={{ paddingTop: 40 }}>
+          <div className="auth-mark" style={{ marginBottom: 18 }}>
+            <h1>Set up your <em>profile</em></h1>
+            <p>This is how your group will see you</p>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
+            <button
+              type="button"
+              onClick={() => setShowEmoji(s => !s)}
+              style={{
+                width: 84, height: 84, borderRadius: '50%',
+                background: avatarIsImage ? `center / cover no-repeat url(${avatar})` : selectedHex,
+                border: '3px solid rgba(255,255,255,0.9)',
+                boxShadow: '0 6px 18px rgba(15,30,60,0.16)',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 52, lineHeight: 1, cursor: 'pointer',
+                color: '#fff', textShadow: '0 1px 3px rgba(0,0,0,0.3)',
+              }}
+              title="Choose an emoji"
+            >
+              {!avatarIsImage && (avatar || (name.trim()[0]?.toUpperCase() || '🙂'))}
+            </button>
+          </div>
+          <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+            Tap the circle to pick an emoji
+          </div>
+
+          {showEmoji && (
+            <div className="field">
+              <EmojiInput
+                value={avatar && !avatarIsImage ? avatar : ''}
+                onChange={(e) => { setAvatar(e); setShowEmoji(false); }}
+              />
+            </div>
+          )}
+
+          <div className="field">
+            <label>Your name</label>
+            <input value={name} onChange={e => { setName(e.target.value); setErr(''); }} placeholder="First name or nickname" />
+            <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--kinnekt-coral)', marginTop: 6 }}>
+              ⚠ This name is final and cannot be changed.
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Your color</label>
+            <div className="swatches" style={{ paddingTop: 6, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              {PALETTE.map(c => {
+                const takenBy = taken[c.id];
+                const isMine = c.id === color;
+                const disabled = !!takenBy;
+                return (
+                  <div
+                    key={c.id}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: disabled ? 'not-allowed' : 'pointer' }}
+                    onClick={() => { if (!disabled) { setColor(c.id); setErr(''); } }}
+                    title={disabled ? `Chosen by ${takenBy}` : c.label}
+                  >
+                    <div style={{ position: 'relative', display: 'inline-flex' }}>
+                      <span className={'swatch' + (isMine ? ' on' : '')} style={{ '--c': c.hex, pointerEvents: 'none' }} />
+                      {disabled && (
+                        <svg viewBox="0 0 28 28" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+                          <circle cx="14" cy="14" r="12" fill="none" stroke="rgba(80,80,80,0.85)" strokeWidth="2.5" />
+                          <line x1="5" y1="5" x2="23" y2="23" stroke="rgba(80,80,80,0.85)" strokeWidth="2.5" strokeLinecap="round" />
+                        </svg>
+                      )}
+                    </div>
+                    {disabled && (
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 40, lineHeight: 1.2 }}>{takenBy}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {err && <div className="err-msg" style={{ marginBottom: 8 }}>{err}</div>}
+
+          <div className="auth-actions">
+            <button className="fb-btn solid" onClick={save} disabled={loading}>{loading ? 'Saving…' : 'Enter group →'}</button>
+          </div>
+
+          <div className="auth-foot" style={{ marginTop: 22 }}>kinnekt v1.0</div>
         </div>
       </div>
     </div>

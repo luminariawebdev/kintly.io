@@ -16,14 +16,22 @@ create table if not exists public.groups (
 );
 
 create table if not exists public.profiles (
-  id           uuid references auth.users on delete cascade primary key,
-  display_name text not null,
-  color        text not null default 'coral',
-  avatar       text,
-  group_id     uuid references public.groups,
-  created_at   timestamptz default now()
+  id               uuid references auth.users on delete cascade primary key,
+  display_name     text not null,
+  color            text not null default 'coral',
+  avatar           text,
+  group_id         uuid references public.groups,
+  -- false until the member finishes the post-group setup prompt (name,
+  -- color, avatar). The app routes group members with this still false
+  -- into that prompt; existing members are backfilled to true below so
+  -- they're never re-prompted.
+  profile_complete boolean default false,
+  created_at       timestamptz default now()
 );
-alter table public.profiles add column if not exists avatar text;
+alter table public.profiles add column if not exists avatar           text;
+alter table public.profiles add column if not exists profile_complete boolean default false;
+-- Existing members already personalized their profile — mark them done.
+update public.profiles set profile_complete = true where profile_complete is not true;
 
 -- Helper to get the current user's group_id without RLS recursion.
 -- Defined before any policy that uses it.

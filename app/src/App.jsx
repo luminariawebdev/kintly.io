@@ -1,7 +1,7 @@
 import React from 'react';
 import { IOSDevice } from './IOSFrame';
 import { supabase } from './lib/supabase';
-import { AuthScreen, ResetPasswordScreen } from './screens/Auth';
+import { AuthScreen, ResetPasswordScreen, ProfileSetupScreen } from './screens/Auth';
 import { MainApp } from './screens/Main';
 import { SettingsScreen } from './screens/Settings';
 
@@ -78,7 +78,15 @@ export function App() {
     }
 
     setProfile(fullProfile);
-    setScreen(fullProfile.group_id ? 'app' : 'group-setup');
+    // Routing: no group yet → group setup. In a group but hasn't done the
+    // name/color/avatar prompt → profile setup. Otherwise → the app.
+    // `'profile_complete' in prof` guards the case where the column hasn't
+    // been migrated yet: if it's absent we skip the prompt (old behavior)
+    // rather than bouncing every existing member into setup.
+    const hasFlag = 'profile_complete' in fullProfile;
+    if (!fullProfile.group_id) setScreen('group-setup');
+    else if (hasFlag && fullProfile.profile_complete !== true) setScreen('profile-setup');
+    else setScreen('app');
   }, []);
 
   React.useEffect(() => {
@@ -155,6 +163,12 @@ export function App() {
                 if (session) loadProfile(session.user.id);
                 else setScreen('auth');
               }}
+            />
+          )}
+          {screen === 'profile-setup' && profile && (
+            <ProfileSetupScreen
+              profile={profile}
+              onComplete={() => loadProfile(profile.id)}
             />
           )}
           {screen === 'app' && (

@@ -2,20 +2,7 @@ import React from 'react';
 import { supabase } from '../lib/supabase';
 import { ThemeContext } from '../App';
 import { KinnektLogo, EmojiInput } from '../Components';
-
-const COLORS = [
-  { id: 'red',         hex: '#E63946', label: 'Red' },
-  { id: 'coral',       hex: '#FF6B35', label: 'Coral' },
-  { id: 'amber',       hex: '#FFD60A', label: 'Yellow' },
-  { id: 'green',       hex: '#2DC653', label: 'Green' },
-  { id: 'teal',        hex: '#00B4D8', label: 'Cyan' },
-  { id: 'blue',        hex: '#4361EE', label: 'Blue' },
-  { id: 'periwinkle',  hex: '#7B2FBE', label: 'Purple' },
-  { id: 'plum',        hex: '#C77DFF', label: 'Violet' },
-  { id: 'lilac',       hex: '#F72585', label: 'Pink' },
-  { id: 'rose',        hex: '#FF86C8', label: 'Rose' },
-  { id: 'black',       hex: '#2D2D2D', label: 'Black' },
-];
+import { PALETTE as COLORS } from '../lib/colors';
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
   const theme = React.useContext(ThemeContext);
@@ -30,23 +17,41 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const [confirmSignOut, setConfirmSignOut] = React.useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = React.useState(false);
   const [memberColors, setMemberColors] = React.useState({}); // { colorId: displayName }
+  const [members, setMembers] = React.useState([]); // full group roster
   const groupMenuRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
 
-  // Load colors already claimed by other members in the same group
+  // Load the full group roster — powers the Members list below, plus the
+  // "color already taken" map on the swatch picker (which excludes self).
   React.useEffect(() => {
     if (!profile?.group_id) return;
-    supabase
-      .from('profiles')
-      .select('id, display_name, color')
-      .eq('group_id', profile.group_id)
-      .neq('id', profile.id)
-      .then(({ data }) => {
-        if (!data) return;
-        const map = {};
-        data.forEach(m => { if (m.color) map[m.color] = m.display_name || 'Someone'; });
-        setMemberColors(map);
+    let cancelled = false;
+    const applyRows = (rows) => {
+      if (cancelled || !rows) return;
+      setMembers(rows);
+      const map = {};
+      rows.forEach(m => {
+        if (m.id !== profile.id && m.color) map[m.color] = m.display_name || 'Someone';
       });
+      setMemberColors(map);
+    };
+    (async () => {
+      let { data, error } = await supabase
+        .from('profiles')
+        .select('id, display_name, color, avatar, created_at')
+        .eq('group_id', profile.group_id)
+        .order('created_at', { ascending: true });
+      // Fall back if the avatar column hasn't been migrated yet.
+      if (error && /avatar/i.test(error.message || '')) {
+        ({ data } = await supabase
+          .from('profiles')
+          .select('id, display_name, color, created_at')
+          .eq('group_id', profile.group_id)
+          .order('created_at', { ascending: true }));
+      }
+      applyRows(data);
+    })();
+    return () => { cancelled = true; };
   }, [profile?.group_id, profile?.id]);
 
   React.useEffect(() => {
@@ -359,6 +364,42 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                       </div>
                     </div>
                   )}
+                </div>
+                <div className="set-row" style={{ display: 'block' }}>
+                  <span className="lbl">Members{members.length ? ` · ${members.length}` : ''}</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+                    {members.length === 0 ? (
+                      <span style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>Loading…</span>
+                    ) : members.map(m => {
+                      const mh = COLORS.find(c => c.id === m.color)?.hex || '#9aa0a6';
+                      const isImg = typeof m.avatar === 'string' && (m.avatar.startsWith('data:image') || /^https?:\/\//.test(m.avatar));
+                      const isMe = m.id === profile?.id;
+                      return (
+                        <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                              background: isImg ? `center / cover no-repeat url(${m.avatar})` : mh,
+                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: m.avatar && !isImg ? 19 : 14, fontWeight: 700,
+                              color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.35)',
+                              border: '2px solid var(--surface-glass-strong)',
+                              boxShadow: '0 2px 6px rgba(15,30,60,0.14)',
+                            }}
+                          >
+                            {!isImg && (m.avatar || (m.display_name || '?')[0].toUpperCase())}
+                          </span>
+                          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.display_name}
+                          </span>
+                          {isMe && (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>you</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
                 <div className="set-row" style={{ alignItems: 'center' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
