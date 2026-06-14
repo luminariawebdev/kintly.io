@@ -23,6 +23,29 @@ function resolveTheme(pref) {
 
 export const ThemeContext = React.createContext({ pref: 'auto', setPref: () => {}, resolved: 'light' });
 
+// True on a real phone-sized viewport (or an installed PWA). There we
+// render the app edge-to-edge instead of inside the desktop iPhone
+// mockup — the mockup is a fixed 402×874 box, which on a real phone is
+// taller than the screen, gets centered, and clips the header off the
+// top with no way to scroll up to it. Breakpoint matches the mobile
+// media query in styles.css.
+function useIsMobile() {
+  const get = () => {
+    if (typeof window === 'undefined') return false;
+    const standalone =
+      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+      window.navigator.standalone === true;
+    return standalone || window.innerWidth <= 768;
+  };
+  const [mobile, setMobile] = React.useState(get);
+  React.useEffect(() => {
+    const onResize = () => setMobile(get());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return mobile;
+}
+
 export function App() {
   const [screen, setScreen] = React.useState('loading');
   const [profile, setProfile] = React.useState(null);
@@ -31,6 +54,7 @@ export function App() {
     try { return localStorage.getItem('kinnekt:theme') || 'auto'; } catch { return 'auto'; }
   });
   const [resolved, setResolved] = React.useState(() => resolveTheme(themePref));
+  const isMobile = useIsMobile();
 
   // Re-resolve on preference change or system theme change. matchMedia fires
   // the listener whenever the OS toggles light/dark, so no polling needed.
@@ -138,56 +162,66 @@ export function App() {
     setScreen('app');
   }, []);
 
+  const screens = (
+    <>
+      {screen === 'loading' && <LoadingScreen />}
+      {(screen === 'auth' || screen === 'group-setup') && (
+        <AuthScreen
+          initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
+          onComplete={refreshProfile}
+          onGroupReady={onGroupReady}
+        />
+      )}
+      {screen === 'reset-pw' && (
+        <ResetPasswordScreen
+          onDone={async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) loadProfile(session.user.id);
+            else setScreen('auth');
+          }}
+        />
+      )}
+      {screen === 'profile-setup' && profile && (
+        <ProfileSetupScreen
+          profile={profile}
+          onComplete={() => loadProfile(profile.id)}
+        />
+      )}
+      {screen === 'app' && (
+        <MainApp
+          profile={profile}
+          onSettings={() => setScreen('settings')}
+          onProfileUpdate={refreshProfile}
+        />
+      )}
+      {screen === 'settings' && (
+        <SettingsScreen
+          profile={profile}
+          onBack={() => setScreen('app')}
+          onProfileUpdate={refreshProfile}
+          onSignOut={() => { setScreen('auth'); setProfile(null); }}
+        />
+      )}
+    </>
+  );
+
   return (
     <ThemeContext.Provider value={{ pref: themePref, setPref: setThemePref, resolved }}>
-      <div className="app-shell" style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 24,
-      }}>
-        <IOSDevice width={FRAME_W} height={FRAME_H}>
-          {screen === 'loading' && <LoadingScreen />}
-          {(screen === 'auth' || screen === 'group-setup') && (
-            <AuthScreen
-              initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
-              onComplete={refreshProfile}
-              onGroupReady={onGroupReady}
-            />
-          )}
-          {screen === 'reset-pw' && (
-            <ResetPasswordScreen
-              onDone={async () => {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (session) loadProfile(session.user.id);
-                else setScreen('auth');
-              }}
-            />
-          )}
-          {screen === 'profile-setup' && profile && (
-            <ProfileSetupScreen
-              profile={profile}
-              onComplete={() => loadProfile(profile.id)}
-            />
-          )}
-          {screen === 'app' && (
-            <MainApp
-              profile={profile}
-              onSettings={() => setScreen('settings')}
-              onProfileUpdate={refreshProfile}
-            />
-          )}
-          {screen === 'settings' && (
-            <SettingsScreen
-              profile={profile}
-              onBack={() => setScreen('app')}
-              onProfileUpdate={refreshProfile}
-              onSignOut={() => { setScreen('auth'); setProfile(null); }}
-            />
-          )}
-        </IOSDevice>
-      </div>
+      {isMobile ? (
+        // Real phone / installed PWA: render edge-to-edge, no mockup frame.
+        <div className="app-mobile-root">{screens}</div>
+      ) : (
+        // Desktop: show the app inside the iPhone mockup for preview.
+        <div className="app-shell" style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+        }}>
+          <IOSDevice width={FRAME_W} height={FRAME_H}>{screens}</IOSDevice>
+        </div>
+      )}
     </ThemeContext.Provider>
   );
 }

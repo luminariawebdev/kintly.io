@@ -145,6 +145,17 @@ html, body {
 }
 
 .app-shell { background: var(--shell-bg); transition: background 0.3s var(--ease); }
+
+/* Real phone / installed PWA: the app renders here instead of inside the
+   desktop iPhone mockup. position:fixed + inset:0 pins it to the true
+   viewport edges (a definite full height for .fb-screen to fill), so the
+   header can never be centered or clipped off the top. */
+.app-mobile-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--screen-bg);
+}
 html { overscroll-behavior-x: none; }
 
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; letter-spacing: 0.02em; }
@@ -3299,11 +3310,11 @@ html { overscroll-behavior-x: none; }
      bar hidden, the 54px reserved for it is too much. Use the OS
      safe-area inset so it sits flush under any real notch. */
   .fb-stickyhead {
-    /* Real phone: room for the centered bell+profile (48px) plus
-       a small gap before the tab slider. Desktop's larger value
-       assumes the iOS mock's dynamic island; mobile has no mock
-       so we tighten it. */
-    padding-top: 72px !important;
+    /* Real phone: room for the centered bell+profile (48px) plus a small
+       gap before the tab slider, PLUS the OS safe-area inset so the
+       header clears a real notch / dynamic island. On a non-notched
+       phone the inset is 0 and this is the original 72px. */
+    padding-top: calc(env(safe-area-inset-top, 0px) + 72px) !important;
   }
 
   /* On desktop the bell + profile sit lower to clear the mock's
@@ -3312,7 +3323,9 @@ html { overscroll-behavior-x: none; }
      padding-top reserve rather than flush against the very top
      of the header. */
   .fb-stickyhead-head {
-    top: 12px !important;
+    /* Drop the bell + profile below any real notch/island. Matches the
+       safe-area offset added to the header padding above. */
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
     height: 48px !important;
   }
 

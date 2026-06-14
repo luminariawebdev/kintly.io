@@ -8900,7 +8900,7 @@ export function MainApp({ profile, onSettings }) {
         myId={profile?.id}
         onClose={() => setDetailEventId(null)}
         onDelete={(id) => deleteEvent(id)}
-        onEdit={(ev) => { setDetailEventId(null); setEventEditTarget(ev); setModal('event'); }}
+        onEdit={(ev) => { setDetailEventId(null); setDayDetailsDate(null); setMonthModalData(null); setEventEditTarget(ev); setModal('event'); }}
         onShowMember={(p) => { setDetailEventId(null); setDetailMemberId(p.id); }}
         tasks={tasks}
         onSetRsvp={setRsvp}
