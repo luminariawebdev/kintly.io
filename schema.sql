@@ -548,6 +548,71 @@ begin
 end;
 $$;
 
+-- Roll a recurring task forward to its next scheduled day. Runs as
+-- definer so the *assignee* (not just the creator) can complete a chore
+-- and have it reappear: the new row preserves the ORIGINAL created_by,
+-- which the tasks_insert policy (created_by = auth.uid()) would otherwise
+-- reject when someone other than the creator checks it off. The caller
+-- must be allowed to act on the task (creator, assignee, or unassigned)
+-- and be in the same group. p_next_due is computed client-side from the
+-- recurrence rule. Returns the new row, or null if nothing was created
+-- (not recurring, not permitted, or a duplicate already exists).
+create or replace function public.respawn_recurring_task(p_task_id uuid, p_next_due date)
+returns public.tasks
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_src public.tasks;
+  v_new public.tasks;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select * into v_src
+  from public.tasks
+  where id = p_task_id
+    and group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null);
+
+  if v_src.id is null then
+    return null;  -- not found or caller not permitted
+  end if;
+
+  -- Only recurring tasks respawn.
+  if v_src.recurrence is null or coalesce(v_src.recurrence->>'freq', 'none') = 'none' then
+    return null;
+  end if;
+
+  -- Guard against double-spawns (double-tap / re-fire): bail if an open
+  -- occurrence for this series already sits on the target day.
+  if exists (
+    select 1 from public.tasks
+    where group_id = v_src.group_id
+      and title    = v_src.title
+      and due_date = p_next_due
+      and completed = false
+      and recurrence is not null
+      and coalesce(assigned_to::text, '') = coalesce(v_src.assigned_to::text, '')
+  ) then
+    return null;
+  end if;
+
+  insert into public.tasks
+    (group_id, created_by, assigned_to, note_id, event_id, title,
+     description, due_date, recurrence, is_private, space_id, completed)
+  values
+    (v_src.group_id, v_src.created_by, v_src.assigned_to, v_src.note_id,
+     v_src.event_id, v_src.title, v_src.description, p_next_due,
+     v_src.recurrence, v_src.is_private, v_src.space_id, false)
+  returning * into v_new;
+
+  return v_new;
+end;
+$$;
+
 -- ─── Realtime ────────────────────────────────────────────────────────────────
 -- postgres_changes only fires for tables in the supabase_realtime
 -- publication. Without this block a fresh project gets silent no-op

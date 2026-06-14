@@ -537,6 +537,32 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
   return out;
 }
 
+// Given a recurring task, return the ISO date (YYYY-MM-DD) of its next
+// scheduled occurrence after its current due_date — or null if the task
+// isn't recurring. Same recurrence shape used by events
+// ({ freq, days, time }). Computed in local time so a US-evening "next
+// Wednesday" doesn't slip a day.
+function computeNextDue(task) {
+  const r = task && task.recurrence;
+  if (!r || !r.freq || r.freq === 'none') return null;
+  const base = task.due_date ? new Date(task.due_date + 'T12:00:00') : new Date();
+  let d = null;
+  if (r.freq === 'daily') {
+    d = new Date(base); d.setDate(d.getDate() + 1);
+  } else if (r.freq === 'monthly') {
+    d = new Date(base); d.setMonth(d.getMonth() + 1);
+  } else if ((r.freq === 'weekly' || r.freq === 'custom') && Array.isArray(r.days) && r.days.length > 0) {
+    const sorted = [...r.days].sort((a, b) => a - b);
+    const cur = base.getDay(); // 0-6 (Sun-Sat)
+    const nextDay = sorted.find(x => x > cur) ?? sorted[0];
+    const diff = nextDay > cur ? nextDay - cur : 7 - cur + nextDay;
+    d = new Date(base); d.setDate(d.getDate() + diff);
+  }
+  if (!d) return null;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 // ─── Task Row ────────────────────────────────────────────────────────────────
 function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick }) {
   const color = getColor(assignee?.color);
@@ -7298,62 +7324,52 @@ export function MainApp({ profile, onSettings }) {
     if (!completed) playPop(); // play only when checking ON
     const next = !completed;
     const completedAt = next ? new Date().toISOString() : null;
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: next, completed_at: completedAt } : t));
+    // Capture the pre-toggle row (for recurrence) while applying the
+    // optimistic update. The updater stays pure — it only reads.
+    let snapshot = null;
+    setTasks(prev => {
+      snapshot = prev.find(t => t.id === id) || null;
+      return prev.map(t => t.id === id ? { ...t, completed: next, completed_at: completedAt } : t);
+    });
     let { error } = await supabase.from('tasks').update({ completed: next, completed_at: completedAt }).eq('id', id);
     // Fall back without completed_at if the column hasn't been migrated yet
     if (error && /completed_at/i.test(error.message || '')) {
       await supabase.from('tasks').update({ completed: next }).eq('id', id);
     }
 
-    // When checking a recurring task as done, spawn the next occurrence.
-    // We look up the task from local state after the optimistic update.
-    if (next) {
-      setTasks(prev => {
-        const task = prev.find(t => t.id === id);
-        if (!task) return prev;
-        const r = task.recurrence;
-        if (!r || !r.freq || r.freq === 'none') return prev;
-
-        // Compute the next due date from the current due_date (or today if missing).
-        const base = task.due_date ? new Date(task.due_date + 'T12:00:00') : new Date();
-        let nextDate = null;
-
-        if (r.freq === 'daily') {
-          nextDate = new Date(base);
-          nextDate.setDate(nextDate.getDate() + 1);
-        } else if (r.freq === 'monthly') {
-          nextDate = new Date(base);
-          nextDate.setMonth(nextDate.getMonth() + 1);
-        } else if ((r.freq === 'weekly' || r.freq === 'custom') && Array.isArray(r.days) && r.days.length > 0) {
-          const sorted = [...r.days].sort((a, b) => a - b);
-          const curDay = base.getDay(); // 0-6
-          // Find the next weekday in the pattern after curDay
-          const nextDay = sorted.find(d => d > curDay) ?? sorted[0];
-          const diff = nextDay > curDay ? nextDay - curDay : 7 - curDay + nextDay;
-          nextDate = new Date(base);
-          nextDate.setDate(nextDate.getDate() + diff);
-        }
-
-        if (!nextDate) return prev;
-
-        const pad = n => String(n).padStart(2, '0');
-        const nextDueDate = `${nextDate.getFullYear()}-${pad(nextDate.getMonth() + 1)}-${pad(nextDate.getDate())}`;
-
-        // Insert the new occurrence asynchronously (can't await inside setTasks).
-        const { title, description, assigned_to, recurrence, group_id, created_by, space_id, is_private, event_id } = task;
-        const newTask = {
-          title, description, assigned_to, recurrence,
-          group_id, created_by, space_id, is_private,
-          due_date: nextDueDate,
-          completed: false,
+    // Roll a recurring task forward to its next scheduled day on
+    // completion. Prefer the security-definer RPC so the ASSIGNEE can
+    // roll a task that someone ELSE created forward — a plain client
+    // insert would set created_by to the original creator and the
+    // tasks_insert RLS policy (created_by = auth.uid()) would silently
+    // reject it. That's why recurring chores never came back.
+    if (next && snapshot) {
+      const nextDue = computeNextDue(snapshot);
+      if (nextDue) {
+        const addRow = (row) => {
+          const r = Array.isArray(row) ? row[0] : row;
+          if (r && r.id) setTasks(p => p.some(t => t.id === r.id) ? p : [r, ...p]);
         };
-        if (event_id) newTask.event_id = event_id;
+        const { data: rpcRow, error: rpcErr } =
+          await supabase.rpc('respawn_recurring_task', { p_task_id: id, p_next_due: nextDue });
 
-        const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
-        (async () => {
-          let payload = { ...newTask };
-          let row = null;
-          let insErr = null;
+        if (!rpcErr) {
+          // null row = nothing to spawn (dedup hit / not permitted) — fine.
+          addRow(rpcRow);
+        } else {
+          // RPC not installed yet → direct insert. Works when you finish
+          // your OWN task; cross-assigned ones still need the RPC, so we
+          // warn loudly the first time rather than failing silently.
+          const s = snapshot;
+          let payload = {
+            title: s.title, description: s.description, assigned_to: s.assigned_to,
+            recurrence: s.recurrence, group_id: s.group_id, created_by: s.created_by,
+            space_id: s.space_id, is_private: s.is_private,
+            due_date: nextDue, completed: false,
+          };
+          if (s.event_id) payload.event_id = s.event_id;
+          const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private'];
+          let row = null, insErr = null;
           for (let i = 0; i < 7; i++) {
             ({ data: row, error: insErr } = await supabase.from('tasks').insert(payload).select().single());
             if (!insErr) break;
@@ -7361,19 +7377,24 @@ export function MainApp({ profile, onSettings }) {
             let stripped = false;
             for (const col of optional) {
               if (payload[col] !== undefined && msg.includes(col)) {
-                const { [col]: _, ...rest } = payload;
-                payload = rest;
-                stripped = true;
-                break;
+                const { [col]: _, ...rest } = payload; payload = rest; stripped = true; break;
               }
             }
             if (!stripped) break;
           }
-          if (row) setTasks(p => [row, ...p]);
-        })();
-
-        return prev; // optimistic state unchanged until insert resolves
-      });
+          if (row) {
+            addRow(row);
+          } else if (!window.__kinnektRespawnWarned) {
+            window.__kinnektRespawnWarned = true;
+            alert(
+              'This recurring task could not roll forward to its next day.\n\n' +
+              'Your database is missing the respawn function. Run schema.sql\n' +
+              '(or just the respawn_recurring_task function) in the Supabase\n' +
+              'SQL Editor, then try again.'
+            );
+          }
+        }
+      }
     }
   }, []);
   const notify = async (targetIds, type, payload) => {
