@@ -7597,6 +7597,18 @@ export function MainApp({ profile, onSettings }) {
         );
       }
     }
+    // Multi-day events: if the end_date column is missing, the event
+    // collapses to a single day. Only nag when the user actually set a
+    // range, so plain single-day events stay silent.
+    if (droppedCols.includes('end_date') && rest.end_date) {
+      alert(
+        'Event saved, but the date range could NOT be stored — it will\n' +
+        'show as a single day only.\n\n' +
+        'The "end_date" column is missing from your events table.\n' +
+        'Run this in your Supabase SQL Editor:\n\n' +
+        'alter table public.events add column if not exists end_date date;'
+      );
+    }
 
     setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
     const attendeeIds = attendees.filter(id => id !== profile.id);
