@@ -37,13 +37,16 @@ export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) 
 }
 
 function LoginForm({ onComplete }) {
+  // 'login' = email + password sign-in. 'reset' = email-only recovery
+  // request (password field hidden, primary button sends the link).
+  const [mode, setMode] = React.useState('login');
   const [email, setEmail] = React.useState('');
   const [pw, setPw] = React.useState('');
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [resetSent, setResetSent] = React.useState(false);
-  const [resetErr, setResetErr] = React.useState('');
   const emailRef = React.useRef(null);
+  const isReset = mode === 'reset';
 
   const submit = async () => {
     if (!email || !pw) { setErr('Please fill in all fields'); return; }
@@ -56,49 +59,67 @@ function LoginForm({ onComplete }) {
 
   // Sends the Supabase recovery email. The link lands back on the app,
   // which fires a PASSWORD_RECOVERY auth event — App.jsx routes that to
-  // the ResetPasswordScreen. Reset feedback uses its OWN state so it
-  // shows by the button instead of reddening the password field — you
-  // don't need a password to reset one.
+  // the ResetPasswordScreen.
   const sendReset = async () => {
-    if (resetSent || loading) return;
-    setResetErr('');
-    if (!email) {
-      setResetErr('Enter your email above, then tap "Forgot password?" again.');
-      emailRef.current?.focus();
-      return;
-    }
+    if (loading || resetSent) return;
+    setErr('');
+    if (!email) { setErr('Enter your email above first.'); emailRef.current?.focus(); return; }
     setLoading(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: window.location.origin,
     });
     setLoading(false);
-    if (error) { setResetErr(error.message); return; }
+    if (error) { setErr(error.message); return; }
     setResetSent(true);
   };
 
+  const goReset = () => {
+    setMode('reset'); setErr(''); setResetSent(false);
+    setTimeout(() => emailRef.current?.focus(), 0);
+  };
+  const goLogin = () => { setMode('login'); setErr(''); setResetSent(false); };
+
   return (
     <>
-      <div className="field">
+      <div className={'field' + (err && isReset ? ' err' : '')}>
         <label>Email</label>
-        <input ref={emailRef} type="email" value={email} onChange={e => { setEmail(e.target.value); setErr(''); setResetErr(''); }} placeholder="you@example.com" onKeyDown={e => e.key === 'Enter' && submit()} />
+        <input
+          ref={emailRef}
+          type="email"
+          value={email}
+          onChange={e => { setEmail(e.target.value); setErr(''); }}
+          placeholder="you@example.com"
+          onKeyDown={e => e.key === 'Enter' && (isReset ? sendReset() : submit())}
+        />
+        {isReset && err && <div className="err-msg">{err}</div>}
       </div>
-      <div className={'field' + (err ? ' err' : '')}>
-        <label>Password</label>
-        <input type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(''); }} placeholder="••••••••" onKeyDown={e => e.key === 'Enter' && submit()} />
-        {err && <div className="err-msg">{err}</div>}
-      </div>
+
+      {!isReset && (
+        <div className={'field' + (err ? ' err' : '')}>
+          <label>Password</label>
+          <input type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(''); }} placeholder="••••••••" onKeyDown={e => e.key === 'Enter' && submit()} />
+          {err && <div className="err-msg">{err}</div>}
+        </div>
+      )}
+
       <div className="auth-actions">
-        <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
-        <button type="button" className="fb-link" onClick={sendReset} disabled={loading}>
-          {resetSent ? '✓ Reset link sent' : 'Forgot password?'}
-        </button>
-        {resetErr && (
-          <div className="err-msg" style={{ textAlign: 'center', marginTop: 2 }}>{resetErr}</div>
-        )}
-        {resetSent && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', marginTop: 2, lineHeight: 1.45 }}>
-            We emailed a reset link to <strong>{email}</strong>. Open it on this device to set a new password.
-          </div>
+        {isReset ? (
+          <>
+            <button className="fb-btn solid" onClick={sendReset} disabled={loading || resetSent}>
+              {loading ? 'Sending…' : (resetSent ? '✓ Reset link sent' : 'Forgot password')}
+            </button>
+            {resetSent && (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', marginTop: 2, lineHeight: 1.45 }}>
+                We emailed a reset link to <strong>{email}</strong>. Open it on this device to set a new password.
+              </div>
+            )}
+            <button type="button" className="fb-link" onClick={goLogin}>← Back to sign in</button>
+          </>
+        ) : (
+          <>
+            <button className="fb-btn solid" onClick={submit} disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
+            <button type="button" className="fb-link" onClick={goReset} disabled={loading}>Forgot password?</button>
+          </>
         )}
       </div>
       <div className="auth-foot">{VERSION_LABEL}</div>
