@@ -7,13 +7,13 @@
 export const PALETTE = [
   { id: 'red',         hex: '#E63946', label: 'Red' },
   { id: 'coral',       hex: '#FF6B35', label: 'Coral' },
-  { id: 'amber',       hex: '#FFD60A', label: 'Yellow' },
+  { id: 'amber',       hex: '#FFD60A', label: 'Amber' },
   { id: 'green',       hex: '#2DC653', label: 'Green' },
-  { id: 'teal',        hex: '#00B4D8', label: 'Cyan' },
+  { id: 'teal',        hex: '#00B4D8', label: 'Teal' },
   { id: 'blue',        hex: '#4361EE', label: 'Blue' },
-  { id: 'periwinkle',  hex: '#7B2FBE', label: 'Purple' },
-  { id: 'plum',        hex: '#C77DFF', label: 'Violet' },
-  { id: 'lilac',       hex: '#F72585', label: 'Pink' },
+  { id: 'periwinkle',  hex: '#7B2FBE', label: 'Periwinkle' },
+  { id: 'plum',        hex: '#C77DFF', label: 'Plum' },
+  { id: 'lilac',       hex: '#F72585', label: 'Lilac' },
   { id: 'rose',        hex: '#FF86C8', label: 'Rose' },
   { id: 'black',       hex: '#2D2D2D', label: 'Black' },
 ];

@@ -266,8 +266,11 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                             </svg>
                           )}
                         </div>
+                        <span style={{ fontSize: 10, fontWeight: isMine ? 700 : 500, color: disabled ? 'var(--text-muted)' : 'var(--ink)', textAlign: 'center', lineHeight: 1.2, maxWidth: 48 }}>
+                          {c.label}
+                        </span>
                         {disabled && (
-                          <span style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.2, maxWidth: 40 }}>
+                          <span style={{ fontSize: 8.5, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.1, maxWidth: 48 }}>
                             {takenBy}
                           </span>
                         )}

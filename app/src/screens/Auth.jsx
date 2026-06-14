@@ -482,8 +482,9 @@ export function ProfileSetupScreen({ profile, onComplete }) {
                         </svg>
                       )}
                     </div>
+                    <span style={{ fontSize: 10, fontWeight: isMine ? 700 : 500, color: disabled ? 'var(--text-muted)' : 'var(--ink)', textAlign: 'center', maxWidth: 48, lineHeight: 1.2 }}>{c.label}</span>
                     {disabled && (
-                      <span style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 40, lineHeight: 1.2 }}>{takenBy}</span>
+                      <span style={{ fontSize: 8.5, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 48, lineHeight: 1.1 }}>{takenBy}</span>
                     )}
                   </div>
                 );
