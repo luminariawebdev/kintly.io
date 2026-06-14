@@ -2534,7 +2534,6 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
             ['daily',   'Daily'],
             ['weekly',  'Weekly'],
             ['monthly', 'Monthly'],
-            ['custom',  'Custom'],
           ].map(([k, lbl]) => (
             <button key={k} className={'pick' + (repeatFreq === k ? ' on' : '')} onClick={() => setRepeatFreq(k)}>{lbl}</button>
           ))}
@@ -2554,38 +2553,6 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
                   style={{ minWidth: 0, padding: '8px 10px' }}
                 >{day}</button>
               ))}
-            </div>
-          </div>
-        )}
-
-        {repeatFreq === 'custom' && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
-              Repeat on
-            </div>
-            <div className="day-check-list">
-              {[
-                [1, 'Monday'],
-                [2, 'Tuesday'],
-                [3, 'Wednesday'],
-                [4, 'Thursday'],
-                [5, 'Friday'],
-                [6, 'Saturday'],
-                [0, 'Sunday'],
-              ].map(([idx, name]) => {
-                const selected = repeatDays.includes(idx);
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    className={'day-check-row' + (selected ? ' on' : '')}
-                    onClick={() => toggleDay(idx)}
-                  >
-                    <span className="day-check-box" aria-hidden>{selected ? '✓' : ''}</span>
-                    <span className="day-check-name">{name}</span>
-                  </button>
-                );
-              })}
             </div>
           </div>
         )}
@@ -3051,7 +3018,6 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
             ['daily',   'Daily'],
             ['weekly',  'Weekly'],
             ['monthly', 'Monthly'],
-            ['custom',  'Custom'],
           ].map(([k, lbl]) => (
             <button key={k} className={'pick' + (repeatFreq === k ? ' on' : '')} onClick={() => setRepeatFreq(k)}>{lbl}</button>
           ))}
@@ -3075,37 +3041,6 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
           </div>
         )}
 
-        {repeatFreq === 'custom' && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--text-muted)', marginBottom: 6 }}>
-              Repeat on
-            </div>
-            <div className="day-check-list">
-              {[
-                [1, 'Monday'],
-                [2, 'Tuesday'],
-                [3, 'Wednesday'],
-                [4, 'Thursday'],
-                [5, 'Friday'],
-                [6, 'Saturday'],
-                [0, 'Sunday'],
-              ].map(([idx, name]) => {
-                const selected = repeatDays.includes(idx);
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    className={'day-check-row' + (selected ? ' on' : '')}
-                    onClick={() => toggleRepeatDay(idx)}
-                  >
-                    <span className="day-check-box" aria-hidden>{selected ? '✓' : ''}</span>
-                    <span className="day-check-name">{name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </div>
 
       {!isPrivate && (
