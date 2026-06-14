@@ -451,11 +451,24 @@ html { overscroll-behavior-x: none; }
      collapsed). flex-shrink: 0 + flex-basis: auto means it never
      shrinks below its natural content size when content is taller. */
   flex: 1 0 auto;
+  /* Hard cap: clip anything that extends past the wrap's box (the glow
+     layer, a transiently mis-measured child during a realtime reflow,
+     etc.) so it can never add scrollable height below the last section.
+     The only sticky element (.fb-stickyhead) is a SIBLING, not a child,
+     so this doesn't affect it. */
+  overflow: clip;
 }
 .fb-sec-wrap::before {
   content: '';
   position: absolute;
-  inset: -10%;
+  /* Bleed sideways (clipped by .fb-scroll's overflow-x:hidden) but NOT
+     past the top/bottom: a vertical overhang here counts as scrollable
+     overflow, letting you scroll down into empty space below the last
+     section. Pin top/bottom to the wrap edges; blur still softens them. */
+  top: 0;
+  bottom: 0;
+  left: -10%;
+  right: -10%;
   z-index: -1;
   pointer-events: none;
   background:
