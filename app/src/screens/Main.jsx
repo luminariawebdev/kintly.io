@@ -7828,13 +7828,33 @@ export function MainApp({ profile, onSettings }) {
   const updateEvent = async (id, patch) => {
     const existing = events.find(e => e.id === id);
     if (!existing) return { error: { message: 'Event not found' } };
-    setEvents(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e)
-      .sort((a, b) => a.date.localeCompare(b.date)));
+    const sortByDate = (list) => list.sort((a, b) => a.date.localeCompare(b.date));
+    const rollback = () => setEvents(prev => sortByDate(prev.map(e => e.id === id ? existing : e)));
+    setEvents(prev => sortByDate(prev.map(e => e.id === id ? { ...e, ...patch } : e)));
     let payload = { ...patch };
     const optional = ['description', 'location', 'attendees', 'recurrence', 'space_id', 'is_private', 'end_date'];
     for (let i = 0; i < 8; i++) {
-      const { error } = await supabase.from('events').update(payload).eq('id', id);
-      if (!error) return { error: null };
+      // .select() so a real save (returns the row) is distinguishable
+      // from an RLS no-op (0 rows, NO error) — the latter looked like
+      // success but silently reverted on the next refresh.
+      const { data, error } = await supabase.from('events').update(payload).eq('id', id).select();
+      if (!error) {
+        if (!data || data.length === 0) {
+          rollback();
+          alert(
+            'Could not save the changes — the database blocked the update\n' +
+            '(0 rows changed). Your events table is missing its UPDATE\n' +
+            'policy. Run this once in the Supabase SQL Editor:\n\n' +
+            'drop policy if exists "events_update" on public.events;\n' +
+            'create policy "events_update" on public.events\n' +
+            '  for update using (group_id = public.my_group_id());'
+          );
+          return { error: { message: 'no rows updated (RLS)' } };
+        }
+        // Reconcile local state with the row the DB actually saved.
+        setEvents(prev => sortByDate(prev.map(e => e.id === id ? data[0] : e)));
+        return { error: null };
+      }
       const msg = (error.message || '').toLowerCase();
       let stripped = null;
       for (const col of optional) {
@@ -7846,8 +7866,7 @@ export function MainApp({ profile, onSettings }) {
         }
       }
       if (!stripped) {
-        setEvents(prev => prev.map(e => e.id === id ? existing : e)
-          .sort((a, b) => a.date.localeCompare(b.date)));
+        rollback();
         alert('Could not save changes: ' + error.message);
         return { error };
       }
