@@ -462,6 +462,11 @@ html { overscroll-behavior-x: none; }
    as section titles / the active tab — so the hero element reads as
    on-brand in both themes. */
 .live-clock-time {
+  /* inline-block so the box shrink-wraps to JUST the time and is centered
+     by the parent — the tz tag is taken out of flow (absolute) so it no
+     longer shifts the time off-center under the date. */
+  display: inline-block;
+  position: relative;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 28px;
   font-weight: 700;
@@ -473,16 +478,20 @@ html { overscroll-behavior-x: none; }
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
-/* The tz tag sits inside the gradient line, so it needs its own solid
-   fill to escape the clip and stay a quiet muted label. */
+/* tz tag floats just to the right of the (centered) time, vertically
+   centered, with its own solid fill so it escapes the gradient clip. */
 .live-clock-tz {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 6px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.10em;
+  white-space: nowrap;
   color: var(--text-muted);
   -webkit-text-fill-color: var(--text-muted);
-  margin-left: 6px;
-  vertical-align: middle;
 }
 
 /* ── Section wrapper — soft gradient with floating glow blobs ── */

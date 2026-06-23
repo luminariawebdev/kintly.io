@@ -405,7 +405,7 @@ function LiveClock() {
   return (
     <div className="live-clock" aria-label={`${dateStr}, ${timeStr} ${tzAbbr}`}>
       <div className="live-clock-date">{dateStr}</div>
-      <div className="live-clock-time">{timeStr} <span className="live-clock-tz">{tzAbbr}</span></div>
+      <div className="live-clock-time">{timeStr}<span className="live-clock-tz">{tzAbbr}</span></div>
     </div>
   );
 }
