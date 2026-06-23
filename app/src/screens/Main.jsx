@@ -7280,19 +7280,22 @@ const SpacesSection = React.memo(function SpacesSection({
           A space groups your tasks, events, lists, and notes around one topic.
         </div>
       ) : (
-        <div className="spaces-stack">
-          {visible.map(s => (
-            <SpaceCard
-              key={s.id}
-              space={s}
-              counts={countsFor(s.id)}
-              members={members}
-              getProfile={getProfile}
-              myId={myId}
-              onOpen={onOpenDetail}
-              onDeleteSpace={onDeleteSpace}
-            />
-          ))}
+        <div className="fb-listbox">
+          <div className="fb-listbox-legend">Spaces</div>
+          <div className="spaces-stack">
+            {visible.map(s => (
+              <SpaceCard
+                key={s.id}
+                space={s}
+                counts={countsFor(s.id)}
+                members={members}
+                getProfile={getProfile}
+                myId={myId}
+                onOpen={onOpenDetail}
+                onDeleteSpace={onDeleteSpace}
+              />
+            ))}
+          </div>
         </div>
       )}
       </>)}
