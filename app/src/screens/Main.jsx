@@ -806,7 +806,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl }) {
     <SwipeToDelete onDelete={onDelete} disabled={!canActOnTask}>
     <div
       className={'trow' + (task.completed ? ' done' : '') + (isCancelled ? ' cancelled' : '')}
-      style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px', background: 'var(--surface-glass-strong)', borderBottom: '1px solid var(--rule)', cursor: onClick ? 'pointer' : 'default' }}
+      style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px', background: 'var(--surface-glass-strong)', cursor: onClick ? 'pointer' : 'default' }}
       onClick={onClick}
     >
       <button

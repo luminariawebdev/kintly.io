@@ -512,23 +512,14 @@ html { overscroll-behavior-x: none; }
   background:
     linear-gradient(140deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.12) 36%, rgba(255, 255, 255, 0.04) 100%),
     var(--glass-pane);
+  backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
+  -webkit-backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   border: 1px solid var(--border-soft);
   box-shadow:
     inset 2px 2px 1px 0 rgba(255, 255, 255, 0.5),
     inset -1px -1px 1px 1px rgba(255, 255, 255, 0.4),
     var(--shadow-soft);
 }
-.day-summary::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  backdrop-filter: blur(10px) saturate(180%);
-  -webkit-backdrop-filter: blur(10px) saturate(180%);
-  filter: url(#glass-distortion);
-  pointer-events: none;
-}
-.day-summary > * { position: relative; z-index: 1; }
 .ds-title {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 9.5px;
@@ -919,7 +910,28 @@ html { overscroll-behavior-x: none; }
   padding: 3px 8px;
   border-radius: var(--r-pill);
 }
-.tasklist { display: flex; flex-direction: column; gap: 0; }
+.tasklist {
+  display: flex; flex-direction: column; gap: 0;
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+/* Round the whole list block to match the glass card around it. We can't
+   rely on .tasklist's overflow:hidden to clip the corners — each row's
+   swipe layer uses will-change/transform, which makes it ignore an
+   ancestor's rounded clip. So round the actual opaque rows directly:
+   top corners on the first row, bottom corners on the last. Longhand
+   (not the shorthand) so a lone single row gets all four. */
+.tasklist > div { border-radius: 0 !important; }
+.tasklist > div:first-child,
+.tasklist > div:first-child .trow {
+  border-top-left-radius: var(--r-md) !important;
+  border-top-right-radius: var(--r-md) !important;
+}
+.tasklist > div:last-child,
+.tasklist > div:last-child .trow {
+  border-bottom-left-radius: var(--r-md) !important;
+  border-bottom-right-radius: var(--r-md) !important;
+}
 .trow.done { opacity: 0.6; }
 
 /* ── Calendar ────────────────────────────────────────────────── */
@@ -1823,6 +1835,8 @@ html { overscroll-behavior-x: none; }
   background:
     linear-gradient(140deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.12) 36%, rgba(255, 255, 255, 0.04) 100%),
     var(--glass-pane);
+  backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
+  -webkit-backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   /* glossy rim (the macOS shine layer) */
@@ -1832,19 +1846,6 @@ html { overscroll-behavior-x: none; }
     var(--shadow-soft);
   overflow: hidden;
 }
-/* Effect layer: blurs the backdrop, then the SVG filter refracts it
-   (Chromium); iOS falls back to the blur. Content sits above (z-index 1). */
-.feed-box::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  backdrop-filter: blur(10px) saturate(180%);
-  -webkit-backdrop-filter: blur(10px) saturate(180%);
-  filter: url(#glass-distortion);
-  pointer-events: none;
-}
-.feed-box > * { position: relative; z-index: 1; }
 
 /* ── Home Feed: Pinned section ─────────────────────────────────── */
 /* Designed to mirror the elevated "feel" of the To-do / Upcoming box,
@@ -2546,11 +2547,6 @@ html { overscroll-behavior-x: none; }
   box-shadow: 0 4px 14px rgba(106, 77, 255, 0.30);
 }
 
-/* Task rows inside the box */
-.trow {
-  border-bottom: 1px solid var(--border-soft) !important;
-}
-.tasklist > div:last-child .trow { border-bottom: 0 !important; }
 
 /* ── Empty hint ──────────────────────────────────────────────── */
 .kbd-hint {
