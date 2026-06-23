@@ -498,7 +498,7 @@ html { overscroll-behavior-x: none; }
 .day-summary {
   position: relative;
   z-index: 1;
-  margin: 2px 16px 6px;
+  margin: 0 0 12px;
   padding: 12px 14px;
   border-radius: 14px;
   background: var(--surface-glass-strong);
@@ -530,9 +530,9 @@ html { overscroll-behavior-x: none; }
   line-height: 1.5;
   color: var(--text-secondary);
   padding-left: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wrap long items onto a second line (hanging indent under the bullet)
+     instead of truncating mid-word with an ellipsis. */
+  overflow-wrap: anywhere;
 }
 .ds-list li::before {
   content: '•';
@@ -541,6 +541,8 @@ html { overscroll-behavior-x: none; }
   color: var(--text-muted);
 }
 .ds-list li strong { color: var(--text-primary); font-weight: 600; }
+.ds-overdue { color: #E27457; font-weight: 700; }
+.ds-who { color: var(--text-muted); font-weight: 600; }
 .ds-list li.ds-more { color: var(--text-muted); font-style: italic; padding-left: 12px; }
 .ds-list li.ds-more::before { content: ''; }
 

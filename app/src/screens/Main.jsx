@@ -417,23 +417,23 @@ function LiveClock() {
 function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, getProfile, myId }) {
   useRerenderEvery(60 * 1000);
   const now = Date.now();
-  const fwd = now + 24 * 60 * 60 * 1000;
   const back = now - 24 * 60 * 60 * 1000;
   const todayIso = localTodayISO();
+  const tomorrowIso = toLocalISO(new Date(now + 24 * 60 * 60 * 1000));
   const within24hBack = (iso) => !!iso && new Date(iso).getTime() >= back;
 
-  // Tasks due in the next 24h — open only; a date-only task counts if
-  // it's due today.
+  // A task is overdue if it's open and its due moment is already past.
+  const isOverdue = (t) => t.due_time
+    ? new Date(`${t.due_date}T${t.due_time}`).getTime() < now
+    : t.due_date < todayIso;
+
+  // Open tasks that are overdue, due today, or due tomorrow. Date-based
+  // (a date-only task due tomorrow counts), with overdue ones flagged.
   const dueTasks = (tasks || [])
     .filter(t => !t.completed && !t.cancelled_at && t.due_date)
-    .filter(t => {
-      if (t.due_time) {
-        const at = new Date(`${t.due_date}T${t.due_time}`).getTime();
-        return at >= now && at <= fwd;
-      }
-      return t.due_date === todayIso;
-    })
+    .filter(t => t.due_date <= tomorrowIso)
     .sort((a, b) => {
+      // Overdue first (oldest first), then upcoming by due time.
       const ak = a.due_time ? `${a.due_date}T${a.due_time}` : `${a.due_date}T23:59`;
       const bk = b.due_time ? `${b.due_date}T${b.due_time}` : `${b.due_date}T23:59`;
       return ak.localeCompare(bk);
@@ -444,12 +444,14 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
   const seenEv = new Set();
   const dueEvents = (expandedEvents || [])
     .filter(e => {
-      if (!e.date) return false;
-      if (e.start_time) {
-        const at = new Date(`${e.date}T${e.start_time}`).getTime();
-        return at >= now && at <= fwd;
+      // Only today or tomorrow — never a past event (no "overdue" events).
+      if (!e.date || e.date < todayIso || e.date > tomorrowIso) return false;
+      // Today's timed events only if they haven't already started; all-day
+      // today and anything tomorrow are included.
+      if (e.date === todayIso && e.start_time) {
+        return new Date(`${e.date}T${e.start_time}`).getTime() >= now;
       }
-      return e.date === todayIso; // all-day today
+      return true;
     })
     .sort((a, b) => `${a.date}T${a.start_time || '00:00'}`.localeCompare(`${b.date}T${b.start_time || '00:00'}`))
     .filter(e => { if (seenEv.has(e.id)) return false; seenEv.add(e.id); return true; });
@@ -483,6 +485,22 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
     if (txt) return plainMentions(txt);
     return n.type === 'poll' ? 'a poll' : 'a post';
   };
+  const dayLabel = (iso) => iso === todayIso ? 'Today' : (iso === tomorrowIso ? 'Tomorrow' : '');
+  // A person's name rendered in their profile color (matches the rest of
+  // the app). "You" for the current user, still in their own color.
+  const personTag = (id) => {
+    const p = getProfile?.(id);
+    if (!p) return null;
+    return <span style={{ color: getColor(p.color) }}>{p.id === myId ? 'You' : p.display_name}</span>;
+  };
+  // Ids of everyone attending (RSVP'd yes) or tagged (in the attendee list).
+  const eventPeopleIds = (e) => {
+    const ids = new Set([
+      ...(Array.isArray(e.attendees) ? e.attendees : []),
+      ...Object.entries(e.rsvps || {}).filter(([, v]) => v === 'yes').map(([k]) => k),
+    ]);
+    return [...ids].filter(id => getProfile?.(id));
+  };
 
   return (
     <div className="day-summary" aria-label="Next 24 hours summary">
@@ -493,7 +511,13 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
           <div className="ds-sec-hd">{dueTasks.length} task{dueTasks.length !== 1 ? 's' : ''} due</div>
           <ul className="ds-list">
             {dueTasks.slice(0, CAP).map(t => (
-              <li key={t.id}>{t.title}{t.due_time ? ` · ${formatTime12(t.due_time)}` : ''}</li>
+              <li key={t.id}>
+                {t.title}
+                {isOverdue(t)
+                  ? <span className="ds-overdue"> · overdue</span>
+                  : ` · ${dayLabel(t.due_date)}${t.due_time ? ` ${formatTime12(t.due_time)}` : ''}`}
+                <span className="ds-who"> · {t.assigned_to ? (personTag(t.assigned_to) || 'Someone') : 'Unassigned'}</span>
+              </li>
             ))}
             {moreRow(dueTasks.length)}
           </ul>
@@ -504,9 +528,19 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
         <div className="ds-sec">
           <div className="ds-sec-hd">{dueEvents.length} event{dueEvents.length !== 1 ? 's' : ''}</div>
           <ul className="ds-list">
-            {dueEvents.slice(0, CAP).map(e => (
-              <li key={e.id}>{plainMentions(e.title)}{e.start_time ? ` · ${formatTime12(e.start_time)}` : ''}</li>
-            ))}
+            {dueEvents.slice(0, CAP).map(e => {
+              const ids = eventPeopleIds(e);
+              return (
+                <li key={e.id}>
+                  {plainMentions(e.title)} · {dayLabel(e.date)}{e.start_time ? ` ${formatTime12(e.start_time)}` : ''}
+                  {ids.length > 0 && (
+                    <span className="ds-who"> · {ids.slice(0, 3).map((id, i) => (
+                      <React.Fragment key={id}>{i > 0 ? ', ' : ''}{personTag(id)}</React.Fragment>
+                    ))}{ids.length > 3 ? ` +${ids.length - 3}` : ''}</span>
+                  )}
+                </li>
+              );
+            })}
             {moreRow(dueEvents.length)}
           </ul>
         </div>
@@ -1932,7 +1966,7 @@ function QuickComposer({ onPost }) {
   );
 }
 
-const NotesSection = React.memo(function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, onQuickPost, collapsed, onToggleCollapse }) {
+const NotesSection = React.memo(function NotesSection({ notes, members, getProfile, myId, onAdd, onDelete, onTogglePin, onOpenNote, onShowMember, onVote, onReply, onQuickPost, collapsed, onToggleCollapse, summary }) {
   // Inline reply state — long-pressing a post and then tapping the
   // floating "Reply" pill stashes the target here, which makes the
   // ReplyComposer slide in at the top of the feed (no modal). The
@@ -2034,8 +2068,8 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
 
       {!collapsed && (<>
 
-      {/* Quick composer — plain messages without opening the modal. */}
-      {onQuickPost && <QuickComposer onPost={onQuickPost} />}
+      {/* "Next 24 hours" glance card, rendered inside the Home Feed. */}
+      {summary}
 
       {/* Whole feed lives in one shaded glass box — same family as the
           Tasks "To-do" container — so the section reads as a single
@@ -2228,6 +2262,10 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
       ) : (
         <div className="kbd-hint" style={{ padding: '24px 0' }}>NO POSTS YET — TAP "POST" BELOW</div>
       )}
+
+      {/* Quick composer — plain messages without opening the modal.
+          Sits right above the Post button. */}
+      {onQuickPost && <QuickComposer onPost={onQuickPost} />}
 
       <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
         <span className="plus">+</span> Post
@@ -7642,6 +7680,22 @@ export function MainApp({ profile, onSettings }) {
   // sync, a modal toggling) doesn't re-render every section.
   const getProfile = React.useCallback((id) => members.find(m => m.id === id), [members]);
 
+  // The "Next 24 hours" card lives INSIDE the Home Feed section. Memoize
+  // the element so NotesSection (memoized) only re-renders when the data
+  // the card reads from actually changes, not on every parent render.
+  const daySummary = React.useMemo(() => (
+    <DaySummary
+      tasks={tasks}
+      events={events}
+      expandedEvents={expandedEvents}
+      notes={notes}
+      spaces={spaces}
+      spaceItems={spaceItems}
+      getProfile={getProfile}
+      myId={profile?.id}
+    />
+  ), [tasks, events, expandedEvents, notes, spaces, spaceItems, getProfile, profile?.id]);
+
   // Task CRUD
   const toggleTask = React.useCallback(async (id, completed) => {
     if (!completed) playPop(); // play only when checking ON
@@ -8968,18 +9022,9 @@ export function MainApp({ profile, onSettings }) {
 
         <div className="fb-sec-wrap">
           <LiveClock />
-          <DaySummary
-            tasks={tasks}
-            events={events}
-            expandedEvents={expandedEvents}
-            notes={notes}
-            spaces={spaces}
-            spaceItems={spaceItems}
-            getProfile={getProfile}
-            myId={profile?.id}
-          />
           <NotesSection
             notes={notes}
+            summary={daySummary}
             members={members}
             getProfile={getProfile}
             myId={profile?.id}
