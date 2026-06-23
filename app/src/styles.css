@@ -441,6 +441,50 @@ html { overscroll-behavior-x: none; }
 }
 .fb-tab.active:hover { background: var(--brand-grad); }
 
+/* ── Live clock banner (above the home feed) ─────────────────── */
+.live-clock {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 18px 16px 6px;
+}
+/* Date: the app's mono uppercase meta-label treatment. */
+.live-clock-date {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+/* Time: the brand gradient clipped to text — same signature treatment
+   as section titles / the active tab — so the hero element reads as
+   on-brand in both themes. */
+.live-clock-time {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  background: var(--brand-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+/* The tz tag sits inside the gradient line, so it needs its own solid
+   fill to escape the clip and stay a quiet muted label. */
+.live-clock-tz {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--text-muted);
+  -webkit-text-fill-color: var(--text-muted);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 /* ── Section wrapper — soft gradient with floating glow blobs ── */
 .fb-sec-wrap {
   position: relative;

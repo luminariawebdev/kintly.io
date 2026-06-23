@@ -384,6 +384,32 @@ function MemberName({ profile, isMe, style, className }) {
   return <span className={cls} style={{ '--member-c': color, '--me-color': color, ...style }}>{text}</span>;
 }
 
+// Live date + time banner shown above the home feed. Uses the device's
+// own local timezone (no forced zone), so it follows the user wherever
+// they are — straight from the device clock, no network call. Self-
+// contained so its 1s tick only re-renders this component, not the app.
+function LiveClock() {
+  const [now, setNow] = React.useState(() => new Date());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const dateStr = now.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+  const timeStr = now.toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  });
+  const tzAbbr = (new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+    .formatToParts(now).find(p => p.type === 'timeZoneName') || {}).value || '';
+  return (
+    <div className="live-clock" aria-label={`${dateStr}, ${timeStr} ${tzAbbr}`}>
+      <div className="live-clock-date">{dateStr}</div>
+      <div className="live-clock-time">{timeStr} <span className="live-clock-tz">{tzAbbr}</span></div>
+    </div>
+  );
+}
+
 function ProfileButton({ profile, onClick }) {
   const avatar = profile?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
@@ -8810,6 +8836,7 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
+          <LiveClock />
           <NotesSection
             notes={notes}
             members={members}
