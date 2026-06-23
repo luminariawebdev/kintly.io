@@ -494,6 +494,56 @@ html { overscroll-behavior-x: none; }
   -webkit-text-fill-color: var(--text-muted);
 }
 
+/* ── "Next 24 hours" glance card (read-only) ─────────────────── */
+.day-summary {
+  position: relative;
+  z-index: 1;
+  margin: 2px 16px 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface-glass-strong);
+  border: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-soft);
+}
+.ds-title {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
+  margin-bottom: 9px;
+}
+.ds-sec { margin-bottom: 9px; }
+.ds-sec:last-child { margin-bottom: 0; }
+.ds-sec-hd {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+.ds-list { list-style: none; margin: 0; padding: 0; }
+.ds-list li {
+  position: relative;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding-left: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ds-list li::before {
+  content: '•';
+  position: absolute;
+  left: 2px;
+  color: var(--text-muted);
+}
+.ds-list li strong { color: var(--text-primary); font-weight: 600; }
+.ds-list li.ds-more { color: var(--text-muted); font-style: italic; padding-left: 12px; }
+.ds-list li.ds-more::before { content: ''; }
+
 /* ── Section wrapper — soft gradient with floating glow blobs ── */
 .fb-sec-wrap {
   position: relative;

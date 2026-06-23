@@ -410,6 +410,137 @@ function LiveClock() {
   );
 }
 
+// Read-only "Next 24 hours" glance at the top of the home feed. Tasks
+// and events look FORWARD 24h; posts and space activity look BACK 24h.
+// Hidden entirely when nothing falls in any window. Refreshes its time
+// window every minute. Nothing here is interactive by design.
+function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, getProfile, myId }) {
+  useRerenderEvery(60 * 1000);
+  const now = Date.now();
+  const fwd = now + 24 * 60 * 60 * 1000;
+  const back = now - 24 * 60 * 60 * 1000;
+  const todayIso = localTodayISO();
+  const within24hBack = (iso) => !!iso && new Date(iso).getTime() >= back;
+
+  // Tasks due in the next 24h — open only; a date-only task counts if
+  // it's due today.
+  const dueTasks = (tasks || [])
+    .filter(t => !t.completed && !t.cancelled_at && t.due_date)
+    .filter(t => {
+      if (t.due_time) {
+        const at = new Date(`${t.due_date}T${t.due_time}`).getTime();
+        return at >= now && at <= fwd;
+      }
+      return t.due_date === todayIso;
+    })
+    .sort((a, b) => {
+      const ak = a.due_time ? `${a.due_date}T${a.due_time}` : `${a.due_date}T23:59`;
+      const bk = b.due_time ? `${b.due_date}T${b.due_time}` : `${b.due_date}T23:59`;
+      return ak.localeCompare(bk);
+    });
+
+  // Events occurring in the next 24h — use the expanded occurrences,
+  // one entry per event id (a multi-day event shows once).
+  const seenEv = new Set();
+  const dueEvents = (expandedEvents || [])
+    .filter(e => {
+      if (!e.date) return false;
+      if (e.start_time) {
+        const at = new Date(`${e.date}T${e.start_time}`).getTime();
+        return at >= now && at <= fwd;
+      }
+      return e.date === todayIso; // all-day today
+    })
+    .sort((a, b) => `${a.date}T${a.start_time || '00:00'}`.localeCompare(`${b.date}T${b.start_time || '00:00'}`))
+    .filter(e => { if (seenEv.has(e.id)) return false; seenEv.add(e.id); return true; });
+
+  // Posts from the last 24h.
+  const recentPosts = (notes || [])
+    .filter(n => !n.payload?.deleted && within24hBack(n.created_at))
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+
+  // Space activity in the last 24h: items added / checked off, plus
+  // tasks/events/notes tagged into a space (by creation time).
+  const spaceMap = new Map();
+  const noteSpace = (sid, text) => { if (!sid) return; if (!spaceMap.has(sid)) spaceMap.set(sid, []); spaceMap.get(sid).push(text); };
+  (spaceItems || []).forEach(it => {
+    if (within24hBack(it.created_at)) noteSpace(it.space_id, `added “${it.title}”`);
+    if (it.completed && within24hBack(it.completed_at)) noteSpace(it.space_id, `checked off “${it.title}”`);
+  });
+  (tasks || []).forEach(t => { if (t.space_id && within24hBack(t.created_at)) noteSpace(t.space_id, `task “${t.title}”`); });
+  (events || []).forEach(e => { if (e.space_id && within24hBack(e.created_at)) noteSpace(e.space_id, `event “${e.title}”`); });
+  (notes || []).forEach(n => { if (n.space_id && !n.payload?.deleted && within24hBack(n.created_at)) noteSpace(n.space_id, 'a post'); });
+  const spaceEntries = [...spaceMap.entries()]
+    .map(([id, changes]) => ({ space: (spaces || []).find(s => s.id === id), changes }))
+    .filter(e => e.space);
+
+  if (!dueTasks.length && !dueEvents.length && !recentPosts.length && !spaceEntries.length) return null;
+
+  const CAP = 5;
+  const moreRow = (n) => n > CAP ? <li className="ds-more">+{n - CAP} more</li> : null;
+  const postSnippet = (n) => {
+    const txt = (n.content || '').trim();
+    if (txt) return plainMentions(txt);
+    return n.type === 'poll' ? 'a poll' : 'a post';
+  };
+
+  return (
+    <div className="day-summary" aria-label="Next 24 hours summary">
+      <div className="ds-title">Next 24 hours</div>
+
+      {dueTasks.length > 0 && (
+        <div className="ds-sec">
+          <div className="ds-sec-hd">{dueTasks.length} task{dueTasks.length !== 1 ? 's' : ''} due</div>
+          <ul className="ds-list">
+            {dueTasks.slice(0, CAP).map(t => (
+              <li key={t.id}>{t.title}{t.due_time ? ` · ${formatTime12(t.due_time)}` : ''}</li>
+            ))}
+            {moreRow(dueTasks.length)}
+          </ul>
+        </div>
+      )}
+
+      {dueEvents.length > 0 && (
+        <div className="ds-sec">
+          <div className="ds-sec-hd">{dueEvents.length} event{dueEvents.length !== 1 ? 's' : ''}</div>
+          <ul className="ds-list">
+            {dueEvents.slice(0, CAP).map(e => (
+              <li key={e.id}>{plainMentions(e.title)}{e.start_time ? ` · ${formatTime12(e.start_time)}` : ''}</li>
+            ))}
+            {moreRow(dueEvents.length)}
+          </ul>
+        </div>
+      )}
+
+      {recentPosts.length > 0 && (
+        <div className="ds-sec">
+          <div className="ds-sec-hd">{recentPosts.length} post{recentPosts.length !== 1 ? 's' : ''}</div>
+          <ul className="ds-list">
+            {recentPosts.slice(0, CAP).map(n => {
+              const author = getProfile?.(n.created_by);
+              const who = author ? (author.id === myId ? 'You' : author.display_name) : 'Someone';
+              return <li key={n.id}><strong>{who}:</strong> {postSnippet(n)}</li>;
+            })}
+            {moreRow(recentPosts.length)}
+          </ul>
+        </div>
+      )}
+
+      {spaceEntries.length > 0 && (
+        <div className="ds-sec">
+          <div className="ds-sec-hd">{spaceEntries.length} space{spaceEntries.length !== 1 ? 's' : ''} updated</div>
+          <ul className="ds-list">
+            {spaceEntries.slice(0, CAP).map(({ space, changes }) => (
+              <li key={space.id}>{space.emoji || '✨'} {space.title} — {changes.slice(0, 3).join(', ')}{changes.length > 3 ? '…' : ''}</li>
+            ))}
+            {moreRow(spaceEntries.length)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProfileButton({ profile, onClick }) {
   const avatar = profile?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
@@ -8837,6 +8968,16 @@ export function MainApp({ profile, onSettings }) {
 
         <div className="fb-sec-wrap">
           <LiveClock />
+          <DaySummary
+            tasks={tasks}
+            events={events}
+            expandedEvents={expandedEvents}
+            notes={notes}
+            spaces={spaces}
+            spaceItems={spaceItems}
+            getProfile={getProfile}
+            myId={profile?.id}
+          />
           <NotesSection
             notes={notes}
             members={members}
