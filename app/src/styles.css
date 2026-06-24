@@ -136,6 +136,11 @@ html, body {
   background: var(--shell-bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Stop iOS Safari from auto-inflating text on landscape rotation (it
+     scales font sizes up and never restores them when you rotate back to
+     portrait, leaving everything oversized). Lock it to the authored size. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   /* Lock horizontal scroll + disable browser back/forward swipe */
   overflow-x: hidden;
   overscroll-behavior-x: none;
