@@ -1042,6 +1042,24 @@ html { overscroll-behavior-x: none; }
 .cal-cell .num { font-family: 'Inter', system-ui, sans-serif; font-size: 16px; font-weight: 600; }
 .cal-cell .evt-chip { font-family: 'Inter', system-ui, sans-serif; font-weight: 500; }
 .cal-cell .more { font-size: 12px; opacity: 0.65; font-weight: 500; }
+/* Attendee dots inside a day cell — a person's emoji/avatar or profile-color
+   circle, instead of the old cut-off title chips. */
+.cal-attendees {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+  margin-top: 5px;
+}
+.cal-more {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  line-height: 1;
+}
+.dot.cal { width: 16px; height: 16px; }
+.dot.cal.avatar-emoji { font-size: 17px; }
 
 .evt-legend {
   display: flex; gap: 14px; flex-wrap: wrap;

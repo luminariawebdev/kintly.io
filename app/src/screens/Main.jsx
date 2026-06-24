@@ -1079,6 +1079,19 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   );
 });
 
+// Effective attendees of an event, for the calendar dots. Whoever's tagged
+// (or the creator, if the event was made with nobody tagged — the "I made
+// this for myself" case), minus anyone who explicitly RSVP'd "no". Unanswered
+// and "maybe"/"yes" all count as going, per the product rule.
+function eventAttendeeIds(e) {
+  if (!e) return [];
+  const rsvps = (e.rsvps && typeof e.rsvps === 'object') ? e.rsvps : {};
+  const base = (Array.isArray(e.attendees) && e.attendees.length)
+    ? e.attendees
+    : (e.created_by ? [e.created_by] : []);
+  return base.filter(id => rsvps[id] !== 'no');
+}
+
 // ─── Calendar Section ─────────────────────────────────────────────────────────
 const CalendarSection = React.memo(function CalendarSection({ events, expandedEvents, members, getProfile, myId, onAdd, onAddPersonal, onDayClick, onDelete, onShowMonth, onShowEvent, collapsed, onToggleCollapse, view, setView }) {
   const now = new Date();
@@ -1231,19 +1244,26 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
               tabIndex={0}
             >
               <span className="num">{c.d}</span>
-              {evs.slice(0, 2).map(e => {
-                const p = getProfile(e.created_by);
-                // Recurring instances share an event id across dates, so
-                // include the occurrence date in the key to keep React's
-                // reconciler from collapsing two chips on the same day.
-                const key = `${e.id}::${e._occDate || e.date}`;
+              {(() => {
+                // One dot per attendee across all of the day's events, deduped
+                // so a person shows once even if they're on several. Each dot is
+                // their emoji/avatar, or a circle in their profile color.
+                const ids = [];
+                const seen = new Set();
+                evs.forEach(e => eventAttendeeIds(e).forEach(id => {
+                  if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+                }));
+                if (ids.length === 0) return null;
+                const CAP = 4;
+                const shown = ids.slice(0, CAP);
+                const extra = ids.length - shown.length;
                 return (
-                  <div key={key} className="evt-chip" style={{ background: getColor(p?.color || e.color), fontSize: 11, lineHeight: 1.2, padding: '3px 5px', borderRadius: 4, color: '#fff', overflow: 'hidden', wordBreak: 'break-word', overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, marginTop: 2, cursor: 'pointer' }} title={e.title}>
-                    {e.title}
+                  <div className="cal-attendees">
+                    {shown.map(id => <Dot key={id} profile={getProfile(id)} size="cal" />)}
+                    {extra > 0 && <span className="cal-more">+{extra}</span>}
                   </div>
                 );
-              })}
-              {evs.length > 2 && <span className="more">+{evs.length - 2}</span>}
+              })()}
             </div>
           );
         })}
@@ -7921,16 +7941,22 @@ export function MainApp({ profile, onSettings }) {
   // Event CRUD
   const addEvent = async (data) => {
     const { attendees = [], recurrence = null, linkedTasks = [], ...rest } = data;
-    // The creator is auto-RSVP'd as Going so the modal shows a sensible
-    // default state right after save (and so the upcoming list / event
-    // chip can reflect "1 going" instead of blank).
-    const initialRsvps = { [profile.id]: 'yes' };
+    // Attendee default: if the creator tagged nobody, the event is "for
+    // themselves" and they become the sole attendee. If they tagged others
+    // (but not themselves), the creator is NOT an attendee — only the people
+    // they tagged. (Private events keep an empty list.)
+    const finalAttendees = (!rest.is_private && attendees.length === 0)
+      ? [profile.id]
+      : attendees;
+    // Only auto-RSVP the creator as Going when they're actually an attendee;
+    // an event made for others shouldn't mark the creator as going.
+    const initialRsvps = finalAttendees.includes(profile.id) ? { [profile.id]: 'yes' } : {};
     let payload = {
       group_id: profile.group_id,
       created_by: profile.id,
       color: profile.color || 'coral',
       ...rest,
-      attendees,
+      attendees: finalAttendees,
       recurrence,
       rsvps: initialRsvps,
     };
