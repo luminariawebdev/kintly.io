@@ -510,14 +510,22 @@ html { overscroll-behavior-x: none; }
   border-radius: 14px;
   overflow: hidden;
   background:
-    linear-gradient(140deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.12) 36%, rgba(255, 255, 255, 0.04) 100%),
+    linear-gradient(105deg, transparent 22%, rgba(255, 255, 255, 0.025) 37%, rgba(255, 255, 255, 0.10) 50%, rgba(255, 255, 255, 0.025) 63%, transparent 78%),
+    linear-gradient(140deg, rgba(255, 255, 255, 0.30) 0%, rgba(255, 255, 255, 0.10) 36%, rgba(255, 255, 255, 0.04) 100%),
     var(--glass-pane);
+  background-repeat: no-repeat;
+  /* The first layer is an oversized diagonal "glint". Its horizontal
+     position tracks --sheen (0..1), which JS updates from each box's
+     position in the viewport, so the light sweeps across the glass as you
+     scroll — like walking past a window. Other layers stay put. */
+  background-size: 260% 100%, 100% 100%, 100% 100%;
+  background-position: calc(var(--sheen, 0.5) * 100%) 0, 0 0, 0 0;
   backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   -webkit-backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   border: 1px solid var(--border-soft);
   box-shadow:
-    inset 2px 2px 1px 0 rgba(255, 255, 255, 0.5),
-    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.4),
+    inset 0 1px 1px rgba(255, 255, 255, 0.6),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
     var(--shadow-soft);
 }
 .ds-title {
@@ -985,7 +993,11 @@ html { overscroll-behavior-x: none; }
 
 .cal-grid {
   display: grid; grid-template-columns: repeat(7, 1fr);
-  background: var(--surface-glass);
+  gap: 5px;
+  padding: 5px;
+  /* Recessed backing — shows through the gaps so each day reads as its own
+     rounded tile instead of a cell in a hard-edged grid. */
+  background: var(--glass-pane);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -993,14 +1005,13 @@ html { overscroll-behavior-x: none; }
 }
 .cal-cell {
   aspect-ratio: 1 / 1.84;
-  border-right: 1px solid rgba(15, 30, 60, 0.05);
-  border-bottom: 1px solid rgba(15, 30, 60, 0.05);
   padding: 8px 8px 6px;
   display: flex; flex-direction: column;
   gap: 4px;
   font-size: 13px;
   position: relative;
-  background: transparent;
+  background: var(--surface-glass);
+  border-radius: 9px;
   overflow: hidden;
   cursor: pointer;
   transition: all 0.25s var(--ease);
@@ -1833,16 +1844,24 @@ html { overscroll-behavior-x: none; }
   margin: 6px 0 18px;
   padding: 12px 0;
   background:
-    linear-gradient(140deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.12) 36%, rgba(255, 255, 255, 0.04) 100%),
+    linear-gradient(105deg, transparent 22%, rgba(255, 255, 255, 0.025) 37%, rgba(255, 255, 255, 0.10) 50%, rgba(255, 255, 255, 0.025) 63%, transparent 78%),
+    linear-gradient(140deg, rgba(255, 255, 255, 0.30) 0%, rgba(255, 255, 255, 0.10) 36%, rgba(255, 255, 255, 0.04) 100%),
     var(--glass-pane);
+  background-repeat: no-repeat;
+  /* The first layer is an oversized diagonal "glint". Its horizontal
+     position tracks --sheen (0..1), which JS updates from each box's
+     position in the viewport, so the light sweeps across the glass as you
+     scroll — like walking past a window. Other layers stay put. */
+  background-size: 260% 100%, 100% 100%, 100% 100%;
+  background-position: calc(var(--sheen, 0.5) * 100%) 0, 0 0, 0 0;
   backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   -webkit-backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   border: 1px solid var(--border-glass);
   border-radius: var(--r-lg);
   /* glossy rim (the macOS shine layer) */
   box-shadow:
-    inset 2px 2px 1px 0 rgba(255, 255, 255, 0.5),
-    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.4),
+    inset 0 1px 1px rgba(255, 255, 255, 0.6),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
     var(--shadow-soft);
   overflow: hidden;
 }
@@ -2519,8 +2538,16 @@ html { overscroll-behavior-x: none; }
   margin-top: 32px;
   padding: 26px 16px 18px;
   background:
-    linear-gradient(140deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.12) 36%, rgba(255, 255, 255, 0.04) 100%),
+    linear-gradient(105deg, transparent 22%, rgba(255, 255, 255, 0.025) 37%, rgba(255, 255, 255, 0.10) 50%, rgba(255, 255, 255, 0.025) 63%, transparent 78%),
+    linear-gradient(140deg, rgba(255, 255, 255, 0.30) 0%, rgba(255, 255, 255, 0.10) 36%, rgba(255, 255, 255, 0.04) 100%),
     var(--glass-pane);
+  background-repeat: no-repeat;
+  /* The first layer is an oversized diagonal "glint". Its horizontal
+     position tracks --sheen (0..1), which JS updates from each box's
+     position in the viewport, so the light sweeps across the glass as you
+     scroll — like walking past a window. Other layers stay put. */
+  background-size: 260% 100%, 100% 100%, 100% 100%;
+  background-position: calc(var(--sheen, 0.5) * 100%) 0, 0 0, 0 0;
   backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   -webkit-backdrop-filter: blur(13px) saturate(190%) brightness(1.06);
   border: 1px solid var(--border-glass);

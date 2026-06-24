@@ -9,16 +9,17 @@ const FRAME_W = 402;
 const FRAME_H = 874;
 
 // Resolve the actual visual theme given a user preference and current state.
-// 'auto' = follow the OS color-scheme preference, matching iOS / macOS /
-// Windows / web convention. (Previously this layered a time-of-day rule on
-// top — auto went dark after 7pm regardless of the system setting — which
-// surprised users whose OS was on light mode.)
+// 'auto' = a fixed local-time schedule: light from 7am to 7pm, dark from
+// 7pm to 7am. (We used to follow the OS color-scheme setting, but on iOS
+// that depends on the phone's own light/dark schedule which didn't reliably
+// reach the web app, so auto often never switched. A hard clock rule is
+// predictable; anyone who wants otherwise can pick Light or Dark manually.)
+const AUTO_LIGHT_START = 7;  // 07:00 — switch to light
+const AUTO_DARK_START = 19;  // 19:00 — switch to dark
 function resolveTheme(pref) {
   if (pref === 'light' || pref === 'dark') return pref;
-  const sysDark = typeof window !== 'undefined' && window.matchMedia
-    ? window.matchMedia('(prefers-color-scheme: dark)').matches
-    : false;
-  return sysDark ? 'dark' : 'light';
+  const hour = new Date().getHours();
+  return hour >= AUTO_LIGHT_START && hour < AUTO_DARK_START ? 'light' : 'dark';
 }
 
 export const ThemeContext = React.createContext({ pref: 'auto', setPref: () => {}, resolved: 'light' });
@@ -56,22 +57,56 @@ export function App() {
   const [resolved, setResolved] = React.useState(() => resolveTheme(themePref));
   const isMobile = useIsMobile();
 
-  // Re-resolve on preference change or system theme change. matchMedia fires
-  // the listener whenever the OS toggles light/dark, so no polling needed.
+  // Re-resolve on preference change. For 'auto' the theme is on a clock
+  // schedule, so it has to flip at the 7am / 7pm boundaries while the app is
+  // open. Re-check once a minute — negligible cost, and setResolved bails out
+  // when the value is unchanged, so a re-render only happens at the actual
+  // switch. (Light/Dark are fixed, so no timer is needed for them.)
   React.useEffect(() => {
     try { localStorage.setItem('kinnekt:theme', themePref); } catch {}
     setResolved(resolveTheme(themePref));
 
-    const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => setResolved(resolveTheme(themePref));
-    mq?.addEventListener?.('change', onChange);
-    return () => { mq?.removeEventListener?.('change', onChange); };
+    if (themePref !== 'auto') return;
+    const id = setInterval(() => setResolved(resolveTheme('auto')), 60 * 1000);
+    return () => clearInterval(id);
   }, [themePref]);
 
   // Apply data-theme attribute to root so CSS overrides cascade
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolved);
   }, [resolved]);
+
+  // Moving "glint" on the glass cards: as a card travels up through the
+  // viewport, slide its sheen highlight across — the way light tracks over a
+  // window as you walk past it. We map each card's vertical center to a 0..1
+  // value and write it to the --sheen custom property the CSS reads; one
+  // rAF-throttled pass on scroll/resize, querying live so cards that mount or
+  // unmount are handled for free. Plain getBoundingClientRect + a CSS var, so
+  // it works in iOS Safari (unlike CSS scroll-driven animations).
+  React.useEffect(() => {
+    let raf = 0;
+    const paint = () => {
+      raf = 0;
+      const vh = window.innerHeight || 1;
+      document.querySelectorAll('.feed-box, .day-summary, .fb-listbox, .upcoming-box')
+        .forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.bottom < -80 || r.top > vh + 80) return; // skip off-screen
+          const p = (r.top + r.height / 2) / vh;          // 0 = top, 1 = bottom
+          el.style.setProperty('--sheen', Math.max(-0.15, Math.min(1.15, p)).toFixed(3));
+        });
+    };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(paint); };
+    // Defer the first pass so freshly-rendered cards are in the DOM.
+    raf = requestAnimationFrame(paint);
+    document.addEventListener('scroll', onScroll, true); // capture: catch inner scrollers
+    window.addEventListener('resize', onScroll);
+    return () => {
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [screen]);
 
   const loadProfile = React.useCallback(async (userId) => {
     setProfileErr('');

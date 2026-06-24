@@ -7,6 +7,10 @@ import { VERSION_LABEL } from '../lib/build';
 
 export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
   const theme = React.useContext(ThemeContext);
+  // Theme is staged locally and only applied on Save (mirrors the Profile
+  // section). Auto is the default; the chips just set this pending value.
+  const [pendingTheme, setPendingTheme] = React.useState(theme.pref);
+  const themeDirty = pendingTheme !== theme.pref;
   const [color, setColor] = React.useState(profile?.color ?? 'coral');
   const [showSw, setShowSw] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -437,8 +441,8 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                 ].map(opt => (
                   <button
                     key={opt.id}
-                    onClick={() => theme.setPref(opt.id)}
-                    className={'fb-chip' + (theme.pref === opt.id ? ' on' : '')}
+                    onClick={() => setPendingTheme(opt.id)}
+                    className={'fb-chip' + (pendingTheme === opt.id ? ' on' : '')}
                     style={{ flex: 1, padding: '8px 10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                   >
                     <span style={{ fontSize: 14, lineHeight: 1 }}>{opt.icon}</span>
@@ -446,12 +450,32 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                   </button>
                 ))}
               </div>
-              {theme.pref === 'auto' && (
+              {pendingTheme === 'auto' && (
                 <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                  Currently {theme.resolved} — follows your system settings.
+                  {themeDirty ? 'Light 7am–7pm, dark 7pm–7am.' : `Currently ${theme.resolved} — light 7am–7pm, dark 7pm–7am.`}
                 </div>
               )}
             </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '8px 0 6px' }}>
+            <span style={{
+              fontSize: 11,
+              color: themeDirty ? 'var(--kinnekt-purple)' : 'var(--text-muted)',
+              fontStyle: 'italic',
+            }}>
+              {themeDirty ? 'Unsaved changes' : 'All changes saved'}
+            </span>
+            <button
+              className="fb-btn solid"
+              onClick={() => theme.setPref(pendingTheme)}
+              disabled={!themeDirty}
+              style={{
+                width: 'auto', padding: '10px 22px', fontSize: 13,
+                opacity: !themeDirty ? 0.45 : 1,
+                cursor: !themeDirty ? 'not-allowed' : 'pointer',
+              }}
+            >Save</button>
           </div>
 
           <div className="fb-sec-label" style={{ marginBottom: 8 }}>Account</div>
