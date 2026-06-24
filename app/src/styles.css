@@ -1073,6 +1073,16 @@ html { overscroll-behavior-x: none; }
   color: var(--text-secondary);
 }
 .evt-legend .lg-item { display: flex; gap: 6px; align-items: center; }
+/* Legend lives inside the calendar box as a full-width footer row under the
+   day tiles, separated by a faint rule. */
+.cal-grid > .evt-legend {
+  grid-column: 1 / -1;
+  justify-content: center;
+  gap: 12px;
+  margin: 3px 3px 0;
+  padding: 10px 4px 3px;
+  border-top: 1px solid var(--border-glass);
+}
 
 .upcoming { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .upcoming-row {
@@ -2578,6 +2588,12 @@ html { overscroll-behavior-x: none; }
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.12), var(--shadow-soft);
 }
 .upcoming-box .upcoming { margin-top: 0; }
+/* The whole calendar section sits in one big glass box (.cal-section-box).
+   The Upcoming list inside it is chromeless (no nested glass box) but keeps
+   position:relative so its "Upcoming" pill still floats as a divider between
+   the Group/Personal toggle and the event rows. */
+.upcoming-inner { position: relative; margin-top: 34px; }
+.cal-section-box .upcoming-inner .upcoming { margin-top: 4px; }
 .fb-listbox .spaces-stack { margin-top: 0; }
 .fb-listbox-legend, .upcoming-legend {
   position: absolute;
@@ -2611,6 +2627,13 @@ html { overscroll-behavior-x: none; }
 
 /* ── Form fields ─────────────────────────────────────────────── */
 .field { display: flex; flex-direction: column; margin-bottom: 14px; }
+.field-hint {
+  margin-top: 6px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.field-hint strong { color: var(--text-secondary); font-weight: 700; }
 .field label {
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 11px;

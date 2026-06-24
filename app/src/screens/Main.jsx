@@ -954,19 +954,9 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
         </button>
       </div>
 
-      <div className="fb-chips">
-        {[['week', 'This week'], ['all', 'All']].map(([k, label]) => (
-          <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
-        ))}
-      </div>
-
       {view === 'group' && (<>
-      <button className="fb-btn" onClick={onAdd}>
-        <span className="plus">+</span> Add task
-      </button>
-
       {grouped.length === 0 && unassigned.length === 0 && doneItems.length === 0 ? (
-        <div className="kbd-hint" style={{ padding: '20px 0' }}>NO TASKS — ADD ONE ABOVE</div>
+        <div className="kbd-hint" style={{ padding: '20px 0' }}>NO TASKS — ADD ONE BELOW</div>
       ) : (
         <div className="fb-listbox">
           <div className="fb-listbox-legend">To-do</div>
@@ -1025,6 +1015,14 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
           )}
         </div>
       )}
+      <div className="fb-chips" style={{ marginTop: 14 }}>
+        {[['week', 'This week'], ['all', 'All']].map(([k, label]) => (
+          <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
+        ))}
+      </div>
+      <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
+        <span className="plus">+</span> Add task
+      </button>
       </>)}
 
       {/* ── Personal todos view ────────────────────────────────────
@@ -1033,11 +1031,8 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
           since assignee is always "me". */}
       {view === 'personal' && (<>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>🔒 Only you can see these.</div>
-        <button className="fb-btn" onClick={onAddPersonal || onAdd}>
-          <span className="plus">+</span> Add personal task
-        </button>
         {openPersonal.length === 0 && donePersonal.length === 0 ? (
-          <div className="kbd-hint" style={{ padding: '20px 0' }}>NO PERSONAL TODOS — ADD ONE ABOVE</div>
+          <div className="kbd-hint" style={{ padding: '20px 0' }}>NO PERSONAL TODOS — ADD ONE BELOW</div>
         ) : (
           <div className="fb-listbox">
             <div className="fb-listbox-legend">Your private list</div>
@@ -1070,6 +1065,14 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
             )}
           </div>
         )}
+        <div className="fb-chips" style={{ marginTop: 14 }}>
+          {[['week', 'This week'], ['all', 'All']].map(([k, label]) => (
+            <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
+          ))}
+        </div>
+        <button className="fb-btn" onClick={onAddPersonal || onAdd} style={{ marginTop: 14 }}>
+          <span className="plus">+</span> Add personal task
+        </button>
       </>)}
       </>)}
     </section>
@@ -1191,29 +1194,9 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
         </div>
       </div>
 
-      {!collapsed && (<>
-      {/* View toggle: shared group events vs the current user's
-          private events. Counts shown so the inactive tab still
-          surfaces what's queued. */}
-      <div className="task-view-toggle">
-        <button
-          type="button"
-          className={'task-view-tab' + (view === 'group' ? ' on' : '')}
-          onClick={() => setView('group')}
-        >
-          Group
-          <span className="task-view-count">{groupOpenCount}</span>
-        </button>
-        <button
-          type="button"
-          className={'task-view-tab' + (view === 'personal' ? ' on' : '')}
-          onClick={() => setView('personal')}
-        >
-          🔒 Personal
-          <span className="task-view-count">{personalOpenCount}</span>
-        </button>
-      </div>
-
+      {!collapsed && (
+      <div className="upcoming-box cal-section-box">
+        <div className="upcoming-legend">Calendar</div>
       <div className="cal-bar">
         <button className="cal-nav" aria-label="Previous month" onClick={prevMonth}>‹</button>
         <div className="mo">{MONTH_NAMES[calMonth]} {calYear}</div>
@@ -1264,52 +1247,38 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
             </div>
           );
         })}
+        <div className="evt-legend">
+          {members.map(m => (
+            <span key={m.id} className="lg-item">
+              <Dot profile={m} /> <MemberName profile={m} isMe={m.id === myId} />
+            </span>
+          ))}
+        </div>
       </div>
 
-      <div className="evt-legend">
-        {members.map(m => (
-          <span key={m.id} className="lg-item">
-            <Dot profile={m} /> <MemberName profile={m} isMe={m.id === myId} />
-          </span>
-        ))}
-      </div>
-
-      {/* Two explicit Add buttons so the user doesn't have to flip
-          the Group/Personal toggle just to drop something in the
-          other bucket. The button label is always clear about
-          which calendar the new event lands in. */}
-      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+      {/* View toggle: shared group events vs the current user's private
+          events. Counts shown so the inactive tab still surfaces what's
+          queued. Sits between the calendar and the Upcoming list. */}
+      <div className="task-view-toggle" style={{ marginTop: 14 }}>
         <button
-          className="fb-btn"
-          onClick={onAdd}
-          style={{ flex: 1 }}
+          type="button"
+          className={'task-view-tab' + (view === 'group' ? ' on' : '')}
+          onClick={() => setView('group')}
         >
-          <span className="plus">+</span> Group event
+          Group
+          <span className="task-view-count">{groupOpenCount}</span>
         </button>
         <button
-          className="fb-btn"
-          onClick={onAddPersonal || onAdd}
-          style={{ flex: 1 }}
+          type="button"
+          className={'task-view-tab' + (view === 'personal' ? ' on' : '')}
+          onClick={() => setView('personal')}
         >
-          <span aria-hidden style={{ marginRight: 4 }}>🔒</span> Personal event
+          🔒 Personal
+          <span className="task-view-count">{personalOpenCount}</span>
         </button>
       </div>
 
-      {/* Range tabs for the Upcoming list. "This week" = today through
-          Saturday, "This month" = today through end of the current
-          month. Same chip styling used by the Tasks filter for visual
-          consistency. */}
-      <div className="fb-chips" style={{ marginTop: 14 }}>
-        {[['week', 'This week'], ['month', 'This month'], ['all', 'All']].map(([k, label]) => (
-          <button
-            key={k}
-            className={'fb-chip' + (upcomingFilter === k ? ' on' : '')}
-            onClick={() => setUpcomingFilter(k)}
-          >{label}</button>
-        ))}
-      </div>
-
-      <div className="upcoming-box">
+      <div className="upcoming-inner">
         <div className="upcoming-legend">Upcoming</div>
         {upcoming.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', padding: '8px 2px' }}>
@@ -1390,7 +1359,35 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
           </div>
         )}
       </div>
-      </>)}
+
+      {/* Range tabs for the Upcoming list. "This week" = today through
+          Saturday, "This month" = today through end of the current
+          month. Same chip styling used by the Tasks filter for visual
+          consistency. */}
+      <div className="fb-chips" style={{ marginTop: 14 }}>
+        {[['week', 'This week'], ['month', 'This month'], ['all', 'All']].map(([k, label]) => (
+          <button
+            key={k}
+            className={'fb-chip' + (upcomingFilter === k ? ' on' : '')}
+            onClick={() => setUpcomingFilter(k)}
+          >{label}</button>
+        ))}
+      </div>
+
+      {/* Single Add button, placed below the Upcoming list. The modal has
+          the Group/Personal (Shared / Personal · only you) toggle, so one
+          entry point is enough. */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+        <button
+          className="fb-btn"
+          onClick={onAdd}
+          style={{ flex: 1 }}
+        >
+          <span className="plus">+</span> Add event
+        </button>
+      </div>
+      </div>
+      )}
     </section>
   );
 });
@@ -2643,7 +2640,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
       <div className="field">
         <label>Title</label>
         <div style={{ position: 'relative' }}>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?  Type # to tag a Space" onKeyDown={e => e.key === 'Enter' && save()} />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs doing?" onKeyDown={e => e.key === 'Enter' && save()} />
           <SpaceHashtagDropdown
             value={title}
             spaces={spaces}
@@ -2651,6 +2648,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
             onPickSpace={setSpaceId}
           />
         </div>
+        <span className="field-hint">Type <strong>#</strong> to tag a Space</span>
       </div>
       <div className="field">
         <label>Visibility</label>
@@ -3007,7 +3005,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
       <div className="field">
         <label>Title</label>
         <div style={{ position: 'relative' }}>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice  ·  Type # to tag a Space" />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Soccer practice" />
           <SpaceHashtagDropdown
             value={title}
             spaces={spaces}
@@ -3015,6 +3013,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
             onPickSpace={setSpaceId}
           />
         </div>
+        <span className="field-hint">Type <strong>#</strong> to tag a Space</span>
       </div>
       <div className="field">
         <label>Visibility</label>
@@ -7285,12 +7284,6 @@ const SpacesSection = React.memo(function SpacesSection({
       </div>
 
       {!collapsed && (<>
-      {/* Same primary section-action button pattern as "+ Add task" and
-          "+ Post" — single tap opens the full create-space modal. */}
-      <button className="fb-btn" onClick={() => onOpenAddModal?.()}>
-        <span className="plus">+</span> Create space
-      </button>
-
       {visible.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', padding: '16px 2px', lineHeight: 1.5, marginTop: 32 }}>
           No spaces yet — try <strong>Italy Trip</strong>, <strong>Christmas</strong>, or <strong>Garden</strong>.<br />
@@ -7315,6 +7308,11 @@ const SpacesSection = React.memo(function SpacesSection({
           </div>
         </div>
       )}
+      {/* Single tap opens the full create-space modal. Placed below the
+          Spaces list, matching the Add task / Add event placement. */}
+      <button className="fb-btn" onClick={() => onOpenAddModal?.()} style={{ marginTop: 14 }}>
+        <span className="plus">+</span> Create space
+      </button>
       </>)}
     </section>
   );
