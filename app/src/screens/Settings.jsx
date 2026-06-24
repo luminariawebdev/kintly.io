@@ -342,7 +342,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                     >
                       <div style={{
                         padding: '8px 14px 6px',
-                        fontFamily: 'Inter, system-ui, sans-serif',
+                        fontFamily: 'var(--font-main)',
                         fontSize: 10,
                         fontWeight: 600,
                         textTransform: 'uppercase',

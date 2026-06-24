@@ -282,7 +282,7 @@ function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
           color: '#FFFFFF',
           border: 0,
           padding: 0,
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: 'var(--font-main)',
           fontSize: 13,
           fontWeight: 700,
           letterSpacing: '0.04em',
@@ -617,8 +617,22 @@ function formatDue(dueDate) {
   if (diff < 0) return 'Overdue';
   if (diff === 0) return 'Today';
   if (diff === 1) return 'Tomorrow';
-  if (diff <= 7) return 'This week';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  // Within a week, the weekday alone is unambiguous ("Wednesday"). Past a
+  // week, add the month + day so it isn't confused with next week.
+  if (diff <= 7) return d.toLocaleDateString('en-US', { weekday: 'long' });
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+// Day label for the postpone note. Within a week (either direction) the
+// weekday alone is clear ("Saturday"); past a week, add the month + day
+// ("Saturday, Jun 27").
+function formatExactDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T00:00:00');
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((d - today) / 86400000);
+  if (Math.abs(diff) <= 7) return d.toLocaleDateString('en-US', { weekday: 'long' });
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
 function dueDateOverdue(dueDate) {
@@ -761,9 +775,11 @@ function computeNextDue(task) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// Completed tasks auto-vanish 72h after they're checked off (the DB purge
+// Completed tasks auto-vanish 8 days after they're checked off (the DB purge
 // lives in fetchAll; the Tasks section also hides them live at this mark).
-const COMPLETED_TTL_MS = 72 * 60 * 60 * 1000;
+// 8 days > the Load card's 7-day window, so a completed task survives long
+// enough to be counted there before it's removed.
+const COMPLETED_TTL_MS = 8 * 24 * 60 * 60 * 1000;
 
 // Remaining time before a completed task disappears, e.g. "2d 6h" / "5h".
 // null when there's no completed_at (older rows) or it's already past due.
@@ -780,6 +796,16 @@ function completedTtlLabel(completedAt, now = Date.now()) {
   return `${hours}h`;
 }
 
+// Short "when completed" stamp, e.g. "Jun 23 · 3:14 PM". Used on completed
+// task rows and in the Load breakdown.
+function formatCompletedAt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
 // Force a re-render on a fixed interval (used so the completed-task
 // countdown ticks down even when nothing else changes — every 6 hours).
 function useRerenderEvery(ms) {
@@ -791,7 +817,7 @@ function useRerenderEvery(ms) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onRelease, onPass, onRespond }) {
+function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone }) {
   const color = getColor(assignee?.color);
   const isCancelled = !!task.cancelled_at;
   const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
@@ -815,6 +841,9 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
   const assignedToMe = task.assigned_to === myId;
   const canClaim = onClaim && live && !task.assigned_to && !offer;
   const canHandOff = onPass && onRelease && live && assignedToMe;
+  // Postpone works on personal/private tasks too (you just can't hand those
+  // off), so it isn't gated on `live` — only on it being yours and open.
+  const canPostpone = onPostpone && !task.completed && !isCancelled && assignedToMe;
   const closeHandoff = () => { setHanding(false); setReleasing(false); setReason(''); };
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
   const chip = (bg, fg) => ({
@@ -822,7 +851,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
     fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 999,
     border: '1px solid var(--border-glass)', background: bg || 'var(--surface-glass)',
     color: fg || 'var(--text-secondary)', cursor: 'pointer',
-    fontFamily: 'Inter, system-ui, sans-serif',
+    fontFamily: 'var(--font-main)',
   });
   return (
     <SwipeToDelete onDelete={onDelete} disabled={!canActOnTask}>
@@ -871,13 +900,42 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
             }}>Cancelled</span>
           )}
         </div>
-        {task.due_date && !isCancelled && (
+        {task.completed ? (
+          /* Completed: show when it was done + who did it, NOT the old
+             due/overdue label (a finished task is never "overdue"). */
+          <div style={{ fontSize: 11, marginTop: 2, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+            Completed{task.completed_at ? ` ${formatCompletedAt(task.completed_at)}` : ''}
+            {assignee && (
+              <span style={{ textTransform: 'none' }}> · by <span style={{ color: getColor(assignee.color), fontWeight: 600 }}>{assignee.id === myId ? 'you' : assignee.display_name}</span></span>
+            )}
+          </div>
+        ) : task.postponed_by && !isCancelled ? (
+          /* Postponed: show the new date + who moved it and from when. */
+          <div style={{ marginTop: 2 }}>
+            <div style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: overdue ? '#E27457' : 'var(--kinnekt-purple)' }}>
+              ↪ Postponed to {formatExactDate(task.due_date)}{task.due_time ? ` · ${formatTime12(task.due_time)}` : ''}
+            </div>
+            {(() => {
+              const pp = getProfile ? getProfile(task.postponed_by) : null;
+              const ppName = pp ? (pp.id === myId ? 'You' : pp.display_name) : 'Someone';
+              const fromTxt = task.postponed_from
+                ? formatExactDate(task.postponed_from) + (task.postponed_from_time ? ` · ${formatTime12(task.postponed_from_time)}` : '')
+                : '—';
+              const toTxt = formatExactDate(task.due_date) + (task.due_time ? ` · ${formatTime12(task.due_time)}` : '');
+              return (
+                <div style={{ fontSize: 10.5, marginTop: 3, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  <span style={{ color: getColor(pp?.color), fontWeight: 600 }}>{ppName}</span> postponed this from {fromTxt} to {toTxt}
+                </div>
+              );
+            })()}
+          </div>
+        ) : (task.due_date && !isCancelled && (
           <div style={{ fontSize: 11, marginTop: 2, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: overdue ? '#E27457' : 'var(--ink-mid)' }}>
             {formatDue(task.due_date)}{task.due_time ? ` · ${formatTime12(task.due_time)}` : ''}
           </div>
-        )}
+        ))}
         {ttl && (
-          <div style={{ fontSize: 10, marginTop: 3, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This completed task auto-removes 72h after completion">
+          <div style={{ fontSize: 10, marginTop: 3, fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }} title="This completed task auto-removes 8 days after completion">
             <span aria-hidden>🗑</span> disappears in {ttl}
           </div>
         )}
@@ -910,14 +968,17 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
                 <button onClick={stop(() => onPass(task, null))} style={chip()}>Cancel</button>
               </div>
             ) : !handing ? (
-              <button onClick={stop(() => setHanding(true))} style={chip()}>Hand off →</button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <button onClick={stop(() => setHanding(true))} style={chip('var(--kinnekt-cyan)', '#fff')}>Hand off →</button>
+                {onPostpone && <button onClick={stop(() => onPostpone(task))} style={chip('var(--kinnekt-coral)', '#fff')}>Postpone</button>}
+              </div>
             ) : releasing ? (
               <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
                 <input
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="Why are you dropping it?"
-                  style={{ flex: '1 1 150px', minWidth: 0, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--surface-glass)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'Inter, system-ui, sans-serif' }}
+                  style={{ flex: '1 1 150px', minWidth: 0, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--surface-glass)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-main)' }}
                 />
                 <button
                   disabled={!reason.trim()}
@@ -940,6 +1001,12 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
             )}
           </div>
         )}
+        {/* Postpone is available even when hand-off isn't (e.g. private tasks). */}
+        {canPostpone && !canHandOff && (
+          <div style={{ marginTop: 7 }}>
+            <button onClick={stop(() => onPostpone(task))} style={chip('var(--kinnekt-coral)', '#fff')}>Postpone</button>
+          </div>
+        )}
       </div>
     </div>
     </SwipeToDelete>
@@ -951,9 +1018,9 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
 // doesn't touch their props (bell menu, scroll-driven tab sync, modal
 // opens) skips re-rendering hundreds of rows. MainApp passes only
 // useCallback'd handlers and primitive/stable values for this to work.
-const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onRelease, onPass, onRespond, collapsed, onToggleCollapse, filter, setFilter }) {
+const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onRelease, onPass, onRespond, onPostpone, collapsed, onToggleCollapse, filter, setFilter }) {
   // Claim / release / baton handlers + roster, spread onto every TaskRow.
-  const rowExtra = { members, getProfile, onClaim, onRelease, onPass, onRespond };
+  const rowExtra = { members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone };
   const [showDone, setShowDone] = React.useState(false);
   // Personal view gets its own completed-toggle so expanding "Completed"
   // in one view doesn't silently expand it in the other.
@@ -963,25 +1030,34 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   const [view, setView] = React.useState('group');
 
   // Re-render every 6h so the completed-task "disappears in …" countdown
-  // ticks down and rows past the 72h mark drop out, even with the app
+  // ticks down and rows past the cutoff drop out, even with the app
   // left open. `now` is read fresh each render.
   useRerenderEvery(6 * 60 * 60 * 1000);
   const now = Date.now();
-  const isFresh = (t) => !t.completed_at || (now - new Date(t.completed_at).getTime()) < COMPLETED_TTL_MS;
+  // Fresh = completed within the last 8 days. A completed task with NO
+  // completion timestamp (older rows from before completed_at was tracked)
+  // is treated as already expired, so it disappears like it should instead
+  // of lingering forever.
+  const isFresh = (t) => !!t.completed_at && (now - new Date(t.completed_at).getTime()) < COMPLETED_TTL_MS;
 
   // Load — who's actually been carrying the household: count of GROUP tasks
   // each member completed in the last 7 days (equal weight, by assignee).
   // Legacy completed rows with no completed_at are skipped (can't date them).
   const load = React.useMemo(() => {
     const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const counts = new Map();
+    const byMember = new Map(); // member id -> the tasks they completed
     tasks.forEach(t => {
       if (!t.completed || t.is_private || !t.assigned_to || !t.completed_at) return;
       if (new Date(t.completed_at).getTime() < since) return;
-      counts.set(t.assigned_to, (counts.get(t.assigned_to) || 0) + 1);
+      if (!byMember.has(t.assigned_to)) byMember.set(t.assigned_to, []);
+      byMember.get(t.assigned_to).push(t);
     });
     const rows = members
-      .map(m => ({ member: m, count: counts.get(m.id) || 0 }))
+      .map(m => {
+        const list = (byMember.get(m.id) || []).slice()
+          .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
+        return { member: m, count: list.length, tasks: list };
+      })
       .sort((a, b) => b.count - a.count);
     const total = rows.reduce((s, r) => s + r.count, 0);
     const max = rows.length ? rows[0].count : 0;
@@ -989,6 +1065,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
     const lopsided = total >= 4 && max >= total * 0.5 && rows.length > 1 && rows[1].count < max;
     return { rows, total, max, lopsided, top: rows[0] };
   }, [tasks, members]);
+  const [loadOpen, setLoadOpen] = React.useState(null); // expanded member id
 
   const applyFilter = (list) => list.filter(t => {
     if (filter === 'all') return true;
@@ -1009,9 +1086,19 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   const filtered = applyFilter(sharedTasks);
   const filteredPersonal = applyFilter(personalTasks);
 
-  const openItems = filtered.filter(t => !t.completed);
+  // Soonest-due first (overdue → today → tomorrow → … → no date last), so
+  // the list reads top-to-bottom in the order things actually come due.
+  const byDueAsc = (a, b) => {
+    const ad = a.due_date || '9999-12-31';
+    const bd = b.due_date || '9999-12-31';
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    const at = a.due_time || '99:99';
+    const bt = b.due_time || '99:99';
+    return at < bt ? -1 : at > bt ? 1 : 0;
+  };
+  const openItems = filtered.filter(t => !t.completed).sort(byDueAsc);
   const doneItems = filtered.filter(t => t.completed && isFresh(t));
-  const openPersonal = filteredPersonal.filter(t => !t.completed);
+  const openPersonal = filteredPersonal.filter(t => !t.completed).sort(byDueAsc);
   const donePersonal = filteredPersonal.filter(t => t.completed && isFresh(t));
 
   const grouped = members.map(m => ({
@@ -1217,16 +1304,37 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
             <span className="load-card-sub">last 7 days</span>
           </div>
           <div className="load-rows">
-            {load.rows.filter(r => r.count > 0).map((r, i) => (
-              <div key={r.member.id} className={'load-row' + (i === 0 ? ' top' : '')}>
-                <Dot profile={r.member} />
-                <span className="load-name">{r.member.id === myId ? 'You' : r.member.display_name}</span>
-                <span className="load-bar-track">
-                  <span className="load-bar-fill" style={{ width: `${load.max ? Math.round((r.count / load.max) * 100) : 0}%`, background: getColor(r.member.color) }} />
-                </span>
-                <span className="load-count">{r.count}</span>
-              </div>
-            ))}
+            {load.rows.filter(r => r.count > 0).map((r, i) => {
+              const open = loadOpen === r.member.id;
+              return (
+                <div key={r.member.id}>
+                  <button
+                    type="button"
+                    className={'load-row' + (i === 0 ? ' top' : '') + (open ? ' open' : '')}
+                    onClick={() => setLoadOpen(open ? null : r.member.id)}
+                    aria-expanded={open}
+                  >
+                    <Dot profile={r.member} />
+                    <span className="load-name">{r.member.id === myId ? 'You' : r.member.display_name}</span>
+                    <span className="load-bar-track">
+                      <span className="load-bar-fill" style={{ width: `${load.max ? Math.round((r.count / load.max) * 100) : 0}%`, background: getColor(r.member.color) }} />
+                    </span>
+                    <span className="load-count">{r.count}</span>
+                    <span className="load-chevron" aria-hidden>{open ? '▾' : '▸'}</span>
+                  </button>
+                  {open && (
+                    <div className="load-detail">
+                      {r.tasks.map(t => (
+                        <button key={t.id} type="button" className="load-task" onClick={() => onShowTask?.(t)}>
+                          <span className="load-task-title">{t.title}</span>
+                          <span className="load-task-when">{formatCompletedAt(t.completed_at)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {load.lopsided && load.top && (
             <div className="load-nudge">
@@ -2651,6 +2759,57 @@ function TimePickerModal({ open, value, title, onClose, onPick }) {
         {renderColumn(minuteRef, MINUTES, minute, setMinute, v => String(v).padStart(2, '0'))}
         {renderColumn(periodRef, PERIODS, period, setPeriod, v => v)}
       </div>
+    </Modal>
+  );
+}
+
+// ─── Postpone Modal ───────────────────────────────────────────────────────────
+// Pick a new date (+ optional time) to move a task to. Reuses the same date
+// and time pickers as Add Task.
+function PostponeModal({ open, task, onClose, onConfirm }) {
+  const [date, setDate] = React.useState('');
+  const [time, setTime] = React.useState('');
+  const [dateOpen, setDateOpen] = React.useState(false);
+  const [timeOpen, setTimeOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (open && task) {
+      setDate(task.due_date || localTodayISO());
+      setTime(task.due_time || '');
+    }
+  }, [open, task]);
+  if (!open || !task) return null;
+  return (
+    <Modal open={open} onClose={onClose} title={<>Postpone <em>task</em></>}
+      footer={<button className="fb-btn solid" disabled={!date} onClick={() => onConfirm(task, date, time)}>Postpone</button>}>
+      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{task.title}</div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+        Currently {task.due_date ? formatDue(task.due_date) : 'no date'}{task.due_time ? ` · ${formatTime12(task.due_time)}` : ''}
+      </div>
+      <div className="field">
+        <label>New date</label>
+        <button type="button" onClick={() => setDateOpen(true)} className="dp-trigger">
+          <span aria-hidden style={{ fontSize: 15 }}>📅</span>
+          <span style={{ flex: 1, textAlign: 'left' }}>
+            {date ? new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' }) : 'Pick a date'}
+          </span>
+          <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+        </button>
+      </div>
+      <div className="field">
+        <label>New time <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setTimeOpen(true)} className="dp-trigger" style={{ flex: 1 }}>
+            <span aria-hidden style={{ fontSize: 15 }}>🕒</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>{formatTime12(time) || 'Add a time · optional'}</span>
+            <span aria-hidden style={{ opacity: 0.5, fontSize: 12 }}>▾</span>
+          </button>
+          {time && (
+            <button type="button" onClick={() => setTime('')} className="dp-trigger" style={{ flex: '0 0 auto', width: 44, justifyContent: 'center' }} aria-label="Clear time" title="Clear time">×</button>
+          )}
+        </div>
+      </div>
+      <DatePickerModal open={dateOpen} value={date} title="New date" minDate={localTodayISO()} onClose={() => setDateOpen(false)} onPick={(d) => { setDate(d); setDateOpen(false); }} />
+      <TimePickerModal open={timeOpen} value={time} title="New time" onClose={() => setTimeOpen(false)} onPick={(t) => { setTime(t); setTimeOpen(false); }} />
     </Modal>
   );
 }
@@ -4924,7 +5083,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
     transition: 'all 0.2s var(--ease)',
   };
   const sectionLabelStyle = {
-    fontFamily: 'Inter, system-ui, sans-serif',
+    fontFamily: 'var(--font-main)',
     fontSize: 10,
     fontWeight: 700,
     textTransform: 'uppercase',
@@ -4949,7 +5108,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
         />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontFamily: 'Satoshi, Inter, system-ui, sans-serif',
+            fontFamily: 'var(--font-main)',
             fontSize: 22, fontWeight: 700, lineHeight: 1.15,
             letterSpacing: '-0.02em',
             color: 'var(--text-primary)',
@@ -5057,7 +5216,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone }) {
   const [cancelMode, setCancelMode] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [cancelling, setCancelling] = React.useState(false);
@@ -5219,6 +5378,28 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         </div>
       )}
 
+      {task.postponed_by && !task.cancelled_at && !task.completed && (
+        <div style={{
+          marginBottom: 14, padding: '12px 14px',
+          background: 'rgba(106, 77, 255, 0.06)',
+          border: '1px solid rgba(106, 77, 255, 0.28)',
+          borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 5, color: 'var(--kinnekt-purple)' }}>
+            Postponed to {formatExactDate(task.due_date)}{task.due_time ? ` · ${formatTime12(task.due_time)}` : ''}
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+            {(() => {
+              const by = task.postponed_by ? getProfile?.(task.postponed_by) : null;
+              const name = by ? (by.id === myId ? 'You' : by.display_name) : 'Someone';
+              const fromTxt = task.postponed_from ? formatExactDate(task.postponed_from) + (task.postponed_from_time ? ` · ${formatTime12(task.postponed_from_time)}` : '') : '—';
+              const toTxt = formatExactDate(task.due_date) + (task.due_time ? ` · ${formatTime12(task.due_time)}` : '');
+              return <><strong style={{ color: by ? getColor(by.color) : 'var(--text-primary)' }}>{name}</strong> postponed this from {fromTxt} to {toTxt}.</>;
+            })()}
+          </div>
+        </div>
+      )}
+
       {linkedNote && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>From note</label>
@@ -5292,6 +5473,13 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
               className="copy-btn"
               style={{ marginLeft: 0 }}
             >Edit</button>
+          )}
+          {onPostpone && task.assigned_to === myId && !task.completed && !task.cancelled_at && !cancelMode && (
+            <button
+              onClick={() => { onClose(); onPostpone(task); }}
+              className="copy-btn"
+              style={{ marginLeft: 0 }}
+            >Postpone</button>
           )}
           {task.created_by === myId && !task.cancelled_at && !cancelMode && onCancelTask && (
             <button
@@ -6092,6 +6280,21 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'task_postponed') {
+      const f = p.from_date ? new Date(p.from_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+      const t2 = p.to_date ? new Date(p.to_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color), fontSize: 13 }}>↪</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> postponed a task
+            </div>
+            <div className="fb-bell-sub">{p.task_title} · {f} → {t2}</div>
+          </div>
+        </>
+      );
+    }
     if (n.type === 'baton_offered') {
       return (
         <>
@@ -6222,7 +6425,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!n.read) onMarkOne(n.id);
               const id = n.payload?.task_id || n.payload?.event_id || n.payload?.note_id;
               if (!id) return;
-              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined') && onOpenTask) onOpenTask(id);
+              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'task_postponed' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined') && onOpenTask) onOpenTask(id);
               else if ((n.type === 'event_invited' || n.type === 'event_rsvp') && onOpenEvent) onOpenEvent(id);
               else if ((n.type === 'note_tagged' || n.type === 'note_replied' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
@@ -7211,7 +7414,7 @@ function SpaceDetailModal({
     lineHeight: 1.4,
   };
   const sectionLabelStyle = {
-    fontFamily: 'Inter, system-ui, sans-serif',
+    fontFamily: 'var(--font-main)',
     fontSize: 10, fontWeight: 700,
     textTransform: 'uppercase', letterSpacing: '0.14em',
     color: 'var(--text-muted)',
@@ -7243,7 +7446,7 @@ function SpaceDetailModal({
         }} aria-hidden>{space.emoji || '✨'}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontFamily: 'Satoshi, Inter, system-ui, sans-serif',
+            fontFamily: 'var(--font-main)',
             fontSize: 22, fontWeight: 700, lineHeight: 1.15,
             letterSpacing: '-0.02em', color: 'var(--text-primary)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -7571,6 +7774,7 @@ export function MainApp({ profile, onSettings }) {
   const [detailEventId, setDetailEventId] = React.useState(null);
   const [detailNoteId, setDetailNoteId] = React.useState(null);
   const [detailTaskId, setDetailTaskId] = React.useState(null);
+  const [postponeTarget, setPostponeTarget] = React.useState(null);
   const [taskEditTarget, setTaskEditTarget] = React.useState(null);
   // Existing event being edited — opens the Add Event modal in edit mode.
   const [eventEditTarget, setEventEditTarget] = React.useState(null);
@@ -7758,14 +7962,18 @@ export function MainApp({ profile, onSettings }) {
       supabase.from('notes').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }).limit(100),
     ]);
     const allTasks = t.data || [];
-    // Auto-delete completed tasks older than 72 hours. With the
+    // Auto-delete completed tasks older than 8 days. With the
     // tightened tasks_delete RLS policy (creator / assignee /
     // unassigned), the server quietly skips rows this user can't
     // delete; those vanish when their owner's cleanup pass runs.
     const cutoff = Date.now() - COMPLETED_TTL_MS;
-    const stale = allTasks.filter(task =>
-      task.completed && task.completed_at && new Date(task.completed_at).getTime() < cutoff
-    );
+    const stale = allTasks.filter(task => task.completed && (
+      // Completed >8 days ago…
+      (task.completed_at && new Date(task.completed_at).getTime() < cutoff) ||
+      // …or an old completion with no timestamp (pre-tracking). Gate on
+      // created_at so a freshly-created task can never be swept by mistake.
+      (!task.completed_at && task.created_at && new Date(task.created_at).getTime() < cutoff)
+    ));
     const fresh = stale.length === 0
       ? allTasks
       : allTasks.filter(task => !stale.some(s => s.id === task.id));
@@ -7979,9 +8187,18 @@ export function MainApp({ profile, onSettings }) {
     if (next && snapshot) {
       const nextDue = computeNextDue(snapshot);
       if (nextDue) {
+        // A one-day pickup of an unassigned recurring task: the NEXT
+        // occurrence goes back to Unassigned, not to whoever grabbed it once.
+        const wasClaimed = !!snapshot.claimed;
         const addRow = (row) => {
           const r = Array.isArray(row) ? row[0] : row;
-          if (r && r.id) setTasks(p => p.some(t => t.id === r.id) ? p : [r, ...p]);
+          if (!r || !r.id) return;
+          if (wasClaimed && r.assigned_to) {
+            setTasks(p => p.some(t => t.id === r.id) ? p : [{ ...r, assigned_to: null, claimed: false }, ...p]);
+            supabase.from('tasks').update({ assigned_to: null }).eq('id', r.id).then(() => {}, () => {});
+          } else {
+            setTasks(p => p.some(t => t.id === r.id) ? p : [r, ...p]);
+          }
         };
         const { data: rpcRow, error: rpcErr } =
           await supabase.rpc('respawn_recurring_task', { p_task_id: id, p_next_due: nextDue });
@@ -7995,7 +8212,8 @@ export function MainApp({ profile, onSettings }) {
           // warn loudly the first time rather than failing silently.
           const s = snapshot;
           let payload = {
-            title: s.title, description: s.description, assigned_to: s.assigned_to,
+            title: s.title, description: s.description,
+            assigned_to: wasClaimed ? null : s.assigned_to,
             recurrence: s.recurrence, group_id: s.group_id, created_by: s.created_by,
             space_id: s.space_id, is_private: s.is_private, due_time: s.due_time,
             due_date: nextDue, completed: false,
@@ -8202,10 +8420,11 @@ export function MainApp({ profile, onSettings }) {
   // (keeps TasksSection's memo from churning).
   const claimTask = React.useCallback(async (task) => {
     if (!task) return;
-    // Claiming clears the pool note — it's no longer "in the pool because…".
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: profile.id, pool_reason: null, pool_by: null } : t));
-    let { error } = await supabase.from('tasks').update({ assigned_to: profile.id, pool_reason: null, pool_by: null }).eq('id', task.id);
-    if (error && /pool_reason|pool_by/i.test(error.message || '')) {
+    // Mark it claimed (so a recurring task's next occurrence resets to
+    // Unassigned, not the claimer) and clear the pool note.
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: profile.id, claimed: true, pool_reason: null, pool_by: null } : t));
+    let { error } = await supabase.from('tasks').update({ assigned_to: profile.id, claimed: true, pool_reason: null, pool_by: null }).eq('id', task.id);
+    if (error && /pool_reason|pool_by|claimed/i.test(error.message || '')) {
       ({ error } = await supabase.from('tasks').update({ assigned_to: profile.id }).eq('id', task.id));
     }
     if (error) {
@@ -8225,9 +8444,10 @@ export function MainApp({ profile, onSettings }) {
     const r = reason && reason.trim();
     if (!task || !r) return;
     // Store who dropped it + why, so the task detail can show the note.
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: null, pool_reason: r, pool_by: profile.id } : t));
-    let { error } = await supabase.from('tasks').update({ assigned_to: null, pool_reason: r, pool_by: profile.id }).eq('id', task.id);
-    if (error && /pool_reason|pool_by/i.test(error.message || '')) {
+    // Clear `claimed` — it's back in the pool, not a personal pickup.
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: null, claimed: false, pool_reason: r, pool_by: profile.id } : t));
+    let { error } = await supabase.from('tasks').update({ assigned_to: null, claimed: false, pool_reason: r, pool_by: profile.id }).eq('id', task.id);
+    if (error && /pool_reason|pool_by|claimed/i.test(error.message || '')) {
       // Columns not migrated yet — release anyway; the note just won't persist.
       ({ error } = await supabase.from('tasks').update({ assigned_to: null }).eq('id', task.id));
     }
@@ -8285,6 +8505,39 @@ export function MainApp({ profile, onSettings }) {
     if (prevHolder && prevHolder !== profile.id) {
       notify([prevHolder], accept ? 'baton_accepted' : 'baton_declined', {
         task_id: task.id, task_title: task.title,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile]);
+
+  // ── Postpone: move a task you hold to a new date/time. Records the
+  // previous due date/time + who moved it, so the row can show the history.
+  const postponeTask = React.useCallback(async (task, newDate, newTime) => {
+    if (!task || !newDate) return;
+    const patch = {
+      due_date: newDate,
+      due_time: newTime || null,
+      postponed_from: task.due_date || null,
+      postponed_from_time: task.due_time || null,
+      postponed_by: profile.id,
+    };
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...patch } : t));
+    let { error } = await supabase.from('tasks').update(patch).eq('id', task.id);
+    if (error && /postponed_from|postponed_by|postponed_from_time/i.test(error.message || '')) {
+      // Columns not migrated — still move the date; the history note just
+      // won't persist.
+      ({ error } = await supabase.from('tasks').update({ due_date: newDate, due_time: newTime || null }).eq('id', task.id));
+    }
+    if (error) {
+      setTasks(prev => prev.map(t => t.id === task.id ? task : t));
+      alert('Could not postpone the task: ' + error.message);
+      return;
+    }
+    // Tell the creator their task moved (unless they did it themselves).
+    if (task.created_by && task.created_by !== profile.id) {
+      notify([task.created_by], 'task_postponed', {
+        task_id: task.id, task_title: task.title,
+        from_date: task.due_date || null, to_date: newDate,
         by_name: profile.display_name, by_color: profile.color,
       });
     }
@@ -9420,7 +9673,7 @@ export function MainApp({ profile, onSettings }) {
             collapsed={collapsed.notes}
             onToggleCollapse={toggleCollapseNotes}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* ListsSection is hidden — Spaces handles the same use case
               with more flexibility. The component, state, modals, and
               CRUD wiring all stay in place; just uncomment to bring it
@@ -9659,6 +9912,13 @@ export function MainApp({ profile, onSettings }) {
         onEdit={(t) => { setDetailTaskId(null); setTaskEditTarget(t); setModal('task'); }}
         onOpenNote={(n) => { setDetailTaskId(null); setDetailNoteId(n.id); }}
         onShowMember={(p) => { setDetailTaskId(null); setDetailMemberId(p.id); }}
+        onPostpone={(t) => setPostponeTarget(t)}
+      />
+      <PostponeModal
+        open={!!postponeTarget}
+        task={postponeTarget}
+        onClose={() => setPostponeTarget(null)}
+        onConfirm={(t, d, tm) => { postponeTask(t, d, tm); setPostponeTarget(null); }}
       />
       <MemberDetailsModal
         open={!!detailMemberId}

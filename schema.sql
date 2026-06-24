@@ -124,6 +124,16 @@ alter table public.tasks add column if not exists baton_offer         uuid refer
 -- shown in the task detail while it's unassigned. Cleared when reclaimed.
 alter table public.tasks add column if not exists pool_reason         text;
 alter table public.tasks add column if not exists pool_by             uuid references public.profiles;
+-- True when the current assignment came from a one-day "claim" of an
+-- unassigned task. A recurring task's next occurrence reads this so it resets
+-- to Unassigned instead of sticking to whoever picked it up that day.
+alter table public.tasks add column if not exists claimed             boolean default false;
+-- Postpone: who moved the due date, and what it was before the latest move.
+-- The new date is just due_date/due_time; these record the previous values so
+-- the row can show "<person> postponed from <old> to <new>".
+alter table public.tasks add column if not exists postponed_by        uuid references public.profiles;
+alter table public.tasks add column if not exists postponed_from      date;
+alter table public.tasks add column if not exists postponed_from_time text;
 
 create table if not exists public.notifications (
   id         uuid default gen_random_uuid() primary key,

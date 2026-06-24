@@ -18,7 +18,7 @@ class ErrorBoundary extends React.Component {
       return (
         <div style={{
           minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 24, fontFamily: 'Inter, system-ui, sans-serif',
+          padding: 24, fontFamily: "'Fredoka', 'Satoshi', 'Inter', system-ui, sans-serif",
         }}>
           <div style={{ maxWidth: 360, textAlign: 'center' }}>
             <div style={{ fontSize: 40, marginBottom: 12 }} aria-hidden>😵</div>
