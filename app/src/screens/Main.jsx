@@ -8079,6 +8079,20 @@ export function MainApp({ profile, onSettings }) {
       if (error) alert('Could not save task: ' + error.message);
       return;
     }
+    // Warn if the details/notes column was stripped — the task saved but the
+    // description silently vanished. This is the "I added details and they
+    // didn't show up" case.
+    if (droppedCols.includes('description') && data.description) {
+      if (!window.__kinnektDescWarned) {
+        window.__kinnektDescWarned = true;
+        alert(
+          'Task saved, but the details/notes could NOT be stored.\n\n' +
+          'The "description" column is missing from your tasks table.\n' +
+          'Run this in your Supabase SQL Editor:\n\n' +
+          'alter table public.tasks add column if not exists description text;'
+        );
+      }
+    }
     // Warn if the new event_id column was stripped — the task saved but
     // won't appear linked under the event. One-time gate so we don't
     // nag repeatedly.
@@ -8120,6 +8134,17 @@ export function MainApp({ profile, onSettings }) {
       let stripped = null;
       for (const col of optional) {
         if (payload[col] !== undefined && msg.includes(col)) {
+          // Surface a silently-dropped description (the "my details didn't
+          // save" case) the same way addTask does.
+          if (col === 'description' && patch.description && !window.__kinnektDescWarned) {
+            window.__kinnektDescWarned = true;
+            alert(
+              'Saved, but the details/notes could NOT be stored.\n\n' +
+              'The "description" column is missing from your tasks table.\n' +
+              'Run this in your Supabase SQL Editor:\n\n' +
+              'alter table public.tasks add column if not exists description text;'
+            );
+          }
           const { [col]: _, ...rest } = payload;
           payload = rest;
           stripped = col;
