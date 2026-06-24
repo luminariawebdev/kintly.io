@@ -493,14 +493,11 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
     if (!p) return null;
     return <span style={{ color: getColor(p.color) }}>{p.id === myId ? 'You' : p.display_name}</span>;
   };
-  // Ids of everyone attending (RSVP'd yes) or tagged (in the attendee list).
-  const eventPeopleIds = (e) => {
-    const ids = new Set([
-      ...(Array.isArray(e.attendees) ? e.attendees : []),
-      ...Object.entries(e.rsvps || {}).filter(([, v]) => v === 'yes').map(([k]) => k),
-    ]);
-    return [...ids].filter(id => getProfile?.(id));
-  };
+  // The event's attendees, by the same rule as the calendar/detail view:
+  // whoever's tagged (or the creator if nobody was tagged), minus anyone who
+  // RSVP'd "no". Avoids listing a creator who made the event for someone else
+  // (their auto-RSVP shouldn't count them as an attendee).
+  const eventPeopleIds = (e) => eventAttendeeIds(e).filter(id => getProfile?.(id));
 
   return (
     <div className="day-summary" aria-label="Next 24 hours summary">
