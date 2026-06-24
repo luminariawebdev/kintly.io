@@ -5143,6 +5143,13 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         </div>
       </div>
 
+      {task.description && (
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label>Details</label>
+          <div style={{ fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{task.description}</div>
+        </div>
+      )}
+
       {dueLabel && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>Due</label>
@@ -5165,13 +5172,6 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
             fontSize: 13, fontWeight: 600,
             color: 'var(--kinnekt-purple)',
           }}>↻ {recurrenceLabel}</div>
-        </div>
-      )}
-
-      {task.description && (
-        <div className="field" style={{ marginBottom: 14 }}>
-          <label>Details</label>
-          <div style={{ fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{task.description}</div>
         </div>
       )}
 
