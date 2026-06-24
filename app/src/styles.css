@@ -2592,14 +2592,16 @@ html { overscroll-behavior-x: none; }
    The Upcoming list inside it is chromeless (no nested glass box) but keeps
    position:relative so its "Upcoming" pill still floats as a divider between
    the Group/Personal toggle and the event rows. */
-.upcoming-inner { position: relative; margin-top: 34px; }
-.cal-section-box .upcoming-inner .upcoming { margin-top: 4px; }
+/* padding-top clears the floating "Upcoming" pill so the first event row
+   doesn't overlap it (the swipe rows composite above an absolute element). */
+.upcoming-inner { position: relative; margin-top: 28px; padding-top: 18px; }
 .fb-listbox .spaces-stack { margin-top: 0; }
 .fb-listbox-legend, .upcoming-legend {
   position: absolute;
   top: 0;
   left: 50%;
   transform: translate(-50%, -50%);
+  z-index: 2;
   padding: 4px 14px;
   background: var(--brand-grad);
   color: #FFFFFF;
