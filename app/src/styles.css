@@ -947,6 +947,80 @@ html { overscroll-behavior-x: none; }
 }
 .trow.done { opacity: 0.6; }
 
+/* "Right now" hand-off strip — active baton tasks at a glance. */
+.handoff-strip { margin: 2px 0 14px; }
+.handoff-strip-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--text-muted); margin-bottom: 8px;
+}
+.handoff-strip-rows { display: flex; flex-direction: column; gap: 6px; }
+.handoff-chip {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; text-align: left;
+  padding: 9px 12px; border-radius: var(--r-md);
+  background: var(--surface-glass); border: 1px solid var(--border-glass);
+  cursor: pointer; font-family: 'Inter', system-ui, sans-serif;
+  color: var(--text-primary);
+}
+.handoff-chip-who { font-weight: 700; font-size: 13px; flex-shrink: 0; }
+.handoff-chip-task {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.handoff-chip-badge {
+  flex-shrink: 0;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: #fff; background: var(--kinnekt-purple);
+  padding: 2px 7px; border-radius: 999px;
+}
+
+/* Load card — who's carried the household over the last 7 days. */
+.load-card {
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--r-lg);
+}
+.load-card-hd { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+.load-card-title {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+.load-card-sub {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+.load-rows { display: flex; flex-direction: column; gap: 9px; }
+.load-row { display: flex; align-items: center; gap: 9px; }
+.load-name {
+  flex: 0 0 auto; min-width: 56px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px; font-weight: 500; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;
+}
+.load-row.top .load-name { font-weight: 700; color: var(--text-primary); }
+.load-bar-track {
+  flex: 1; min-width: 0; height: 8px;
+  background: var(--rule); border-radius: 999px; overflow: hidden;
+}
+.load-bar-fill { display: block; height: 100%; border-radius: 999px; transition: width 0.4s var(--ease); }
+.load-count {
+  flex: 0 0 auto;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px; font-weight: 700; color: var(--text-primary);
+  min-width: 16px; text-align: right;
+}
+.load-nudge {
+  margin-top: 11px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 11px; font-style: italic; color: var(--text-muted);
+}
+
 /* ── Calendar ────────────────────────────────────────────────── */
 .cal-bar {
   display: flex; align-items: center; justify-content: center;

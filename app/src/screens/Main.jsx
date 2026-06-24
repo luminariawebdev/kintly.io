@@ -791,7 +791,7 @@ function useRerenderEvery(ms) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl }) {
+function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onRelease, onPass, onRespond }) {
   const color = getColor(assignee?.color);
   const isCancelled = !!task.cancelled_at;
   const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
@@ -799,6 +799,31 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl }) {
   // Unassigned tasks can be acted on by anyone in the group.
   const canActOnTask = !isCancelled && (!task.assigned_to || task.assigned_to === myId);
   const dimText = task.completed || isCancelled;
+
+  // One unified "Hand off" on live (open, not cancelled) GROUP tasks:
+  // an unassigned task is claimable; a task you hold can be passed to a
+  // person (they accept) OR dropped back to the pool with a reason. Personal
+  // todos opt out entirely.
+  const [handing, setHanding] = React.useState(false);   // hand-off chooser open
+  const [releasing, setReleasing] = React.useState(false); // "to the pool" reason input
+  const [reason, setReason] = React.useState('');
+  const live = !task.completed && !isCancelled && !task.is_private;
+  const offer = task.baton_offer || null;
+  const offeredToMe = offer === myId;
+  const offerToOther = offer && !offeredToMe;
+  const offerName = offer && getProfile ? (getProfile(offer)?.display_name || 'someone') : '';
+  const assignedToMe = task.assigned_to === myId;
+  const canClaim = onClaim && live && !task.assigned_to && !offer;
+  const canHandOff = onPass && onRelease && live && assignedToMe;
+  const closeHandoff = () => { setHanding(false); setReleasing(false); setReason(''); };
+  const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
+  const chip = (bg, fg) => ({
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 999,
+    border: '1px solid var(--border-glass)', background: bg || 'var(--surface-glass)',
+    color: fg || 'var(--text-secondary)', cursor: 'pointer',
+    fontFamily: 'Inter, system-ui, sans-serif',
+  });
   return (
     <SwipeToDelete onDelete={onDelete} disabled={!canActOnTask}>
     <div
@@ -859,6 +884,62 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl }) {
         {task.space_id && (
           <div style={{ marginTop: 6 }}><SpaceTag spaceId={task.space_id} /></div>
         )}
+
+        {/* Hand-off offered to me — accept to take it over, or decline. */}
+        {live && offeredToMe && onRespond && (
+          <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>🔴 Handed to you</span>
+            <button onClick={stop(() => onRespond(task, true))} style={chip('var(--kinnekt-purple)', '#fff')}>Accept</button>
+            <button onClick={stop(() => onRespond(task, false))} style={chip()}>Decline</button>
+          </div>
+        )}
+
+        {/* Up for Grabs — claim an unassigned task. */}
+        {canClaim && (
+          <div style={{ marginTop: 7 }}>
+            <button onClick={stop(() => onClaim(task))} style={chip('var(--kinnekt-purple)', '#fff')}>I've got it</button>
+          </div>
+        )}
+
+        {/* Unified Hand off (holder): pass to a person, or back to the pool. */}
+        {canHandOff && (
+          <div style={{ marginTop: 7 }}>
+            {offerToOther ? (
+              <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>🔴 Offered to {offerName}…</span>
+                <button onClick={stop(() => onPass(task, null))} style={chip()}>Cancel</button>
+              </div>
+            ) : !handing ? (
+              <button onClick={stop(() => setHanding(true))} style={chip()}>Hand off →</button>
+            ) : releasing ? (
+              <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                <input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Why are you dropping it?"
+                  style={{ flex: '1 1 150px', minWidth: 0, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--surface-glass)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'Inter, system-ui, sans-serif' }}
+                />
+                <button
+                  disabled={!reason.trim()}
+                  onClick={() => { if (reason.trim()) { onRelease(task, reason); closeHandoff(); } }}
+                  style={{ ...chip('var(--kinnekt-purple)', '#fff'), opacity: reason.trim() ? 1 : 0.5, cursor: reason.trim() ? 'pointer' : 'not-allowed' }}
+                >Drop</button>
+                <button onClick={stop(closeHandoff)} style={chip()}>Cancel</button>
+              </div>
+            ) : (
+              <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 2 }}>Pass to</span>
+                {(members || []).filter(m => m.id !== task.assigned_to).map(m => (
+                  <button key={m.id} onClick={stop(() => { closeHandoff(); onPass(task, m.id); })} style={chip()}>
+                    <Dot profile={m} /> {m.display_name}
+                  </button>
+                ))}
+                <button onClick={stop(() => setReleasing(true))} style={chip()}>To the pool ↩</button>
+                <button onClick={stop(closeHandoff)} style={chip()}>✕</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
     </SwipeToDelete>
@@ -870,7 +951,9 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl }) {
 // doesn't touch their props (bell menu, scroll-driven tab sync, modal
 // opens) skips re-rendering hundreds of rows. MainApp passes only
 // useCallback'd handlers and primitive/stable values for this to work.
-const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, collapsed, onToggleCollapse, filter, setFilter }) {
+const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onRelease, onPass, onRespond, collapsed, onToggleCollapse, filter, setFilter }) {
+  // Claim / release / baton handlers + roster, spread onto every TaskRow.
+  const rowExtra = { members, getProfile, onClaim, onRelease, onPass, onRespond };
   const [showDone, setShowDone] = React.useState(false);
   // Personal view gets its own completed-toggle so expanding "Completed"
   // in one view doesn't silently expand it in the other.
@@ -885,6 +968,27 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   useRerenderEvery(6 * 60 * 60 * 1000);
   const now = Date.now();
   const isFresh = (t) => !t.completed_at || (now - new Date(t.completed_at).getTime()) < COMPLETED_TTL_MS;
+
+  // Load — who's actually been carrying the household: count of GROUP tasks
+  // each member completed in the last 7 days (equal weight, by assignee).
+  // Legacy completed rows with no completed_at are skipped (can't date them).
+  const load = React.useMemo(() => {
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const counts = new Map();
+    tasks.forEach(t => {
+      if (!t.completed || t.is_private || !t.assigned_to || !t.completed_at) return;
+      if (new Date(t.completed_at).getTime() < since) return;
+      counts.set(t.assigned_to, (counts.get(t.assigned_to) || 0) + 1);
+    });
+    const rows = members
+      .map(m => ({ member: m, count: counts.get(m.id) || 0 }))
+      .sort((a, b) => b.count - a.count);
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    const max = rows.length ? rows[0].count : 0;
+    // Lopsided = the top carrier did 50%+ of a non-trivial week's load.
+    const lopsided = total >= 4 && max >= total * 0.5 && rows.length > 1 && rows[1].count < max;
+    return { rows, total, max, lopsided, top: rows[0] };
+  }, [tasks, members]);
 
   const applyFilter = (list) => list.filter(t => {
     if (filter === 'all') return true;
@@ -955,6 +1059,35 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
       </div>
 
       {view === 'group' && (<>
+      {(() => {
+        // "Right now" — tasks mid-hand-off (offered, awaiting a yes): who's
+        // passing to whom, tap to open. Hidden when there are none.
+        const pending = tasks.filter(t => t.baton_offer && !t.completed && !t.cancelled_at && !t.is_private);
+        if (pending.length === 0) return null;
+        return (
+          <div className="handoff-strip">
+            <div className="handoff-strip-label">Right now</div>
+            <div className="handoff-strip-rows">
+              {pending.map(t => {
+                const from = getProfile(t.assigned_to);
+                const to = getProfile(t.baton_offer);
+                return (
+                  <button key={t.id} type="button" className="handoff-chip" onClick={() => onShowTask?.(t)}>
+                    <span aria-hidden>🔴</span>
+                    {from && <Dot profile={from} />}
+                    <span className="handoff-chip-who">{from ? (from.id === myId ? 'You' : from.display_name) : '—'}</span>
+                    <span aria-hidden style={{ color: 'var(--text-muted)' }}>→</span>
+                    {to && <Dot profile={to} />}
+                    <span className="handoff-chip-who">{to ? (to.id === myId ? 'You' : to.display_name) : '—'}</span>
+                    <span className="handoff-chip-task">{t.title}</span>
+                    {t.baton_offer === myId && <span className="handoff-chip-badge">your turn?</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
       {grouped.length === 0 && unassigned.length === 0 && doneItems.length === 0 ? (
         <div className="kbd-hint" style={{ padding: '20px 0' }}>NO TASKS — ADD ONE BELOW</div>
       ) : (
@@ -974,7 +1107,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               </div>
               <div className="tasklist">
                 {g.items.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={g.member} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                  <TaskRow key={t.id} task={t} assignee={g.member} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} {...rowExtra} />
                 ))}
               </div>
             </div>
@@ -987,7 +1120,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               </div>
               <div className="tasklist">
                 {unassigned.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={null} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                  <TaskRow key={t.id} task={t} assignee={null} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} {...rowExtra} />
                 ))}
               </div>
             </div>
@@ -1007,7 +1140,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               {showDone && (
                 <div className="tasklist">
                   {doneItems.map(t => (
-                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} />
+                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} {...rowExtra} />
                   ))}
                 </div>
               )}
@@ -1039,7 +1172,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
             {openPersonal.length > 0 && (
               <div className="tasklist">
                 {openPersonal.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} />
+                  <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} {...rowExtra} />
                 ))}
               </div>
             )}
@@ -1057,7 +1190,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
                 {showDonePersonal && (
                   <div className="tasklist">
                     {donePersonal.map(t => (
-                      <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} />
+                      <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} {...rowExtra} />
                     ))}
                   </div>
                 )}
@@ -1074,6 +1207,34 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
           <span className="plus">+</span> Add personal task
         </button>
       </>)}
+
+      {/* Load — who's carried the household this week. Shared stat, shown
+          under both views. Hidden when nothing's been completed in 7 days. */}
+      {load.total > 0 && (
+        <div className="load-card">
+          <div className="load-card-hd">
+            <span className="load-card-title">Load</span>
+            <span className="load-card-sub">last 7 days</span>
+          </div>
+          <div className="load-rows">
+            {load.rows.filter(r => r.count > 0).map((r, i) => (
+              <div key={r.member.id} className={'load-row' + (i === 0 ? ' top' : '')}>
+                <Dot profile={r.member} />
+                <span className="load-name">{r.member.id === myId ? 'You' : r.member.display_name}</span>
+                <span className="load-bar-track">
+                  <span className="load-bar-fill" style={{ width: `${load.max ? Math.round((r.count / load.max) * 100) : 0}%`, background: getColor(r.member.color) }} />
+                </span>
+                <span className="load-count">{r.count}</span>
+              </div>
+            ))}
+          </div>
+          {load.lopsided && load.top && (
+            <div className="load-nudge">
+              {load.top.member.id === myId ? 'You’ve' : `${load.top.member.display_name}’s`} carried most of it — want to spread some out?
+            </div>
+          )}
+        </div>
+      )}
       </>)}
     </section>
   );
@@ -5034,6 +5195,30 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
         </div>
       )}
 
+      {!task.assigned_to && !task.cancelled_at && !task.completed && task.pool_reason && (
+        <div style={{
+          marginBottom: 14,
+          padding: '12px 14px',
+          background: 'rgba(106, 77, 255, 0.06)',
+          border: '1px solid rgba(106, 77, 255, 0.28)',
+          borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 5, color: 'var(--kinnekt-purple)' }}>
+            Handed to the pool
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+            {(() => {
+              const by = task.pool_by ? getProfile?.(task.pool_by) : null;
+              const name = by ? (by.id === myId ? 'You' : by.display_name) : 'Someone';
+              return <><strong style={{ color: 'var(--text-primary)' }}>{name}</strong> dropped this back for anyone to pick up because:</>;
+            })()}
+          </div>
+          <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.5, marginTop: 4, fontStyle: 'italic' }}>
+            “{task.pool_reason}”
+          </div>
+        </div>
+      )}
+
       {linkedNote && (
         <div className="field" style={{ marginBottom: 14 }}>
           <label>From note</label>
@@ -5881,6 +6066,59 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'task_claimed') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color) }}>✋</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> claimed a task you created
+            </div>
+            <div className="fb-bell-sub">{p.task_title}</div>
+          </div>
+        </>
+      );
+    }
+    if (n.type === 'task_released') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color) }}>✋</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> put a task up for grabs
+            </div>
+            <div className="fb-bell-sub">{p.task_title}{p.reason ? ` · “${p.reason}”` : ''}</div>
+          </div>
+        </>
+      );
+    }
+    if (n.type === 'baton_offered') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color), fontSize: 13 }}>🔴</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> wants to hand you a task
+            </div>
+            <div className="fb-bell-sub">{p.task_title} · tap to accept or decline</div>
+          </div>
+        </>
+      );
+    }
+    if (n.type === 'baton_accepted' || n.type === 'baton_declined') {
+      const accepted = n.type === 'baton_accepted';
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: accepted ? '#2DC653' : '#7A1818', fontSize: 13 }}>{accepted ? '✓' : '×'}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> {accepted ? 'took the hand-off' : 'passed on the hand-off'}
+            </div>
+            <div className="fb-bell-sub">{p.task_title}</div>
+          </div>
+        </>
+      );
+    }
     if (n.type === 'event_invited') {
       const d = p.event_date ? new Date(p.event_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
       return (
@@ -5984,7 +6222,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!n.read) onMarkOne(n.id);
               const id = n.payload?.task_id || n.payload?.event_id || n.payload?.note_id;
               if (!id) return;
-              if ((n.type === 'task_assigned' || n.type === 'task_cancelled') && onOpenTask) onOpenTask(id);
+              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined') && onOpenTask) onOpenTask(id);
               else if ((n.type === 'event_invited' || n.type === 'event_rsvp') && onOpenEvent) onOpenEvent(id);
               else if ((n.type === 'note_tagged' || n.type === 'note_replied' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
@@ -7817,7 +8055,7 @@ export function MainApp({ profile, onSettings }) {
     // `event_id` is the link to an event (event detail modal -> "Linked
     // tasks" -> create new task). Null when the task isn't tied to an
     // event, present otherwise. Strip-on-error mirrors recurrence.
-    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
+    const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time', 'baton_offer'];
     const droppedCols = [];
     let row = null;
     let error = null;
@@ -7932,6 +8170,100 @@ export function MainApp({ profile, onSettings }) {
       });
     }
   };
+
+  // ── Up for Grabs: claim an unassigned task (self-assign), or release a
+  // task you hold back to Unassigned with a mandatory reason. Both ping the
+  // creator. Handlers take the full task row so they don't depend on `tasks`
+  // (keeps TasksSection's memo from churning).
+  const claimTask = React.useCallback(async (task) => {
+    if (!task) return;
+    // Claiming clears the pool note — it's no longer "in the pool because…".
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: profile.id, pool_reason: null, pool_by: null } : t));
+    let { error } = await supabase.from('tasks').update({ assigned_to: profile.id, pool_reason: null, pool_by: null }).eq('id', task.id);
+    if (error && /pool_reason|pool_by/i.test(error.message || '')) {
+      ({ error } = await supabase.from('tasks').update({ assigned_to: profile.id }).eq('id', task.id));
+    }
+    if (error) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: task.assigned_to, pool_reason: task.pool_reason ?? null, pool_by: task.pool_by ?? null } : t));
+      alert('Could not claim task: ' + error.message);
+      return;
+    }
+    if (task.created_by && task.created_by !== profile.id) {
+      notify([task.created_by], 'task_claimed', {
+        task_id: task.id, task_title: task.title,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile]);
+
+  const releaseTask = React.useCallback(async (task, reason) => {
+    const r = reason && reason.trim();
+    if (!task || !r) return;
+    // Store who dropped it + why, so the task detail can show the note.
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: null, pool_reason: r, pool_by: profile.id } : t));
+    let { error } = await supabase.from('tasks').update({ assigned_to: null, pool_reason: r, pool_by: profile.id }).eq('id', task.id);
+    if (error && /pool_reason|pool_by/i.test(error.message || '')) {
+      // Columns not migrated yet — release anyway; the note just won't persist.
+      ({ error } = await supabase.from('tasks').update({ assigned_to: null }).eq('id', task.id));
+    }
+    if (error) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: task.assigned_to, pool_reason: task.pool_reason ?? null, pool_by: task.pool_by ?? null } : t));
+      alert('Could not release task: ' + error.message);
+      return;
+    }
+    // Anyone can pick it up, so tell the whole group (except the dropper).
+    const targets = members.map(m => m.id).filter(id => id && id !== profile.id);
+    if (targets.length > 0) {
+      notify(targets, 'task_released', {
+        task_id: task.id, task_title: task.title, reason: r,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile, members]);
+
+  // ── Hand off: pass a task to a specific person (a pending offer in
+  // baton_offer they accept/decline). toId null cancels/clears the offer.
+  // Accept/decline goes through the security-definer respond_baton RPC,
+  // since the offeree isn't the assignee yet and RLS would reject a direct
+  // write; on accept it makes them the assignee.
+  const passBaton = React.useCallback(async (task, toId) => {
+    if (!task) return;
+    const next = toId || null;
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, baton_offer: next } : t));
+    const { error } = await supabase.from('tasks').update({ baton_offer: next }).eq('id', task.id);
+    if (error) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, baton_offer: task.baton_offer ?? null } : t));
+      alert('Could not hand off the task: ' + error.message);
+      return;
+    }
+    if (next && next !== profile.id) {
+      notify([next], 'baton_offered', {
+        task_id: task.id, task_title: task.title,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile]);
+
+  const respondBaton = React.useCallback(async (task, accept) => {
+    if (!task) return;
+    const prevHolder = task.assigned_to; // who passed it — notify them
+    const { data, error } = await supabase.rpc('respond_baton', { p_task_id: task.id, p_accept: accept });
+    if (error) {
+      alert('Could not respond to the hand-off: ' + error.message);
+      return;
+    }
+    if (data && data.id) {
+      setTasks(prev => prev.map(t => t.id === data.id ? { ...t, ...data } : t));
+    } else {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, baton_offer: null } : t));
+    }
+    if (prevHolder && prevHolder !== profile.id) {
+      notify([prevHolder], accept ? 'baton_accepted' : 'baton_declined', {
+        task_id: task.id, task_title: task.title,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile]);
 
   // Event CRUD
   const addEvent = async (data) => {
@@ -9063,7 +9395,7 @@ export function MainApp({ profile, onSettings }) {
             collapsed={collapsed.notes}
             onToggleCollapse={toggleCollapseNotes}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* ListsSection is hidden — Spaces handles the same use case
               with more flexibility. The component, state, modals, and
               CRUD wiring all stay in place; just uncomment to bring it

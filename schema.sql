@@ -116,6 +116,14 @@ alter table public.tasks add column if not exists cancelled_at        timestampt
 alter table public.tasks add column if not exists cancellation_reason text;
 alter table public.tasks add column if not exists recurrence          jsonb;
 alter table public.tasks add column if not exists due_time            text;
+-- Hand off: a task being passed to a specific person carries a pending offer
+-- (baton_offer) until they accept (becoming the assignee) or decline. The
+-- holder is just assigned_to; accept/decline goes through respond_baton.
+alter table public.tasks add column if not exists baton_offer         uuid references public.profiles;
+-- Dropped back to the pool: who let it go (pool_by) and why (pool_reason),
+-- shown in the task detail while it's unassigned. Cleared when reclaimed.
+alter table public.tasks add column if not exists pool_reason         text;
+alter table public.tasks add column if not exists pool_by             uuid references public.profiles;
 
 create table if not exists public.notifications (
   id         uuid default gen_random_uuid() primary key,
@@ -620,6 +628,52 @@ begin
   returning * into v_new;
 
   return v_new;
+end;
+$$;
+
+-- Hand off: accept or decline a task offered to you. Runs as definer because
+-- the offeree is not yet the assignee/creator, so the tasks_update policy
+-- would reject a direct write. Only the person it was offered to
+-- (baton_offer = auth.uid()), within their group, may respond. Accept makes
+-- them the assignee and clears the offer; decline just clears the offer.
+create or replace function public.respond_baton(p_task_id uuid, p_accept boolean)
+returns public.tasks
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_task public.tasks;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select * into v_task
+  from public.tasks
+  where id = p_task_id
+    and group_id = public.my_group_id()
+    and baton_offer = v_uid
+  for update;
+
+  if v_task.id is null then
+    return null;  -- no offer for this user, or wrong group
+  end if;
+
+  if p_accept then
+    update public.tasks
+    set assigned_to = v_uid, baton_offer = null
+    where id = p_task_id
+    returning * into v_task;
+  else
+    update public.tasks
+    set baton_offer = null
+    where id = p_task_id
+    returning * into v_task;
+  end if;
+
+  return v_task;
 end;
 $$;
 
