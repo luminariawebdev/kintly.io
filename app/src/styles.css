@@ -585,8 +585,19 @@ html { overscroll-behavior-x: none; }
 .ds-list li strong { color: var(--text-primary); font-weight: 600; }
 .ds-overdue { color: #E27457; font-weight: 700; }
 .ds-who { color: var(--text-muted); font-weight: 600; }
-.ds-list li.ds-more { color: var(--text-muted); font-style: italic; padding-left: 12px; }
+.ds-list li.ds-more {
+  color: var(--kinnekt-purple);
+  font-style: normal;
+  font-weight: 600;
+  padding-left: 12px;
+  cursor: pointer;
+  display: inline-block;
+  border-radius: 6px;
+  transition: opacity 0.15s var(--ease);
+}
 .ds-list li.ds-more::before { content: ''; }
+.ds-list li.ds-more:hover { opacity: 0.7; text-decoration: underline; }
+.ds-list li.ds-more:focus-visible { outline: 2px solid var(--kinnekt-purple); outline-offset: 2px; }
 
 /* ── Section wrapper — soft gradient with floating glow blobs ── */
 .fb-sec-wrap {

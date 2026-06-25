@@ -413,7 +413,8 @@ function LiveClock() {
 // Read-only "Next 24 hours" glance at the top of the home feed. Tasks
 // and events look FORWARD 24h; posts and space activity look BACK 24h.
 // Hidden entirely when nothing falls in any window. Refreshes its time
-// window every minute. Nothing here is interactive by design.
+// window every minute. The only interactive bit is each section's
+// "+N more", which expands/collapses that list.
 function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, getProfile, myId }) {
   useRerenderEvery(60 * 1000);
   const now = Date.now();
@@ -479,7 +480,25 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
   if (!dueTasks.length && !dueEvents.length && !recentPosts.length && !spaceEntries.length) return null;
 
   const CAP = 5;
-  const moreRow = (n) => n > CAP ? <li className="ds-more">+{n - CAP} more</li> : null;
+  // Each section caps at CAP rows; its "+N more" is the one interactive
+  // element here — tap it to reveal the rest, tap again to collapse.
+  const [open, setOpen] = React.useState({});
+  const limitFor = (key, n) => open[key] ? n : CAP;
+  const moreRow = (key, n) => {
+    if (n <= CAP) return null;
+    const toggle = () => setOpen(o => ({ ...o, [key]: !o[key] }));
+    return (
+      <li
+        className="ds-more"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}
+      >
+        {open[key] ? 'show less' : `+${n - CAP} more`}
+      </li>
+    );
+  };
   const postSnippet = (n) => {
     const txt = (n.content || '').trim();
     if (txt) return plainMentions(txt);
@@ -507,7 +526,7 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
         <div className="ds-sec">
           <div className="ds-sec-hd">{dueTasks.length} task{dueTasks.length !== 1 ? 's' : ''} due</div>
           <ul className="ds-list">
-            {dueTasks.slice(0, CAP).map(t => (
+            {dueTasks.slice(0, limitFor('tasks', dueTasks.length)).map(t => (
               <li key={t.id}>
                 {t.title}
                 {isOverdue(t)
@@ -516,7 +535,7 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
                 <span className="ds-who"> · {t.assigned_to ? (personTag(t.assigned_to) || 'Someone') : 'Unassigned'}</span>
               </li>
             ))}
-            {moreRow(dueTasks.length)}
+            {moreRow('tasks', dueTasks.length)}
           </ul>
         </div>
       )}
@@ -525,7 +544,7 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
         <div className="ds-sec">
           <div className="ds-sec-hd">{dueEvents.length} event{dueEvents.length !== 1 ? 's' : ''}</div>
           <ul className="ds-list">
-            {dueEvents.slice(0, CAP).map(e => {
+            {dueEvents.slice(0, limitFor('events', dueEvents.length)).map(e => {
               const ids = eventPeopleIds(e);
               return (
                 <li key={e.id}>
@@ -538,7 +557,7 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
                 </li>
               );
             })}
-            {moreRow(dueEvents.length)}
+            {moreRow('events', dueEvents.length)}
           </ul>
         </div>
       )}
@@ -547,12 +566,12 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
         <div className="ds-sec">
           <div className="ds-sec-hd">{recentPosts.length} post{recentPosts.length !== 1 ? 's' : ''}</div>
           <ul className="ds-list">
-            {recentPosts.slice(0, CAP).map(n => {
+            {recentPosts.slice(0, limitFor('posts', recentPosts.length)).map(n => {
               const author = getProfile?.(n.created_by);
               const who = author ? (author.id === myId ? 'You' : author.display_name) : 'Someone';
               return <li key={n.id}><strong>{who}:</strong> {postSnippet(n)}</li>;
             })}
-            {moreRow(recentPosts.length)}
+            {moreRow('posts', recentPosts.length)}
           </ul>
         </div>
       )}
@@ -561,10 +580,10 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
         <div className="ds-sec">
           <div className="ds-sec-hd">{spaceEntries.length} space{spaceEntries.length !== 1 ? 's' : ''} updated</div>
           <ul className="ds-list">
-            {spaceEntries.slice(0, CAP).map(({ space, changes }) => (
+            {spaceEntries.slice(0, limitFor('spaces', spaceEntries.length)).map(({ space, changes }) => (
               <li key={space.id}>{space.emoji || '✨'} {space.title} — {changes.slice(0, 3).join(', ')}{changes.length > 3 ? '…' : ''}</li>
             ))}
-            {moreRow(spaceEntries.length)}
+            {moreRow('spaces', spaceEntries.length)}
           </ul>
         </div>
       )}
@@ -5685,7 +5704,7 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
               style={{ marginLeft: 0 }}
             >Cancel task</button>
           )}
-          {(!task.assigned_to || task.assigned_to === myId) && (
+          {(task.created_by === myId || !task.assigned_to || task.assigned_to === myId) && (
             <button
               onClick={() => { onDelete(task.id); onClose(); }}
               className="danger-btn"
@@ -8195,13 +8214,22 @@ export function MainApp({ profile, onSettings }) {
     // unassigned), the server quietly skips rows this user can't
     // delete; those vanish when their owner's cleanup pass runs.
     const cutoff = Date.now() - COMPLETED_TTL_MS;
-    const stale = allTasks.filter(task => task.completed && (
+    const stale = allTasks.filter(task => {
       // Completed >8 days ago…
-      (task.completed_at && new Date(task.completed_at).getTime() < cutoff) ||
-      // …or an old completion with no timestamp (pre-tracking). Gate on
-      // created_at so a freshly-created task can never be swept by mistake.
-      (!task.completed_at && task.created_at && new Date(task.created_at).getTime() < cutoff)
-    ));
+      if (task.completed) {
+        return (task.completed_at && new Date(task.completed_at).getTime() < cutoff) ||
+          // …or an old completion with no timestamp (pre-tracking). Gate on
+          // created_at so a freshly-created task can never be swept by mistake.
+          (!task.completed_at && task.created_at && new Date(task.created_at).getTime() < cutoff);
+      }
+      // Cancelled tombstones also self-clear after the same window so they
+      // don't sit in the assignee's list forever (the creator/assignee can
+      // also delete one immediately from its detail).
+      if (task.cancelled_at) {
+        return new Date(task.cancelled_at).getTime() < cutoff;
+      }
+      return false;
+    });
     const fresh = stale.length === 0
       ? allTasks
       : allTasks.filter(task => !stale.some(s => s.id === task.id));
