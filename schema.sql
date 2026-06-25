@@ -158,6 +158,21 @@ create table if not exists public.note_comments (
 );
 create index if not exists note_comments_note_idx on public.note_comments(note_id, created_at);
 
+-- Task suggestions: any group member (except the task's creator) can propose
+-- a written note on a task. The creator approves or dismisses; approved notes
+-- show in the task detail. Display-only — they don't mutate the task itself.
+create table if not exists public.task_suggestions (
+  id           uuid default gen_random_uuid() primary key,
+  task_id      uuid references public.tasks on delete cascade not null,
+  group_id     uuid references public.groups on delete cascade not null,
+  suggested_by uuid references public.profiles not null,
+  body         text not null,
+  status       text not null default 'pending',   -- pending | approved | dismissed
+  created_at   timestamptz default now(),
+  decided_at   timestamptz
+);
+create index if not exists task_suggestions_task_idx on public.task_suggestions(task_id, created_at);
+
 -- ─── Row-level security ──────────────────────────────────────────────────────
 
 alter table public.groups        enable row level security;
@@ -167,6 +182,7 @@ alter table public.events        enable row level security;
 alter table public.notes         enable row level security;
 alter table public.notifications enable row level security;
 alter table public.note_comments enable row level security;
+alter table public.task_suggestions enable row level security;
 
 -- Groups
 drop policy if exists "groups_select" on public.groups;
@@ -279,6 +295,21 @@ create policy "note_comments_update" on public.note_comments
 drop policy if exists "note_comments_delete" on public.note_comments;
 create policy "note_comments_delete" on public.note_comments
   for delete using (created_by = auth.uid());
+
+-- Task suggestions
+drop policy if exists "task_suggestions_select" on public.task_suggestions;
+create policy "task_suggestions_select" on public.task_suggestions
+  for select using (group_id = public.my_group_id());
+drop policy if exists "task_suggestions_insert" on public.task_suggestions;
+create policy "task_suggestions_insert" on public.task_suggestions
+  for insert with check (
+    group_id = public.my_group_id()
+    and suggested_by = auth.uid()
+    and (select created_by from public.tasks where id = task_id) <> auth.uid()
+  );
+drop policy if exists "task_suggestions_delete" on public.task_suggestions;
+create policy "task_suggestions_delete" on public.task_suggestions
+  for delete using (suggested_by = auth.uid());
 
 -- ─── Auto-create profile on signup ───────────────────────────────────────────
 
@@ -687,6 +718,49 @@ begin
 end;
 $$;
 
+-- Approve / dismiss a task suggestion. Only the task's creator may decide;
+-- runs as definer so the decision isn't blocked by the suggester-only update
+-- gap in RLS.
+create or replace function public.decide_suggestion(p_id uuid, p_approve boolean)
+returns public.task_suggestions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_row public.task_suggestions;
+  v_creator uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select * into v_row
+  from public.task_suggestions
+  where id = p_id and group_id = public.my_group_id()
+  for update;
+
+  if v_row.id is null then
+    return null;  -- not found / wrong group
+  end if;
+
+  select created_by into v_creator from public.tasks where id = v_row.task_id;
+  if v_creator is distinct from v_uid then
+    raise exception 'only the task creator can decide';
+  end if;
+
+  update public.task_suggestions
+  set status = case when p_approve then 'approved' else 'dismissed' end,
+      decided_at = now()
+  where id = p_id
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+grant execute on function public.decide_suggestion(uuid, boolean) to authenticated;
+
 -- ─── Realtime ────────────────────────────────────────────────────────────────
 -- postgres_changes only fires for tables in the supabase_realtime
 -- publication. Without this block a fresh project gets silent no-op
@@ -696,7 +770,7 @@ do $$
 declare t text;
 begin
   foreach t in array array[
-    'tasks', 'events', 'notes', 'notifications',
+    'tasks', 'events', 'notes', 'notifications', 'task_suggestions',
     'shared_lists', 'shared_list_items', 'shared_list_activity',
     'spaces', 'space_items'
   ]

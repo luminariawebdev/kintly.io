@@ -22,6 +22,12 @@
      cramming into a corner, and the coral stop sits past 100% so it eases
      off the edge as a soft falloff rather than an abrupt band/"line". */
   --brand-grad: linear-gradient(110deg, #6A4DFF 0%, #2D9CFF 42%, #3DD9C5 74%, #FF8C8C 118%);
+  /* Solid-fill version: drops the coral so cyan never blends into it. Those
+     two are near-opposite hues, and their midpoint goes muddy/gray — on a
+     filled button that dull zone reads as a vertical "bar". Cool-only
+     (purple→blue→cyan) stays smooth edge-to-edge. Text/logo keep the full
+     four-colour --brand-grad above. */
+  --brand-grad-fill: linear-gradient(110deg, #6A4DFF 0%, #2D9CFF 50%, #3DD9C5 100%);
   --brand-grad-soft: linear-gradient(135deg, rgba(106,77,255,0.10), rgba(45,156,255,0.10), rgba(61,217,197,0.10), rgba(255,122,122,0.10));
 
   /* Universal hover tint — soft purple→blue→cyan wash used on every hover */
@@ -450,13 +456,13 @@ html { overscroll-behavior-x: none; }
 .fb-tab:hover { color: var(--text-primary); background: var(--hover-tint); }
 .fb-tab:active { transform: translateY(1px); }
 .fb-tab.active {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   color: #FFFFFF;
   -webkit-text-fill-color: #FFFFFF;
   box-shadow: 0 6px 18px rgba(106, 77, 255, 0.30);
   font-weight: 700;
 }
-.fb-tab.active:hover { background: var(--brand-grad); }
+.fb-tab.active:hover { background: var(--brand-grad-fill); }
 
 /* ── Live clock banner (above the home feed) ─────────────────── */
 .live-clock {
@@ -774,7 +780,7 @@ html { overscroll-behavior-x: none; }
 }
 .fb-chip:hover { color: var(--text-primary); background: var(--hover-tint); border-color: var(--hover-border); }
 .fb-chip.on {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   color: #FFFFFF;
   border-color: transparent;
   font-weight: 600;
@@ -815,7 +821,7 @@ html { overscroll-behavior-x: none; }
 }
 .task-view-tab:hover { color: var(--text-primary); }
 .task-view-tab.on {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   color: #FFFFFF;
   box-shadow: 0 4px 14px rgba(106, 77, 255, 0.25);
 }
@@ -858,12 +864,12 @@ html { overscroll-behavior-x: none; }
 .fb-btn .plus { font-size: 17px; line-height: 1; margin-top: -2px; font-weight: 400; }
 .fb-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-medium); background: var(--hover-tint); border-color: var(--hover-border); }
 .fb-btn.solid {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   color: #FFFFFF;
   border-color: transparent;
   box-shadow: 0 10px 25px rgba(106, 77, 255, 0.25);
 }
-.fb-btn.solid:hover { background: var(--brand-grad); box-shadow: 0 15px 35px rgba(106, 77, 255, 0.35); }
+.fb-btn.solid:hover { background: var(--brand-grad-fill); box-shadow: 0 15px 35px rgba(106, 77, 255, 0.35); }
 .fb-btn.ghost { border-style: dashed; color: var(--text-muted); background: transparent; box-shadow: none; }
 .fb-btn:active { transform: translateY(0); }
 
@@ -956,6 +962,11 @@ html { overscroll-behavior-x: none; }
   border-bottom-right-radius: var(--r-md) !important;
 }
 .trow.done { opacity: 0.6; }
+/* Disclosure arrow — sits dim, then brightens + slides on hover/press so
+   the row clearly reads as tappable. */
+.trow-arrow { opacity: 0.45; transition: opacity 0.15s ease, transform 0.15s ease; }
+.trow:hover .trow-arrow,
+.trow:active .trow-arrow { opacity: 0.85; transform: translateX(3px); }
 
 /* "Right now" hand-off strip — active baton tasks at a glance. */
 .handoff-strip { margin: 2px 0 14px; }
@@ -1963,7 +1974,7 @@ html { overscroll-behavior-x: none; }
   transform: translateY(-1px);
 }
 .post-type-btn.on {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   border-color: transparent;
   color: #fff;
   box-shadow: 0 6px 18px rgba(106, 77, 255, 0.30);
@@ -2717,7 +2728,7 @@ html { overscroll-behavior-x: none; }
   transform: translate(-50%, -50%);
   z-index: 2;
   padding: 4px 14px;
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   color: #FFFFFF;
   font-family: var(--font-main);
   font-size: 10px;
@@ -2883,14 +2894,14 @@ html { overscroll-behavior-x: none; }
   box-shadow: var(--shadow-soft);
 }
 .pick.on {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   color: #FFFFFF;
   border-color: transparent;
   font-weight: 600;
   box-shadow: 0 6px 18px rgba(106, 77, 255, 0.30);
 }
 .pick.on:hover {
-  background: var(--brand-grad);
+  background: var(--brand-grad-fill);
   box-shadow: 0 10px 24px rgba(106, 77, 255, 0.38);
 }
 .pick.on .userbadge .you { -webkit-text-fill-color: #FFFFFF; color: #FFFFFF; background: none; }

@@ -817,7 +817,7 @@ function useRerenderEvery(ms) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone }) {
+function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone, suggestInfo }) {
   const color = getColor(assignee?.color);
   const isCancelled = !!task.cancelled_at;
   const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
@@ -853,6 +853,9 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
     color: fg || 'var(--text-secondary)', cursor: 'pointer',
     fontFamily: 'var(--font-main)',
   });
+  // Hand off / Postpone are the two primary actions, so they sit ~20% larger
+  // than the secondary chips (padding) with ~15% bigger text (11 → 12.7px).
+  const chipLg = (bg, fg) => ({ ...chip(bg, fg), fontSize: 12.7, padding: '5px 12px' });
   return (
     <SwipeToDelete onDelete={onDelete} disabled={!canActOnTask}>
     <div
@@ -943,6 +946,30 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
           <div style={{ marginTop: 6 }}><SpaceTag spaceId={task.space_id} /></div>
         )}
 
+        {/* Suggestion badge: approved count for everyone; a "to review" nudge
+            for the creator when notes are still pending. */}
+        {(() => {
+          const sg = suggestInfo && suggestInfo.get(task.id);
+          if (!sg) return null;
+          const mine = task.created_by === myId;
+          const showPending = mine && sg.pending > 0;
+          if (!sg.approved && !showPending) return null;
+          return (
+            <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {sg.approved > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: 'rgba(214,160,45,0.12)', border: '1px solid rgba(214,160,45,0.30)', color: '#C98A1E' }}>
+                  💡 {sg.approved} suggestion{sg.approved > 1 ? 's' : ''}
+                </span>
+              )}
+              {showPending && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(214,160,45,0.16)', border: '1px dashed rgba(214,160,45,0.45)', color: '#C98A1E' }}>
+                  💡 {sg.pending} to review
+                </span>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Hand-off offered to me — accept to take it over, or decline. */}
         {live && offeredToMe && onRespond && (
           <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
@@ -969,8 +996,8 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
               </div>
             ) : !handing ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                <button onClick={stop(() => setHanding(true))} style={chip('var(--kinnekt-cyan)', '#fff')}>Hand off →</button>
-                {onPostpone && <button onClick={stop(() => onPostpone(task))} style={chip('var(--kinnekt-coral)', '#fff')}>Postpone</button>}
+                <button onClick={stop(() => setHanding(true))} style={chipLg('var(--kinnekt-cyan)', '#fff')}>Hand off</button>
+                {onPostpone && <button onClick={stop(() => onPostpone(task))} style={chipLg('var(--kinnekt-coral)', '#fff')}>Postpone</button>}
               </div>
             ) : releasing ? (
               <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
@@ -1004,10 +1031,18 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
         {/* Postpone is available even when hand-off isn't (e.g. private tasks). */}
         {canPostpone && !canHandOff && (
           <div style={{ marginTop: 7 }}>
-            <button onClick={stop(() => onPostpone(task))} style={chip('var(--kinnekt-coral)', '#fff')}>Postpone</button>
+            <button onClick={stop(() => onPostpone(task))} style={chipLg('var(--kinnekt-coral)', '#fff')}>Postpone</button>
           </div>
         )}
       </div>
+      {/* Disclosure cue: a soft arrow on the far right invites a tap into
+          the task's details. Purely visual — the whole row is the target. */}
+      {onClick && (
+        <span aria-hidden className="trow-arrow" style={{
+          flexShrink: 0, alignSelf: 'center', marginLeft: 4,
+          fontSize: 17, lineHeight: 1, color: 'var(--text-muted)',
+        }}>→</span>
+      )}
     </div>
     </SwipeToDelete>
   );
@@ -1018,9 +1053,22 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
 // doesn't touch their props (bell menu, scroll-driven tab sync, modal
 // opens) skips re-rendering hundreds of rows. MainApp passes only
 // useCallback'd handlers and primitive/stable values for this to work.
-const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onRelease, onPass, onRespond, onPostpone, collapsed, onToggleCollapse, filter, setFilter }) {
+const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, suggestions, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onRelease, onPass, onRespond, onPostpone, collapsed, onToggleCollapse, filter, setFilter }) {
+  // Per-task suggestion summary for the row badge: how many approved, and
+  // (for the task's creator) how many pending notes still need a decision.
+  const suggestInfo = React.useMemo(() => {
+    const m = new Map();
+    (suggestions || []).forEach(s => {
+      if (s.status === 'dismissed') return;
+      const e = m.get(s.task_id) || { approved: 0, pending: 0 };
+      if (s.status === 'approved') e.approved++;
+      else if (s.status === 'pending') e.pending++;
+      m.set(s.task_id, e);
+    });
+    return m;
+  }, [suggestions]);
   // Claim / release / baton handlers + roster, spread onto every TaskRow.
-  const rowExtra = { members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone };
+  const rowExtra = { members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone, suggestInfo };
   const [showDone, setShowDone] = React.useState(false);
   // Personal view gets its own completed-toggle so expanding "Completed"
   // in one view doesn't silently expand it in the other.
@@ -5222,13 +5270,15 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond, suggestions, onSuggest, onDecideSuggestion, onWithdrawSuggestion }) {
   const [cancelMode, setCancelMode] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [cancelling, setCancelling] = React.useState(false);
+  const [suggestOpen, setSuggestOpen] = React.useState(false);
+  const [suggestText, setSuggestText] = React.useState('');
 
   React.useEffect(() => {
-    if (open) { setCancelMode(false); setCancelReason(''); }
+    if (open) { setCancelMode(false); setCancelReason(''); setSuggestOpen(false); setSuggestText(''); }
   }, [open, task?.id]);
 
   if (!open || !task) return null;
@@ -5267,6 +5317,15 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
     }
     return null;
   })();
+
+  // Suggestions for this task. The creator vets pending ones; approved ones
+  // show to everyone; a suggester sees the status of their own pending note.
+  const taskSuggestions = (suggestions || []).filter(s => s.task_id === task.id);
+  const approvedSuggestions = taskSuggestions.filter(s => s.status === 'approved');
+  const pendingSuggestions = taskSuggestions.filter(s => s.status === 'pending');
+  const iAmCreator = task.created_by === myId;
+  const myPending = pendingSuggestions.filter(s => s.suggested_by === myId);
+  const canSuggest = onSuggest && !iAmCreator && !task.cancelled_at && !task.completed;
 
   return (
     <Modal open={open} onClose={onClose} title="Task">
@@ -5441,6 +5500,102 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
           </div>
         );
       })()}
+
+      {/* Approved suggestions — visible to everyone, stacked. */}
+      {approvedSuggestions.length > 0 && (
+        <div style={{ marginBottom: 14, padding: '12px 14px', background: 'rgba(214,160,45,0.08)', border: '1px solid rgba(214,160,45,0.32)', borderRadius: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 8, color: '#C98A1E' }}>
+            💡 Suggestion{approvedSuggestions.length > 1 ? 's' : ''}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {approvedSuggestions.map(s => {
+              const by = getProfile?.(s.suggested_by);
+              const name = by ? (by.id === myId ? 'You' : by.display_name) : 'Someone';
+              return (
+                <div key={s.id} style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+                  <strong style={{ color: by ? getColor(by.color) : 'var(--text-primary)' }}>{name}</strong>: {s.body}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Pending suggestions the creator needs to vet. */}
+      {iAmCreator && onDecideSuggestion && pendingSuggestions.length > 0 && (
+        <div style={{ marginBottom: 14, padding: '12px 14px', background: 'rgba(214,160,45,0.06)', border: '1px dashed rgba(214,160,45,0.42)', borderRadius: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 8, color: '#C98A1E' }}>
+            💡 Suggestion{pendingSuggestions.length > 1 ? 's' : ''} to review
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {pendingSuggestions.map(s => {
+              const by = getProfile?.(s.suggested_by);
+              const name = by ? by.display_name : 'Someone';
+              return (
+                <div key={s.id}>
+                  <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+                    <strong style={{ color: by ? getColor(by.color) : 'var(--text-primary)' }}>{name}</strong>: {s.body}
+                  </div>
+                  <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button onClick={() => onDecideSuggestion(s, true)} className="copy-btn" style={{ marginLeft: 0, background: 'var(--kinnekt-cyan)', color: '#fff', borderColor: 'transparent' }}>Approve</button>
+                    <button onClick={() => onDecideSuggestion(s, false)} className="copy-btn" style={{ marginLeft: 0 }}>Dismiss</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* The suggester's own note while it's still awaiting a decision. */}
+      {!iAmCreator && myPending.length > 0 && (
+        <div style={{ marginBottom: 14, padding: '12px 14px', background: 'rgba(214,160,45,0.06)', border: '1px dashed rgba(214,160,45,0.42)', borderRadius: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 8, color: '#C98A1E' }}>
+            💡 Your suggestion · waiting for {creator ? (creator.id === myId ? 'approval' : creator.display_name) : 'the creator'}
+          </div>
+          {myPending.map(s => (
+            <div key={s.id}>
+              <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)', fontStyle: 'italic' }}>“{s.body}”</div>
+              {onWithdrawSuggestion && (
+                <div style={{ marginTop: 6 }}>
+                  <button onClick={() => onWithdrawSuggestion(s)} className="copy-btn" style={{ marginLeft: 0 }}>Withdraw</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Make a suggestion — anyone but the creator, on a live task. */}
+      {canSuggest && (
+        <div style={{ marginBottom: 14 }}>
+          {!suggestOpen ? (
+            <button onClick={() => setSuggestOpen(true)} className="copy-btn" style={{ marginLeft: 0 }}>💡 Suggest an idea</button>
+          ) : (
+            <div style={{ padding: '12px 14px', background: 'rgba(214,160,45,0.06)', border: '1px solid rgba(214,160,45,0.30)', borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 8, color: '#C98A1E' }}>
+                Suggest to {creator ? creator.display_name : 'the creator'}
+              </div>
+              <textarea
+                value={suggestText}
+                onChange={(e) => setSuggestText(e.target.value)}
+                placeholder="Share an idea for this task…"
+                rows={3}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--surface-glass)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'var(--font-main)', resize: 'vertical' }}
+              />
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <button
+                  disabled={!suggestText.trim()}
+                  onClick={() => { onSuggest(task, suggestText); setSuggestText(''); setSuggestOpen(false); }}
+                  className="copy-btn"
+                  style={{ marginLeft: 0, background: 'var(--kinnekt-cyan)', color: '#fff', borderColor: 'transparent', opacity: suggestText.trim() ? 1 : 0.5, cursor: suggestText.trim() ? 'pointer' : 'not-allowed' }}
+                >Send suggestion</button>
+                <button onClick={() => { setSuggestOpen(false); setSuggestText(''); }} className="copy-btn" style={{ marginLeft: 0 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {linkedNote && (
         <div className="field" style={{ marginBottom: 14 }}>
@@ -6364,6 +6519,32 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
         </>
       );
     }
+    if (n.type === 'task_suggested') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color), fontSize: 13 }}>💡</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> suggested an idea — tap to review
+            </div>
+            <div className="fb-bell-sub">{p.task_title}{p.body ? ` · “${p.body}”` : ''}</div>
+          </div>
+        </>
+      );
+    }
+    if (n.type === 'suggestion_approved') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: '#2DC653', fontSize: 13 }}>💡</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> approved your suggestion
+            </div>
+            <div className="fb-bell-sub">{p.task_title}{p.body ? ` · “${p.body}”` : ''}</div>
+          </div>
+        </>
+      );
+    }
     if (n.type === 'event_invited') {
       const d = p.event_date ? new Date(p.event_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
       return (
@@ -6467,7 +6648,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!n.read) onMarkOne(n.id);
               const id = n.payload?.task_id || n.payload?.event_id || n.payload?.note_id;
               if (!id) return;
-              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'task_postponed' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined') && onOpenTask) onOpenTask(id);
+              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'task_postponed' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined' || n.type === 'task_suggested' || n.type === 'suggestion_approved') && onOpenTask) onOpenTask(id);
               else if ((n.type === 'event_invited' || n.type === 'event_rsvp') && onOpenEvent) onOpenEvent(id);
               else if ((n.type === 'note_tagged' || n.type === 'note_replied' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
@@ -7871,6 +8052,7 @@ export function MainApp({ profile, onSettings }) {
   // current space pre-selected. This holds that pre-selection.
   const [pendingSpaceId, setPendingSpaceId] = React.useState(null);
   const [notifications, setNotifications] = React.useState([]);
+  const [suggestions, setSuggestions] = React.useState([]);
   const [bellOpen, setBellOpen] = React.useState(false);
   const bellMenuRef = React.useRef(null);
   const [loading, setLoading] = React.useState(true);
@@ -7985,6 +8167,10 @@ export function MainApp({ profile, onSettings }) {
       .then(({ data, error }) => { if (!error) setSpaces(data || []); });
     supabase.from('space_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true })
       .then(({ data, error }) => { if (!error) setSpaceItems(data || []); });
+
+    // Task suggestions (silently [] if the table isn't migrated yet).
+    supabase.from('task_suggestions').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: true })
+      .then(({ data, error }) => { if (!error) setSuggestions(data || []); });
 
     // Notifications (silently no-op if table missing)
     supabase.from('notifications')
@@ -8146,6 +8332,16 @@ export function MainApp({ profile, onSettings }) {
             setNotes(prev => prev.some(n => n.id === row.id) ? prev : [row, ...prev]);
           } else {
             setNotes(prev => prev.map(n => n.id === row.id ? row : n));
+          }
+        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'task_suggestions', filter: `group_id=eq.${profile.group_id}` },
+        ({ eventType, new: row, old }) => {
+          if (eventType === 'DELETE') {
+            setSuggestions(prev => prev.filter(s => s.id !== old.id));
+          } else if (eventType === 'INSERT') {
+            setSuggestions(prev => prev.some(s => s.id === row.id) ? prev : [...prev, row]);
+          } else {
+            setSuggestions(prev => prev.map(s => s.id === row.id ? row : s));
           }
         })
       .subscribe();
@@ -8584,6 +8780,56 @@ export function MainApp({ profile, onSettings }) {
       });
     }
   }, [profile]);
+
+  // ── Suggestions: any group member (but the creator) proposes a written
+  // note on a task; the creator approves/dismisses; approved ones show in
+  // the detail. Pure additive notes — they never mutate the task.
+  const addSuggestion = React.useCallback(async (task, body) => {
+    const text = (body || '').trim();
+    if (!task || !text) return;
+    const { data, error } = await supabase.from('task_suggestions').insert({
+      task_id: task.id, group_id: profile.group_id,
+      suggested_by: profile.id, body: text,
+    }).select().single();
+    if (error) {
+      alert(/relation .*task_suggestions.* does not exist|schema cache/i.test(error.message || '')
+        ? 'Suggestions need a quick database update before they\'ll save. (Run the task_suggestions migration.)'
+        : 'Could not send the suggestion: ' + error.message);
+      return;
+    }
+    if (data) setSuggestions(prev => prev.some(s => s.id === data.id) ? prev : [...prev, data]);
+    if (task.created_by && task.created_by !== profile.id) {
+      notify([task.created_by], 'task_suggested', {
+        task_id: task.id, task_title: task.title, body: text,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile]);
+
+  const decideSuggestion = React.useCallback(async (sugg, approve) => {
+    if (!sugg) return;
+    const { data, error } = await supabase.rpc('decide_suggestion', { p_id: sugg.id, p_approve: approve });
+    if (error) {
+      alert('Could not update the suggestion: ' + error.message);
+      return;
+    }
+    const next = (data && data.id) ? data : { ...sugg, status: approve ? 'approved' : 'dismissed' };
+    setSuggestions(prev => prev.map(s => s.id === next.id ? { ...s, ...next } : s));
+    if (approve && sugg.suggested_by && sugg.suggested_by !== profile.id) {
+      const task = tasks.find(t => t.id === sugg.task_id);
+      notify([sugg.suggested_by], 'suggestion_approved', {
+        task_id: sugg.task_id, task_title: task?.title || '', body: sugg.body,
+        by_name: profile.display_name, by_color: profile.color,
+      });
+    }
+  }, [profile, tasks]);
+
+  const withdrawSuggestion = React.useCallback(async (sugg) => {
+    if (!sugg) return;
+    setSuggestions(prev => prev.filter(s => s.id !== sugg.id));
+    const { error } = await supabase.from('task_suggestions').delete().eq('id', sugg.id);
+    if (error) { setSuggestions(prev => prev.some(s => s.id === sugg.id) ? prev : [...prev, sugg]); }
+  }, []);
 
   // Event CRUD
   const addEvent = async (data) => {
@@ -9715,7 +9961,7 @@ export function MainApp({ profile, onSettings }) {
             collapsed={collapsed.notes}
             onToggleCollapse={toggleCollapseNotes}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} suggestions={suggestions} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* ListsSection is hidden — Spaces handles the same use case
               with more flexibility. The component, state, modals, and
               CRUD wiring all stay in place; just uncomment to bring it
@@ -9957,6 +10203,10 @@ export function MainApp({ profile, onSettings }) {
         onPostpone={(t) => setPostponeTarget(t)}
         onPass={passBaton}
         onRespond={respondBaton}
+        suggestions={suggestions}
+        onSuggest={addSuggestion}
+        onDecideSuggestion={decideSuggestion}
+        onWithdrawSuggestion={withdrawSuggestion}
       />
       <PostponeModal
         open={!!postponeTarget}
