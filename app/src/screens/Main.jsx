@@ -1101,12 +1101,19 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   const openPersonal = filteredPersonal.filter(t => !t.completed).sort(byDueAsc);
   const donePersonal = filteredPersonal.filter(t => t.completed && isFresh(t));
 
+  // A task mid-hand-off is "in transit" to the person it was offered to, so
+  // it surfaces in THEIR list (with an Accept/Decline) rather than the
+  // current holder's — the ball is in the recipient's court. The holder
+  // still sees their "Offered to … / Cancel" inline (canHandOff is keyed off
+  // the real assigned_to, not the group it renders under).
+  const pendingOwner = (t) => (t.baton_offer && !t.completed && !t.cancelled_at) ? t.baton_offer : t.assigned_to;
+
   const grouped = members.map(m => ({
     member: m,
-    items: openItems.filter(t => t.assigned_to === m.id),
+    items: openItems.filter(t => pendingOwner(t) === m.id),
   })).filter(g => g.items.length > 0);
 
-  const unassigned = openItems.filter(t => !t.assigned_to);
+  const unassigned = openItems.filter(t => !pendingOwner(t));
   const openCount = sharedTasks.filter(t => !t.completed).length;
   const personalCount = personalTasks.filter(t => !t.completed).length;
 
@@ -1153,14 +1160,13 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
         if (pending.length === 0) return null;
         return (
           <div className="handoff-strip">
-            <div className="handoff-strip-label">Right now</div>
+            <div className="handoff-strip-label">Handing off</div>
             <div className="handoff-strip-rows">
               {pending.map(t => {
                 const from = getProfile(t.assigned_to);
                 const to = getProfile(t.baton_offer);
                 return (
                   <button key={t.id} type="button" className="handoff-chip" onClick={() => onShowTask?.(t)}>
-                    <span aria-hidden>🔴</span>
                     {from && <Dot profile={from} />}
                     <span className="handoff-chip-who">{from ? (from.id === myId ? 'You' : from.display_name) : '—'}</span>
                     <span aria-hidden style={{ color: 'var(--text-muted)' }}>→</span>
@@ -5216,7 +5222,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond }) {
   const [cancelMode, setCancelMode] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [cancelling, setCancelling] = React.useState(false);
@@ -5399,6 +5405,42 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
           </div>
         </div>
       )}
+
+      {task.baton_offer && !task.cancelled_at && !task.completed && (() => {
+        const to = getProfile?.(task.baton_offer);
+        const from = getProfile?.(task.assigned_to);
+        const toName = to ? (to.id === myId ? 'you' : to.display_name) : 'someone';
+        const fromName = from ? (from.id === myId ? 'You' : from.display_name) : 'Someone';
+        const offeredToMe = task.baton_offer === myId;
+        const iAmHolder = task.assigned_to === myId;
+        return (
+          <div style={{
+            marginBottom: 14, padding: '12px 14px',
+            background: 'rgba(45, 156, 255, 0.07)',
+            border: '1px solid rgba(45, 156, 255, 0.30)',
+            borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 5, color: 'var(--kinnekt-cyan)' }}>
+              Handed to {to ? <span style={{ color: getColor(to.color) }}>{toName}</span> : toName}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+              <strong style={{ color: from ? getColor(from.color) : 'var(--text-primary)' }}>{fromName}</strong> handed this off
+              {to ? <> to <strong style={{ color: getColor(to.color) }}>{toName}</strong></> : null} — waiting for {offeredToMe ? 'you' : (to ? to.display_name : 'them')} to accept.
+            </div>
+            {offeredToMe && onRespond && (
+              <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => onRespond(task, true)} className="copy-btn" style={{ marginLeft: 0, background: 'var(--kinnekt-cyan)', color: '#fff', borderColor: 'transparent' }}>Accept</button>
+                <button onClick={() => onRespond(task, false)} className="copy-btn" style={{ marginLeft: 0 }}>Decline</button>
+              </div>
+            )}
+            {!offeredToMe && iAmHolder && onPass && (
+              <div style={{ marginTop: 10 }}>
+                <button onClick={() => onPass(task, null)} className="copy-btn" style={{ marginLeft: 0 }}>Cancel hand-off</button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {linkedNote && (
         <div className="field" style={{ marginBottom: 14 }}>
@@ -9913,6 +9955,8 @@ export function MainApp({ profile, onSettings }) {
         onOpenNote={(n) => { setDetailTaskId(null); setDetailNoteId(n.id); }}
         onShowMember={(p) => { setDetailTaskId(null); setDetailMemberId(p.id); }}
         onPostpone={(t) => setPostponeTarget(t)}
+        onPass={passBaton}
+        onRespond={respondBaton}
       />
       <PostponeModal
         open={!!postponeTarget}
