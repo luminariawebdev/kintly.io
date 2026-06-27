@@ -410,6 +410,313 @@ function LiveClock() {
   );
 }
 
+// ─── Voice assistant ──────────────────────────────────────────────────────────
+// Tap the mic, speak ("remind Xandra to do the dishes tomorrow", "add bananas to
+// groceries", "dentist on the 5th at 9am"), and it drops each thing in the right
+// place. Speech → text via a Vercel function (Groq Whisper); text → structured
+// items via a Vercel function (Claude tool use). A confirm screen shows what it
+// understood before anything is written. The two /api functions hold the API
+// keys; nothing sensitive lives in the browser. Because those functions only run
+// on Vercel, this feature works on the deployed site, not the local preview.
+function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAddSpaceItem }) {
+  const [phase, setPhase] = React.useState('idle'); // idle | recording | working | review | error
+  const [error, setError] = React.useState('');
+  const [transcript, setTranscript] = React.useState('');
+  const [plan, setPlan] = React.useState(null);
+  const [applying, setApplying] = React.useState(false);
+  const recRef = React.useRef(null);
+  const chunksRef = React.useRef([]);
+
+  const norm = (s) => (s || '').trim().toLowerCase();
+  const resolveMember = (name) => {
+    const n = norm(name);
+    if (!n || ['unassigned', 'no one', 'nobody', 'anyone', 'none'].includes(n)) return null;
+    if (['me', 'myself', 'i'].includes(n)) return profile?.id || null;
+    return (members.find((m) => norm(m.display_name) === n)
+      || members.find((m) => norm(m.display_name).includes(n) || n.includes(norm(m.display_name)))
+      || null)?.id || null;
+  };
+  const resolveSpace = (name) => {
+    const n = norm(name);
+    if (!n) return null;
+    return spaces.find((s) => norm(s.title) === n)
+      || spaces.find((s) => norm(s.title).includes(n) || n.includes(norm(s.title)))
+      || null;
+  };
+  const memberName = (id) => {
+    if (!id) return null;
+    const m = members.find((x) => x.id === id);
+    return m ? (m.id === profile?.id ? 'You' : m.display_name) : null;
+  };
+  const fmtDate = (iso) => {
+    if (!iso) return null;
+    const d = new Date(iso + 'T00:00:00');
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  const fmtTime = (t) => {
+    if (!t) return null;
+    const [h, m] = t.split(':').map(Number);
+    if (isNaN(h)) return t;
+    const ap = h >= 12 ? 'PM' : 'AM';
+    const hr = h % 12 === 0 ? 12 : h % 12;
+    return `${hr}:${String(m || 0).padStart(2, '0')} ${ap}`;
+  };
+
+  const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onloadend = () => { const s = String(fr.result || ''); resolve(s.slice(s.indexOf(',') + 1)); };
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+
+  const buildContext = () => {
+    const now = new Date();
+    return {
+      today: toLocalISO(now),
+      weekday: now.toLocaleDateString('en-US', { weekday: 'long' }),
+      time: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+      timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone) || 'local time',
+      me: profile?.display_name || 'me',
+      members: members.map((m) => m.display_name),
+      spaces: spaces.map((s) => s.title),
+    };
+  };
+
+  const start = async () => {
+    setError('');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('Voice input is not supported on this browser.');
+      setPhase('error');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' });
+        process(blob);
+      };
+      recRef.current = rec;
+      rec.start();
+      setPhase('recording');
+    } catch {
+      setError('Microphone access was blocked. Allow it for this site and try again.');
+      setPhase('error');
+    }
+  };
+
+  const stop = () => {
+    if (recRef.current && phase === 'recording') {
+      setPhase('working');
+      try { recRef.current.stop(); } catch { /* already stopped */ }
+    }
+  };
+
+  const process = async (blob) => {
+    try {
+      if (!blob || !blob.size) { setError("I didn't catch any audio. Try again."); setPhase('error'); return; }
+      const audio = await blobToBase64(blob);
+      const tr = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ audio, mime: blob.type || 'audio/webm' }),
+      });
+      const trData = await tr.json().catch(() => ({}));
+      if (!tr.ok) throw new Error(trData.error || 'Could not transcribe the audio.');
+      const text = (trData.text || '').trim();
+      if (!text) { setError("I didn't catch that — try speaking again."); setPhase('error'); return; }
+      setTranscript(text);
+
+      const ir = await fetch('/api/interpret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text, context: buildContext() }),
+      });
+      const irData = await ir.json().catch(() => ({}));
+      if (!ir.ok) throw new Error(irData.error || 'Could not understand that.');
+
+      const tasks = (irData.tasks || []).map((t) => ({
+        title: t.title,
+        assigneeId: resolveMember(t.assignee),
+        assigneeRaw: t.assignee,
+        due_date: t.due_date || null,
+        due_time: t.due_time || null,
+        repeats: t.repeats && t.repeats !== 'none' ? t.repeats : null,
+        details: t.details || null,
+        is_private: !!t.private,
+      }));
+      const events = (irData.events || []).map((e) => ({
+        title: e.title,
+        date: e.date,
+        start_time: e.start_time || null,
+        attendeeIds: (e.attendees || []).map(resolveMember).filter(Boolean),
+        location: e.location || null,
+      }));
+      const items = (irData.space_items || []).map((s) => {
+        const sp = resolveSpace(s.space);
+        return { item: s.item, spaceRaw: s.space, spaceId: sp?.id || null, spaceTitle: sp?.title || null };
+      });
+      const total = tasks.length + events.length + items.length;
+      if (total === 0) {
+        setError(irData.note ? irData.note : "I couldn't find anything to add in that. Try again.");
+        setPhase('error');
+        return;
+      }
+      setPlan({ tasks, events, items, note: irData.note || '' });
+      setPhase('review');
+    } catch (e) {
+      setError((e && e.message) || 'Something went wrong.');
+      setPhase('error');
+    }
+  };
+
+  const reset = () => { setPlan(null); setTranscript(''); setError(''); setPhase('idle'); };
+
+  const apply = async () => {
+    if (!plan || applying) return;
+    setApplying(true);
+    try {
+      for (const t of plan.tasks) {
+        await onAddTask?.({
+          title: t.title,
+          assigned_to: t.assigneeId,
+          due_date: t.due_date,
+          due_time: t.due_time,
+          recurrence: t.repeats ? { freq: t.repeats } : null,
+          description: t.details,
+          is_private: t.is_private,
+        });
+      }
+      for (const e of plan.events) {
+        await onAddEvent?.({
+          title: e.title,
+          date: e.date,
+          start_time: e.start_time,
+          attendees: e.attendeeIds,
+          location: e.location,
+        });
+      }
+      for (const it of plan.items) {
+        if (it.spaceId) await onAddSpaceItem?.(it.spaceId, { title: it.item });
+      }
+    } finally {
+      setApplying(false);
+      reset();
+    }
+  };
+
+  const recording = phase === 'recording';
+  const working = phase === 'working';
+  const label = recording ? 'Listening… tap to stop'
+    : working ? 'Thinking…'
+    : 'Tap to dictate';
+
+  return (
+    <div className="va-wrap">
+      <button
+        type="button"
+        className={'va-btn' + (recording ? ' recording' : '') + (working ? ' working' : '')}
+        onClick={recording ? stop : (working ? undefined : start)}
+        disabled={working}
+        aria-label="Add to Kinnekt by voice"
+      >
+        <span className="va-glow" aria-hidden />
+        <span className="va-ring" aria-hidden />
+        {recording ? (
+          <span className="va-stop" aria-hidden />
+        ) : (
+          <svg className="va-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 11a7 7 0 0 0 14 0" />
+            <line x1="12" y1="18" x2="12" y2="22" />
+            <line x1="8" y1="22" x2="16" y2="22" />
+          </svg>
+        )}
+      </button>
+      <div className={'va-label' + (phase === 'error' ? ' va-error' : '')}>{phase === 'error' ? error : label}</div>
+      {phase === 'error' && (
+        <button type="button" className="va-retry" onClick={reset}>Try again</button>
+      )}
+
+      <Modal open={phase === 'review'} onClose={applying ? () => {} : reset} title="Add by voice"
+        footer={(
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button type="button" className="copy-btn" style={{ marginLeft: 0 }} onClick={reset} disabled={applying}>Cancel</button>
+            <button type="button" className="fb-btn solid" onClick={apply} disabled={applying}>
+              {applying ? 'Adding…' : 'Add all'}
+            </button>
+          </div>
+        )}
+      >
+        {plan && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {transcript && (
+              <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                “{transcript}”
+              </div>
+            )}
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)' }}>
+              I'll add {plan.tasks.length + plan.events.length + plan.items.length} {plan.tasks.length + plan.events.length + plan.items.length === 1 ? 'thing' : 'things'}:
+            </div>
+
+            {plan.tasks.map((t, i) => (
+              <div key={'t' + i} className="va-item">
+                <span className="va-item-tag" style={{ background: 'rgba(106,77,255,0.14)', color: 'var(--kinnekt-purple)' }}>Task</span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="va-item-title">{t.title}</div>
+                  <div className="va-item-sub">
+                    {memberName(t.assigneeId) || 'Unassigned'}
+                    {t.due_date ? ` · ${fmtDate(t.due_date)}${t.due_time ? ` ${fmtTime(t.due_time)}` : ''}` : ''}
+                    {t.repeats ? ` · repeats ${t.repeats}` : ''}
+                    {t.is_private ? ' · private' : ''}
+                  </div>
+                  {t.details && <div className="va-item-sub">{t.details}</div>}
+                </div>
+              </div>
+            ))}
+
+            {plan.events.map((e, i) => (
+              <div key={'e' + i} className="va-item">
+                <span className="va-item-tag" style={{ background: 'rgba(45,156,255,0.14)', color: 'var(--kinnekt-blue, #2D9CFF)' }}>Event</span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="va-item-title">{e.title}</div>
+                  <div className="va-item-sub">
+                    {fmtDate(e.date)}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''}
+                    {e.attendeeIds.length ? ` · ${e.attendeeIds.map(memberName).filter(Boolean).join(', ')}` : ''}
+                    {e.location ? ` · ${e.location}` : ''}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {plan.items.map((it, i) => (
+              <div key={'s' + i} className="va-item">
+                <span className="va-item-tag" style={{ background: 'rgba(61,217,197,0.16)', color: '#1FA999' }}>List</span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="va-item-title">{it.item}</div>
+                  <div className="va-item-sub">
+                    {it.spaceTitle ? `→ ${it.spaceTitle}` : <span style={{ color: 'var(--kinnekt-coral)' }}>no list named “{it.spaceRaw}” — will be skipped</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {plan.note && (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4, borderTop: '1px solid var(--border-soft)', paddingTop: 10 }}>
+                Note: {plan.note}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
 // Read-only "Next 24 hours" glance at the top of the home feed. Tasks
 // and events look FORWARD 24h; posts and space activity look BACK 24h.
 // Hidden entirely when nothing falls in any window. Refreshes its time
@@ -9971,6 +10278,14 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
+          <VoiceAssistant
+            members={members}
+            spaces={spaces}
+            profile={profile}
+            onAddTask={addTask}
+            onAddEvent={addEvent}
+            onAddSpaceItem={addSpaceItem}
+          />
           <LiveClock />
           <NotesSection
             notes={notes}
