@@ -49,6 +49,7 @@ function buildSystem(ctx) {
     '',
     'Rules:',
     '- A to-do / chore / reminder for a person is a task. Something happening at a date/time (appointment, party, meeting) is an event. Adding a thing to a named list (groceries, shopping, packing) is a space item.',
+    '- A single command can contain SEVERAL separate add requests, joined by "and", "and then", "also", or just a new sentence (e.g. "add an event to today, check the weather report, and then add a task, make sure the weather is correct"). Treat each as its OWN item — here: an event titled "Check the weather report" AND a task titled "Make sure the weather is correct". Never merge them, drop one, or read the second as commentary on the first.',
     '- A phrase that FOLLOWS an add request is the TITLE/subject of that item, not a command for you to perform — even across a sentence break. e.g. "add an event to today\'s calendar. check the weather report" → ONE event titled "Check the weather report". "remind me to call the dentist" → a task titled "Call the dentist". An event/task whose title is an action the user wants to remember (check the weather, call someone, water the plants, take out the trash) is exactly the point — title it and add it. NEVER refuse these as "outside my capabilities".',
     '- Only treat something as out of scope if the user is asking YOU to answer or perform it live right now (e.g. "what\'s the weather today?", "tell me a joke") rather than to schedule/record it. That is rare — default to creating the item.',
     '- A "post" / "message" / "announcement" / "poll" goes on the Home feed (a post item), NOT a task. Map it by kind: a normal heads-up is "message"; something the user calls urgent / an announcement / important is "urgent"; a quick reminder for the whole group is "reminder"; a question with choices to vote on is "poll" (fill poll_options with the choices). Put the spoken message in "text" (for a poll, "text" is the question).',
@@ -181,7 +182,7 @@ module.exports = async (req, res) => {
         //   claude-haiku-4-5  — cheapest + fastest ($1/$5 per 1M)
         //   claude-sonnet-4-6 — smarter on messy phrasing ($3/$15 per 1M)
         //   claude-opus-4-8   — best on tangled multi-part commands ($5/$25)
-        model: 'claude-haiku-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2048,
         system: buildSystem(ctx),
         tools: [stageTool],
