@@ -37,6 +37,8 @@ function buildSystem(ctx) {
     '',
     'Rules:',
     '- A to-do / chore / reminder for a person is a task. Something happening at a date/time (appointment, party, meeting) is an event. Adding a thing to a named list (groceries, shopping, packing) is a space item.',
+    '- A "post" / "message" / "announcement" / "poll" goes on the Home feed (a post item), NOT a task. Map it by kind: a normal heads-up is "message"; something the user calls urgent / an announcement / important is "urgent"; a quick reminder for the whole group is "reminder"; a question with choices to vote on is "poll" (fill poll_options with the choices). Put the spoken message in "text" (for a poll, "text" is the question).',
+    '- You cannot create a photo post by voice; if the user asks to post a photo, leave it out and mention it in "note".',
     '- Only include what the user actually asked for. Do not invent items.',
     '- If part of the request is unclear or could not be turned into an item, put a short plain explanation in "note".',
   ].join('\n');
@@ -87,6 +89,18 @@ const stageTool = {
             item: { type: 'string', description: 'The thing to add.' },
           },
           required: ['space', 'item'],
+        },
+      },
+      posts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['message', 'urgent', 'reminder', 'poll'] },
+            text: { type: ['string', 'null'], description: 'The post body; for a poll, the question.' },
+            poll_options: { type: 'array', items: { type: 'string' }, description: 'Only for kind "poll": the answer choices (2 or more).' },
+          },
+          required: ['kind'],
         },
       },
       note: { type: 'string', description: 'Anything you could not interpret, else an empty string.' },
@@ -142,6 +156,7 @@ module.exports = async (req, res) => {
       tasks: Array.isArray(input.tasks) ? input.tasks : [],
       events: Array.isArray(input.events) ? input.events : [],
       space_items: Array.isArray(input.space_items) ? input.space_items : [],
+      posts: Array.isArray(input.posts) ? input.posts : [],
       note: typeof input.note === 'string' ? input.note : '',
     });
   } catch (e) {

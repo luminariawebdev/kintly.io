@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal, EmojiInput } from '../Components';
 
@@ -418,7 +419,7 @@ function LiveClock() {
 // understood before anything is written. The two /api functions hold the API
 // keys; nothing sensitive lives in the browser. Because those functions only run
 // on Vercel, this feature works on the deployed site, not the local preview.
-function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAddSpaceItem }) {
+function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAddSpaceItem, onAddNote }) {
   const [phase, setPhase] = React.useState('idle'); // idle | recording | working | review | error
   const [error, setError] = React.useState('');
   const [transcript, setTranscript] = React.useState('');
@@ -560,13 +561,18 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
         const sp = resolveSpace(s.space);
         return { item: s.item, spaceRaw: s.space, spaceId: sp?.id || null, spaceTitle: sp?.title || null };
       });
-      const total = tasks.length + events.length + items.length;
+      const posts = (irData.posts || []).map((p) => {
+        const kind = ['message', 'urgent', 'reminder', 'poll'].includes(p.kind) ? p.kind : 'message';
+        const options = (p.poll_options || []).map((o) => String(o).trim()).filter(Boolean);
+        return { kind, text: (p.text || '').trim(), options, invalid: kind === 'poll' && (!(p.text || '').trim() || options.length < 2) };
+      });
+      const total = tasks.length + events.length + items.length + posts.length;
       if (total === 0) {
         setError(irData.note ? irData.note : "I couldn't find anything to add in that. Try again.");
         setPhase('error');
         return;
       }
-      setPlan({ tasks, events, items, note: irData.note || '' });
+      setPlan({ tasks, events, items, posts, note: irData.note || '' });
       setPhase('review');
     } catch (e) {
       setError((e && e.message) || 'Something went wrong.');
@@ -602,6 +608,29 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
       }
       for (const it of plan.items) {
         if (it.spaceId) await onAddSpaceItem?.(it.spaceId, { title: it.item });
+      }
+      for (const p of (plan.posts || [])) {
+        if (p.kind === 'poll') {
+          if (p.invalid) continue;
+          await onAddNote?.({
+            content: p.text,
+            type: 'poll',
+            pinned: false,
+            payload: {
+              question: p.text,
+              options: p.options.map((text, i) => ({ id: 'opt-' + Date.now() + '-' + i, text })),
+              votes: {},
+            },
+          });
+        } else {
+          const type = p.kind === 'urgent' ? 'announcement' : p.kind === 'reminder' ? 'quick_update' : 'message';
+          await onAddNote?.({
+            content: p.text,
+            type,
+            pinned: type === 'announcement' || type === 'quick_update',
+            payload: null,
+          });
+        }
       }
     } finally {
       setApplying(false);
@@ -642,7 +671,12 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
         <button type="button" className="va-retry" onClick={reset}>Try again</button>
       )}
 
-      <Modal open={phase === 'review'} onClose={applying ? () => {} : reset} title="Add by voice"
+      {/* Portal the review sheet up to .fb-screen (where the other modals
+          live) — rendering it inside .va-wrap / .fb-sec-wrap would anchor
+          its absolute overlay to that small, overflow-clipped box, leaving
+          a tiny cut-off sheet. */}
+      {phase === 'review' && createPortal((
+      <Modal open onClose={applying ? () => {} : reset} title="Add by voice"
         footer={(
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button type="button" className="copy-btn" style={{ marginLeft: 0 }} onClick={reset} disabled={applying}>Cancel</button>
@@ -659,9 +693,14 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
                 “{transcript}”
               </div>
             )}
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)' }}>
-              I'll add {plan.tasks.length + plan.events.length + plan.items.length} {plan.tasks.length + plan.events.length + plan.items.length === 1 ? 'thing' : 'things'}:
-            </div>
+            {(() => {
+              const n = plan.tasks.length + plan.events.length + plan.items.length + (plan.posts || []).length;
+              return (
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)' }}>
+                  I'll add {n} {n === 1 ? 'thing' : 'things'}:
+                </div>
+              );
+            })()}
 
             {plan.tasks.map((t, i) => (
               <div key={'t' + i} className="va-item">
@@ -705,6 +744,25 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
               </div>
             ))}
 
+            {(plan.posts || []).map((p, i) => {
+              const kindLabel = p.kind === 'urgent' ? 'Urgent' : p.kind === 'reminder' ? 'Reminder' : p.kind === 'poll' ? 'Poll' : 'Message';
+              return (
+                <div key={'p' + i} className="va-item">
+                  <span className="va-item-tag" style={{ background: 'rgba(255,140,140,0.16)', color: 'var(--kinnekt-coral)' }}>Post</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="va-item-title">{p.text || (p.kind === 'poll' ? '(poll)' : '(empty)')}</div>
+                    <div className="va-item-sub">
+                      {kindLabel}
+                      {p.kind === 'poll' && p.options.length ? ` · ${p.options.join(', ')}` : ''}
+                    </div>
+                    {p.invalid && (
+                      <div className="va-item-sub" style={{ color: 'var(--kinnekt-coral)' }}>a poll needs a question and at least 2 options — will be skipped</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
             {plan.note && (
               <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4, borderTop: '1px solid var(--border-soft)', paddingTop: 10 }}>
                 Note: {plan.note}
@@ -713,6 +771,7 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
           </div>
         )}
       </Modal>
+      ), document.querySelector('.fb-screen') || document.body)}
     </div>
   );
 }
@@ -10285,6 +10344,7 @@ export function MainApp({ profile, onSettings }) {
             onAddTask={addTask}
             onAddEvent={addEvent}
             onAddSpaceItem={addSpaceItem}
+            onAddNote={addNote}
           />
           <LiveClock />
           <NotesSection
