@@ -22,6 +22,12 @@ async function readJson(req) {
 function buildSystem(ctx) {
   const members = (ctx.members || []).join(', ') || '(none listed)';
   const spaces = (ctx.spaces || []).join(', ') || '(none listed)';
+  const openTasks = (ctx.open_tasks || []).map((t) =>
+    `- [${t.id}] "${t.title}"${t.assignee ? ` — assigned to ${t.assignee}` : ' — unassigned'}${t.due_date ? ` — due ${t.due_date}${t.due_time ? ' ' + t.due_time : ''}` : ''}`
+  ).join('\n') || '(none)';
+  const listItems = (ctx.list_items || []).map((i) =>
+    `- [${i.id}] "${i.title}"${i.space ? ` — in ${i.space}` : ''}`
+  ).join('\n') || '(none)';
   return [
     'You are the voice assistant for Kinnekt, a shared family/group organizer.',
     "Convert the user's spoken request into structured items to add to the app, then call the stage_items tool exactly once with everything you extracted.",
@@ -35,10 +41,19 @@ function buildSystem(ctx) {
     `Lists / spaces that exist: ${spaces}.`,
     'For "add X to the Y list/space", set space to the closest matching name from that list.',
     '',
+    'Existing tasks the user can act on (id in brackets):',
+    openTasks,
+    '',
+    'Existing list items the user can check off (id in brackets):',
+    listItems,
+    '',
     'Rules:',
     '- A to-do / chore / reminder for a person is a task. Something happening at a date/time (appointment, party, meeting) is an event. Adding a thing to a named list (groceries, shopping, packing) is a space item.',
     '- A "post" / "message" / "announcement" / "poll" goes on the Home feed (a post item), NOT a task. Map it by kind: a normal heads-up is "message"; something the user calls urgent / an announcement / important is "urgent"; a quick reminder for the whole group is "reminder"; a question with choices to vote on is "poll" (fill poll_options with the choices). Put the spoken message in "text" (for a poll, "text" is the question).',
     '- You cannot create a photo post by voice; if the user asks to post a photo, leave it out and mention it in "note".',
+    '- ACTING ON AN EXISTING TASK vs creating a new one: if the user refers to a task that already exists above ("the task called X", "my X task", "mark X done", "delete X", "reassign/assign X to …", "push/move X to …", "change X\'s …"), they want to act on THAT task — add an entry to "actions" with the matching task_id and the right op. Do NOT also create a new task in "tasks". Only use "tasks" for genuinely new to-dos.',
+    '- Action ops: "complete" (mark it done); "delete" (remove it); "postpone" (move its due date — set new_date and optional new_time); "handoff" (give it to someone — set handoff_to to a member name, or "pool" for anyone); "edit" (change fields — set any of new_title, new_assignee [a member name, "me", or "unassigned"], new_due_date, new_due_time, new_repeats, new_details). For "check off bananas from groceries" use op "check_off_item" with the item_id from the list above.',
+    '- Match the spoken description to the closest existing title. If you cannot confidently match an existing task/item, do NOT guess and do NOT create a new task — explain in "note".',
     '- Only include what the user actually asked for. Do not invent items.',
     '- If part of the request is unclear or could not be turned into an item, put a short plain explanation in "note".',
   ].join('\n');
@@ -103,6 +118,29 @@ const stageTool = {
           required: ['kind'],
         },
       },
+      actions: {
+        type: 'array',
+        description: 'Operations on EXISTING tasks / list items (not new ones).',
+        items: {
+          type: 'object',
+          properties: {
+            op: { type: 'string', enum: ['complete', 'delete', 'postpone', 'handoff', 'edit', 'check_off_item'] },
+            task_id: { type: ['string', 'null'], description: 'The id of the existing task from the list above (for task ops).' },
+            item_id: { type: ['string', 'null'], description: 'The id of the existing list item (only for check_off_item).' },
+            target_label: { type: ['string', 'null'], description: 'The title you matched, for display.' },
+            new_date: { type: ['string', 'null'], description: 'postpone: new due date YYYY-MM-DD.' },
+            new_time: { type: ['string', 'null'], description: 'postpone: new due time HH:MM 24h.' },
+            handoff_to: { type: ['string', 'null'], description: 'handoff: a member name, or "pool".' },
+            new_title: { type: ['string', 'null'], description: 'edit: new title.' },
+            new_assignee: { type: ['string', 'null'], description: 'edit: member name, "me", or "unassigned".' },
+            new_due_date: { type: ['string', 'null'], description: 'edit: YYYY-MM-DD.' },
+            new_due_time: { type: ['string', 'null'], description: 'edit: HH:MM 24h.' },
+            new_repeats: { type: ['string', 'null'], enum: ['none', 'daily', 'weekly', 'monthly', null] },
+            new_details: { type: ['string', 'null'], description: 'edit: notes/details.' },
+          },
+          required: ['op'],
+        },
+      },
       note: { type: 'string', description: 'Anything you could not interpret, else an empty string.' },
     },
   },
@@ -161,6 +199,7 @@ module.exports = async (req, res) => {
       events: Array.isArray(input.events) ? input.events : [],
       space_items: Array.isArray(input.space_items) ? input.space_items : [],
       posts: Array.isArray(input.posts) ? input.posts : [],
+      actions: Array.isArray(input.actions) ? input.actions : [],
       note: typeof input.note === 'string' ? input.note : '',
     });
   } catch (e) {

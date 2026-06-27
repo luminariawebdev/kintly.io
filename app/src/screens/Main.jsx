@@ -419,7 +419,7 @@ function LiveClock() {
 // understood before anything is written. The two /api functions hold the API
 // keys; nothing sensitive lives in the browser. Because those functions only run
 // on Vercel, this feature works on the deployed site, not the local preview.
-function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAddSpaceItem, onAddNote }) {
+function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask, onAddEvent, onAddSpaceItem, onAddNote, onComplete, onDelete, onPostpone, onPass, onRelease, onUpdate, onToggleItem }) {
   const [phase, setPhase] = React.useState('idle'); // idle | recording | working | review | error
   const [error, setError] = React.useState('');
   const [transcript, setTranscript] = React.useState('');
@@ -481,6 +481,22 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
       me: profile?.display_name || 'me',
       members: members.map((m) => m.display_name),
       spaces: spaces.map((s) => s.title),
+      open_tasks: (tasks || [])
+        .filter((t) => !t.completed && !t.cancelled_at)
+        .map((t) => ({
+          id: t.id,
+          title: t.title,
+          assignee: t.assigned_to ? (members.find((m) => m.id === t.assigned_to)?.display_name || null) : null,
+          due_date: t.due_date || null,
+          due_time: t.due_time || null,
+        })),
+      list_items: (spaceItems || [])
+        .filter((i) => !i.completed)
+        .map((i) => ({
+          id: i.id,
+          title: i.title,
+          space: spaces.find((s) => s.id === i.space_id)?.title || null,
+        })),
     };
   };
 
@@ -540,7 +556,7 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
       const irData = await ir.json().catch(() => ({}));
       if (!ir.ok) throw new Error(irData.error || 'Could not understand that.');
 
-      const tasks = (irData.tasks || []).map((t) => ({
+      const plannedTasks = (irData.tasks || []).map((t) => ({
         title: t.title,
         assigneeId: resolveMember(t.assignee),
         assigneeRaw: t.assignee,
@@ -566,13 +582,44 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
         const options = (p.poll_options || []).map((o) => String(o).trim()).filter(Boolean);
         return { kind, text: (p.text || '').trim(), options, invalid: kind === 'poll' && (!(p.text || '').trim() || options.length < 2) };
       });
-      const total = tasks.length + events.length + items.length + posts.length;
+      // Actions operate on EXISTING tasks / list items. `tasks` here is the
+      // prop (the live task list) — resolve the model's target_id/label to a
+      // real task so we can call the matching handler.
+      const findTask = (id, label) =>
+        (id && (tasks || []).find((t) => t.id === id))
+        || (label && (tasks || []).find((t) => norm(t.title) === norm(label)))
+        || (label && (tasks || []).find((t) => norm(t.title).includes(norm(label)) || norm(label).includes(norm(t.title))))
+        || null;
+      const actions = (irData.actions || []).map((a) => {
+        if (a.op === 'check_off_item') {
+          const it = (spaceItems || []).find((i) => i.id === a.item_id)
+            || (a.target_label && (spaceItems || []).find((i) => norm(i.title) === norm(a.target_label)));
+          return { op: 'check_off_item', item: it || null, label: a.target_label || it?.title || '?', invalid: !it };
+        }
+        const task = findTask(a.task_id, a.target_label);
+        const base = { op: a.op, task, label: a.target_label || task?.title || '?', invalid: !task };
+        if (a.op === 'postpone') return { ...base, new_date: a.new_date || null, new_time: a.new_time || null, invalid: !task || !a.new_date };
+        if (a.op === 'handoff') return { ...base, to: a.handoff_to || null };
+        if (a.op === 'edit') return {
+          ...base,
+          edit: {
+            title: a.new_title || null,
+            assignee: a.new_assignee || null,
+            due_date: a.new_due_date || null,
+            due_time: a.new_due_time || null,
+            repeats: a.new_repeats || null,
+            details: a.new_details || null,
+          },
+        };
+        return base; // complete, delete
+      });
+      const total = plannedTasks.length + events.length + items.length + posts.length + actions.length;
       if (total === 0) {
-        setError(irData.note ? irData.note : "I couldn't find anything to add in that. Try again.");
+        setError(irData.note ? irData.note : "I couldn't find anything to do with that. Try again.");
         setPhase('error');
         return;
       }
-      setPlan({ tasks, events, items, posts, note: irData.note || '' });
+      setPlan({ tasks: plannedTasks, events, items, posts, actions, note: irData.note || '' });
       setPhase('review');
     } catch (e) {
       setError((e && e.message) || 'Something went wrong.');
@@ -632,6 +679,27 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
           });
         }
       }
+      for (const a of (plan.actions || [])) {
+        if (a.invalid) continue;
+        if (a.op === 'check_off_item') { if (a.item) await onToggleItem?.(a.item.id, true); continue; }
+        if (!a.task) continue;
+        if (a.op === 'complete') await onComplete?.(a.task.id, a.task.completed);
+        else if (a.op === 'delete') await onDelete?.(a.task.id);
+        else if (a.op === 'postpone') { if (a.new_date) await onPostpone?.(a.task, a.new_date, a.new_time || null); }
+        else if (a.op === 'handoff') {
+          if (norm(a.to) === 'pool') await onRelease?.(a.task, 'Handed off by voice');
+          else { const id = resolveMember(a.to); if (id) await onPass?.(a.task, id); }
+        } else if (a.op === 'edit') {
+          const patch = {};
+          if (a.edit.title) patch.title = a.edit.title;
+          if (a.edit.assignee) patch.assigned_to = resolveMember(a.edit.assignee); // "unassigned" → null
+          if (a.edit.due_date) patch.due_date = a.edit.due_date;
+          if (a.edit.due_time) patch.due_time = a.edit.due_time;
+          if (a.edit.repeats) patch.recurrence = a.edit.repeats === 'none' ? null : { freq: a.edit.repeats };
+          if (a.edit.details) patch.description = a.edit.details;
+          if (Object.keys(patch).length) await onUpdate?.(a.task.id, patch);
+        }
+      }
     } finally {
       setApplying(false);
       reset();
@@ -682,7 +750,7 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button type="button" className="copy-btn" style={{ marginLeft: 0 }} onClick={reset} disabled={applying}>Cancel</button>
             <button type="button" className="fb-btn solid" onClick={apply} disabled={applying}>
-              {applying ? 'Adding…' : 'Add all'}
+              {applying ? 'Working…' : ((plan && plan.actions && plan.actions.length) ? 'Confirm all' : 'Add all')}
             </button>
           </div>
         )}
@@ -695,10 +763,13 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
               </div>
             )}
             {(() => {
-              const n = plan.tasks.length + plan.events.length + plan.items.length + (plan.posts || []).length;
+              const adds = plan.tasks.length + plan.events.length + plan.items.length + (plan.posts || []).length;
+              const acts = (plan.actions || []).length;
+              const n = adds + acts;
+              const label = acts > 0 ? "Here's what I'll do" : `I'll add ${n} ${n === 1 ? 'thing' : 'things'}`;
               return (
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--text-muted)' }}>
-                  I'll add {n} {n === 1 ? 'thing' : 'things'}:
+                  {label}:
                 </div>
               );
             })()}
@@ -758,6 +829,44 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
                     </div>
                     {p.invalid && (
                       <div className="va-item-sub" style={{ color: 'var(--kinnekt-coral)' }}>a poll needs a question and at least 2 options — will be skipped</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {(plan.actions || []).map((a, i) => {
+              const meta = {
+                complete:       { label: 'Complete', bg: 'rgba(45,198,83,0.16)',  fg: '#2DC653', verb: 'Mark done:' },
+                delete:         { label: 'Delete',   bg: 'rgba(255,140,140,0.18)', fg: 'var(--kinnekt-coral)', verb: 'Delete:' },
+                postpone:       { label: 'Postpone', bg: 'rgba(255,140,140,0.14)', fg: 'var(--kinnekt-coral)', verb: 'Move:' },
+                handoff:        { label: 'Hand off', bg: 'rgba(61,217,197,0.16)',  fg: '#1FA999', verb: 'Hand off:' },
+                edit:           { label: 'Edit',     bg: 'rgba(106,77,255,0.14)',  fg: 'var(--kinnekt-purple)', verb: 'Edit:' },
+                check_off_item: { label: 'Check off', bg: 'rgba(45,198,83,0.16)',  fg: '#2DC653', verb: 'Check off:' },
+              }[a.op] || { label: a.op, bg: 'rgba(120,120,120,0.16)', fg: 'var(--text-secondary)', verb: '' };
+              let detail = '';
+              if (a.op === 'postpone') detail = `→ ${a.new_date ? fmtDate(a.new_date) : '?'}${a.new_time ? ` ${fmtTime(a.new_time)}` : ''}`;
+              else if (a.op === 'handoff') detail = `→ ${norm(a.to) === 'pool' ? 'the pool' : (a.to || '?')}`;
+              else if (a.op === 'edit') {
+                const parts = [];
+                if (a.edit.title) parts.push(`title → "${a.edit.title}"`);
+                if (a.edit.assignee) parts.push(`to ${a.edit.assignee}`);
+                if (a.edit.due_date) parts.push(`due ${fmtDate(a.edit.due_date)}${a.edit.due_time ? ` ${fmtTime(a.edit.due_time)}` : ''}`);
+                else if (a.edit.due_time) parts.push(`at ${fmtTime(a.edit.due_time)}`);
+                if (a.edit.repeats) parts.push(`repeats ${a.edit.repeats}`);
+                if (a.edit.details) parts.push('+ details');
+                detail = parts.join(' · ');
+              }
+              return (
+                <div key={'a' + i} className="va-item">
+                  <span className="va-item-tag" style={{ background: meta.bg, color: meta.fg }}>{meta.label}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="va-item-title">{a.label}</div>
+                    {detail && <div className="va-item-sub">{detail}</div>}
+                    {a.invalid && (
+                      <div className="va-item-sub" style={{ color: 'var(--kinnekt-coral)' }}>
+                        {a.op === 'postpone' && a.task ? 'needs a new date — will be skipped' : 'couldn’t find that one — will be skipped'}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -10341,11 +10450,20 @@ export function MainApp({ profile, onSettings }) {
           <VoiceAssistant
             members={members}
             spaces={spaces}
+            tasks={tasks}
+            spaceItems={spaceItems}
             profile={profile}
             onAddTask={addTask}
             onAddEvent={addEvent}
             onAddSpaceItem={addSpaceItem}
             onAddNote={addNote}
+            onComplete={toggleTask}
+            onDelete={deleteTask}
+            onPostpone={postponeTask}
+            onPass={passBaton}
+            onRelease={releaseTask}
+            onUpdate={updateTask}
+            onToggleItem={toggleSpaceItem}
           />
           <LiveClock />
           <NotesSection
