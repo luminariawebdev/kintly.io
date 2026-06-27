@@ -419,7 +419,7 @@ function LiveClock() {
 // understood before anything is written. The two /api functions hold the API
 // keys; nothing sensitive lives in the browser. Because those functions only run
 // on Vercel, this feature works on the deployed site, not the local preview.
-function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask, onAddEvent, onAddSpaceItem, onAddNote, onComplete, onDelete, onPostpone, onPass, onRelease, onUpdate, onToggleItem }) {
+function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, onAddTask, onAddEvent, onAddSpaceItem, onAddNote, onComplete, onDelete, onPostpone, onPass, onRelease, onUpdate, onToggleItem }) {
   const [phase, setPhase] = React.useState('idle'); // idle | recording | working | review | error
   const [error, setError] = React.useState('');
   const [transcript, setTranscript] = React.useState('');
@@ -497,6 +497,7 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
           title: i.title,
           space: spaces.find((s) => s.id === i.space_id)?.title || null,
         })),
+      events: (events || []).map((e) => ({ id: e.id, title: e.title, date: e.date || null })),
     };
   };
 
@@ -563,16 +564,26 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
         const t = (s || '').trim();
         return !!t && !/^<?\s*(unknown|untitled|none|n\/?a|tbd|\?+)\s*>?$/i.test(t);
       };
-      const plannedTasks = (irData.tasks || []).filter((t) => isRealTitle(t.title)).map((t) => ({
-        title: t.title.trim(),
-        assigneeId: resolveMember(t.assignee),
-        assigneeRaw: t.assignee,
-        due_date: t.due_date || null,
-        due_time: t.due_time || null,
-        repeats: t.repeats && t.repeats !== 'none' ? t.repeats : null,
-        details: t.details || null,
-        is_private: !!t.private,
-      }));
+      const plannedTasks = (irData.tasks || []).filter((t) => isRealTitle(t.title)).map((t) => {
+        const isPrivate = !!t.private;
+        // Default assignee = the logged-in user. Only "unassigned" (or a named
+        // person) overrides it. Private tasks are always the speaker's own.
+        const said = (t.assignee || '').trim();
+        let assigneeId;
+        if (isPrivate) assigneeId = profile?.id || null;
+        else if (!said) assigneeId = profile?.id || null;
+        else assigneeId = resolveMember(said); // "unassigned" → null, name → member
+        return {
+          title: t.title.trim(),
+          assigneeId,
+          due_date: t.due_date || null,
+          due_time: t.due_time || null,
+          repeats: t.repeats && t.repeats !== 'none' ? t.repeats : null,
+          details: t.details || null,
+          is_private: isPrivate,
+          linkEventRaw: (t.link_to_event || '').trim() || null,
+        };
+      });
       const events = (irData.events || []).filter((e) => isRealTitle(e.title)).map((e) => ({
         title: e.title.trim(),
         date: e.date,
@@ -640,6 +651,27 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
     if (!plan || applying) return;
     setApplying(true);
     try {
+      // Events FIRST, so a task in the same command can link to one just
+      // created. Capture each new event's id by title.
+      const newEventIdByTitle = {};
+      for (const e of plan.events) {
+        const created = await onAddEvent?.({
+          title: e.title,
+          date: e.date,
+          start_time: e.start_time,
+          attendees: e.attendeeIds,
+          location: e.location,
+        });
+        if (created && created.id) newEventIdByTitle[norm(e.title)] = created.id;
+      }
+      const resolveEventId = (name) => {
+        const n = norm(name);
+        if (!n) return null;
+        if (newEventIdByTitle[n]) return newEventIdByTitle[n];
+        const ex = (events || []).find((ev) => norm(ev.title) === n)
+          || (events || []).find((ev) => norm(ev.title).includes(n) || n.includes(norm(ev.title)));
+        return ex ? ex.id : null;
+      };
       for (const t of plan.tasks) {
         await onAddTask?.({
           title: t.title,
@@ -649,15 +681,7 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
           recurrence: t.repeats ? { freq: t.repeats } : null,
           description: t.details,
           is_private: t.is_private,
-        });
-      }
-      for (const e of plan.events) {
-        await onAddEvent?.({
-          title: e.title,
-          date: e.date,
-          start_time: e.start_time,
-          attendees: e.attendeeIds,
-          location: e.location,
+          event_id: t.linkEventRaw ? resolveEventId(t.linkEventRaw) : null,
         });
       }
       for (const it of plan.items) {
@@ -790,8 +814,9 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
                     {memberName(t.assigneeId) || 'Unassigned'}
                     {t.due_date ? ` · ${fmtDate(t.due_date)}${t.due_time ? ` ${fmtTime(t.due_time)}` : ''}` : ''}
                     {t.repeats ? ` · repeats ${t.repeats}` : ''}
-                    {t.is_private ? ' · private' : ''}
+                    {t.is_private ? ' · personal' : ''}
                   </div>
+                  {t.linkEventRaw && <div className="va-item-sub">🔗 linked to “{t.linkEventRaw}”</div>}
                   {t.details && <div className="va-item-sub">{t.details}</div>}
                 </div>
               </div>
@@ -9471,6 +9496,9 @@ export function MainApp({ profile, onSettings }) {
         await addLinkedTask(row.id, t);
       }
     }
+    // Return the created row so callers (e.g. the voice assistant) can link
+    // freshly-created tasks to this new event by id.
+    return row;
   };
   // Edit an existing event. Optimistic, with the same strip-on-error
   // retry addEvent uses so an older schema (missing a column) still
@@ -10465,6 +10493,7 @@ export function MainApp({ profile, onSettings }) {
             spaces={spaces}
             tasks={tasks}
             spaceItems={spaceItems}
+            events={events}
             profile={profile}
             onAddTask={addTask}
             onAddEvent={addEvent}

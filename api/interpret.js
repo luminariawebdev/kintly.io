@@ -28,6 +28,9 @@ function buildSystem(ctx) {
   const listItems = (ctx.list_items || []).map((i) =>
     `- [${i.id}] "${i.title}"${i.space ? ` — in ${i.space}` : ''}`
   ).join('\n') || '(none)';
+  const events = (ctx.events || []).map((e) =>
+    `- "${e.title}"${e.date ? ` (${e.date})` : ''}`
+  ).join('\n') || '(none)';
   return [
     'You are the voice assistant for Kinnekt, a shared family/group organizer.',
     "Convert the user's spoken request into structured items to add to the app, then call the stage_items tool exactly once with everything you extracted.",
@@ -36,7 +39,9 @@ function buildSystem(ctx) {
     'Resolve every relative date ("today", "tomorrow", "next Friday", "the 5th of next month") to an absolute calendar date in YYYY-MM-DD form. Use 24-hour HH:MM for all times.',
     '',
     `Family members: ${members}.`,
-    `When the user assigns a task or invites someone, use that person's exact name as listed. If a task has no one named, use "unassigned". "me", "myself", or "I" refers to ${ctx.me || 'the speaker'}.`,
+    `When the user names who a task is for, use that person's exact name. "me", "myself", or "I" refers to ${ctx.me || 'the speaker'}.`,
+    `DEFAULT ASSIGNEE: if the user does NOT say who a task is for, assign it to the speaker — set assignee to "me". Do NOT default to "unassigned". Only use "unassigned" when the user explicitly says unassigned / for anyone / up for grabs / no one in particular. If they name a person, use that name.`,
+    `GROUP vs PERSONAL: tasks go on the shared GROUP list by default (private=false). Only set private=true if the user says it's personal / private / "my own list" / "just for me" / "my personal to-dos".`,
     '',
     `Lists / spaces that exist: ${spaces}.`,
     'For "add X to the Y list/space", set space to the closest matching name from that list.',
@@ -47,12 +52,16 @@ function buildSystem(ctx) {
     'Existing list items the user can check off (id in brackets):',
     listItems,
     '',
+    'Existing calendar events (for linking tasks to):',
+    events,
+    '',
     'Rules:',
     '- A to-do / chore / reminder for a person is a task. Something happening at a date/time (appointment, party, meeting) is an event. Adding a thing to a named list (groceries, shopping, packing) is a space item.',
     '- A single command can contain SEVERAL separate add requests, joined by "and", "and then", "also", or just a new sentence (e.g. "add an event to today, check the weather report, and then add a task, make sure the weather is correct"). Treat each as its OWN item — here: an event titled "Check the weather report" AND a task titled "Make sure the weather is correct". Never merge them, drop one, or read the second as commentary on the first.',
     '- A phrase that FOLLOWS an add request is the TITLE/subject of that item, not a command for you to perform — even across a sentence break. e.g. "add an event to today\'s calendar. check the weather report" → ONE event titled "Check the weather report". "remind me to call the dentist" → a task titled "Call the dentist". An event/task whose title is an action the user wants to remember (check the weather, call someone, water the plants, take out the trash) is exactly the point — title it and add it. NEVER refuse these as "outside my capabilities".',
     '- Only treat something as out of scope if the user is asking YOU to answer or perform it live right now (e.g. "what\'s the weather today?", "tell me a joke") rather than to schedule/record it. That is rare — default to creating the item.',
     '- A "post" / "message" / "announcement" / "poll" goes on the Home feed (a post item), NOT a task. Map it by kind: a normal heads-up is "message"; something the user calls urgent / an announcement / important is "urgent"; a quick reminder for the whole group is "reminder"; a question with choices to vote on is "poll" (fill poll_options with the choices). Put the spoken message in "text" (for a poll, "text" is the question).',
+    '- LINKING TASKS TO AN EVENT: if the user says to attach/link a task to an event (e.g. "add an event \'Move day\' and a couple tasks, and link those tasks to that event"), set that task\'s link_to_event to the event\'s exact title. The event may be one you are creating in this same command, or one of the existing events listed above. Match by title.',
     '- You cannot create a photo post by voice; if the user asks to post a photo, leave it out and mention it in "note".',
     '- ACTING ON AN EXISTING TASK vs creating a new one: if the user refers to a task that already exists above ("the task called X", "my X task", "mark X done", "delete X", "reassign/assign X to …", "push/move X to …", "change X\'s …"), they want to act on THAT task — add an entry to "actions" with the matching task_id and the right op. Do NOT also create a new task in "tasks". Only use "tasks" for genuinely new to-dos.',
     '- Action ops: "complete" (mark it done); "delete" (remove it); "postpone" (move its due date — set new_date and optional new_time); "handoff" (give it to someone — set handoff_to to a member name, or "pool" for anyone); "edit" (change fields — set any of new_title, new_assignee [a member name, "me", or "unassigned"], new_due_date, new_due_time, new_repeats, new_details). For "check off bananas from groceries" use op "check_off_item" with the item_id from the list above.',
@@ -81,6 +90,7 @@ const stageTool = {
             repeats: { type: ['string', 'null'], enum: ['none', 'daily', 'weekly', 'monthly', null] },
             details: { type: ['string', 'null'], description: 'Extra notes, or null.' },
             private: { type: 'boolean', description: 'True only if the user said it is private/personal.' },
+            link_to_event: { type: ['string', 'null'], description: 'Title of an event (new or existing) to attach this task to, or null.' },
           },
           required: ['title'],
         },
