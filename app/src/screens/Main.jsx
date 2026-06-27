@@ -556,8 +556,15 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
       const irData = await ir.json().catch(() => ({}));
       if (!ir.ok) throw new Error(irData.error || 'Could not understand that.');
 
-      const plannedTasks = (irData.tasks || []).map((t) => ({
-        title: t.title,
+      // Guard against the model inventing a placeholder when the user didn't
+      // give a real name ("add an event to today" with no title) — drop any
+      // task/event whose title is empty or a stand-in like "unknown".
+      const isRealTitle = (s) => {
+        const t = (s || '').trim();
+        return !!t && !/^<?\s*(unknown|untitled|none|n\/?a|tbd|\?+)\s*>?$/i.test(t);
+      };
+      const plannedTasks = (irData.tasks || []).filter((t) => isRealTitle(t.title)).map((t) => ({
+        title: t.title.trim(),
         assigneeId: resolveMember(t.assignee),
         assigneeRaw: t.assignee,
         due_date: t.due_date || null,
@@ -566,8 +573,8 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, profile, onAddTask
         details: t.details || null,
         is_private: !!t.private,
       }));
-      const events = (irData.events || []).map((e) => ({
-        title: e.title,
+      const events = (irData.events || []).filter((e) => isRealTitle(e.title)).map((e) => ({
+        title: e.title.trim(),
         date: e.date,
         start_time: e.start_time || null,
         attendeeIds: (e.attendees || []).map(resolveMember).filter(Boolean),
