@@ -667,6 +667,7 @@ function VoiceAssistant({ members, spaces, profile, onAddTask, onAddEvent, onAdd
         )}
       </button>
       <div className={'va-label' + (phase === 'error' ? ' va-error' : '')}>{phase === 'error' ? error : label}</div>
+      {phase !== 'error' && <div className="va-sub">(powered by AI)</div>}
       {phase === 'error' && (
         <button type="button" className="va-retry" onClick={reset}>Try again</button>
       )}

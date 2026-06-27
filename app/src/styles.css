@@ -536,6 +536,14 @@ html { overscroll-behavior-x: none; }
   text-align: center;
 }
 .va-label.va-error { color: var(--kinnekt-coral); max-width: 280px; line-height: 1.4; }
+.va-sub {
+  font-family: var(--font-main);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  margin-top: -5px;
+}
 .va-retry {
   font-family: var(--font-main);
   font-size: 12px;
