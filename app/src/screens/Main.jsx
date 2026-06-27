@@ -953,12 +953,18 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
     .map(([id, changes]) => ({ space: (spaces || []).find(s => s.id === id), changes }))
     .filter(e => e.space);
 
-  if (!dueTasks.length && !dueEvents.length && !recentPosts.length && !spaceEntries.length) return null;
-
-  const CAP = 5;
+  // NOTE: this hook MUST stay above the early-return below. It used to sit
+  // after it, so on renders with no items the hook was skipped — and the
+  // moment the first item appeared (e.g. a brand-new user adding one) the
+  // hook count jumped, crashing with React #310 ("rendered more hooks than
+  // the previous render"). Keep all hooks before any conditional return.
   // Each section caps at CAP rows; its "+N more" is the one interactive
   // element here — tap it to reveal the rest, tap again to collapse.
   const [open, setOpen] = React.useState({});
+
+  if (!dueTasks.length && !dueEvents.length && !recentPosts.length && !spaceEntries.length) return null;
+
+  const CAP = 5;
   const limitFor = (key, n) => open[key] ? n : CAP;
   const moreRow = (key, n) => {
     if (n <= CAP) return null;
