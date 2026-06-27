@@ -136,7 +136,11 @@ module.exports = async (req, res) => {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        // Swap this string to change the assistant's brain:
+        //   claude-haiku-4-5  — cheapest + fastest ($1/$5 per 1M)
+        //   claude-sonnet-4-6 — smarter on messy phrasing ($3/$15 per 1M)
+        //   claude-opus-4-8   — best on tangled multi-part commands ($5/$25)
+        model: 'claude-haiku-4-5',
         max_tokens: 2048,
         system: buildSystem(ctx),
         tools: [stageTool],
