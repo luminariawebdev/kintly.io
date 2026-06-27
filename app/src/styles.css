@@ -570,6 +570,49 @@ html { overscroll-behavior-x: none; }
 }
 .va-item-title { font-size: 14px; font-weight: 600; line-height: 1.3; word-break: break-word; }
 .va-item-sub { font-size: 12px; color: var(--text-muted); line-height: 1.4; word-break: break-word; }
+/* Per-row "Edit" affordance in the voice confirm sheet. */
+.va-item-edit {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 1px;
+  font-family: var(--font-main);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kinnekt-purple);
+  background: rgba(106, 77, 255, 0.10);
+  border: 1px solid rgba(106, 77, 255, 0.22);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.va-item-edit:active { opacity: 0.7; }
+.va-edit { display: flex; flex-direction: column; gap: 8px; }
+.va-edit-row { display: flex; gap: 8px; }
+.va-edit-row > .va-edit-in { flex: 1; min-width: 0; }
+.va-edit-in {
+  font-family: var(--font-main);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-glass);
+  background: var(--surface-glass);
+  color: var(--text-primary);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.va-edit-in:focus { border-color: var(--kinnekt-purple); }
+.va-edit-check {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-main); font-size: 13px; color: var(--text-secondary);
+  white-space: nowrap; padding: 0 4px;
+}
+.va-edit-done {
+  align-self: flex-start;
+  font-family: var(--font-main); font-size: 12px; font-weight: 700;
+  color: #fff; background: var(--kinnekt-purple);
+  border: none; border-radius: 999px; padding: 5px 16px; cursor: pointer;
+}
 @keyframes va-spin { to { transform: rotate(360deg); } }
 @keyframes va-pulse {
   0%, 100% { opacity: 0.25; transform: scale(0.9); }

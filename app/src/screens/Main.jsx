@@ -425,6 +425,10 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
   const [transcript, setTranscript] = React.useState('');
   const [plan, setPlan] = React.useState(null);
   const [applying, setApplying] = React.useState(false);
+  const [editing, setEditing] = React.useState(null); // which review row is open for edit, e.g. "tasks:0"
+  // Tweak a single staged item in place before it's applied.
+  const updateItem = (listKey, index, patch) =>
+    setPlan((p) => (p ? { ...p, [listKey]: p[listKey].map((it, i) => (i === index ? { ...it, ...patch } : it)) } : p));
   const recRef = React.useRef(null);
   const chunksRef = React.useRef([]);
 
@@ -645,7 +649,7 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     }
   };
 
-  const reset = () => { setPlan(null); setTranscript(''); setError(''); setPhase('idle'); };
+  const reset = () => { setPlan(null); setTranscript(''); setError(''); setEditing(null); setPhase('idle'); };
 
   const apply = async () => {
     if (!plan || applying) return;
@@ -805,64 +809,138 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
               );
             })()}
 
-            {plan.tasks.map((t, i) => (
+            {plan.tasks.map((t, i) => {
+              const ed = editing === 'tasks:' + i;
+              return (
               <div key={'t' + i} className="va-item">
                 <span className="va-item-tag" style={{ background: 'rgba(106,77,255,0.14)', color: 'var(--kinnekt-purple)' }}>Task</span>
-                <div style={{ minWidth: 0 }}>
-                  <div className="va-item-title">{t.title}</div>
-                  <div className="va-item-sub">
-                    {memberName(t.assigneeId) || 'Unassigned'}
-                    {t.due_date ? ` · ${fmtDate(t.due_date)}${t.due_time ? ` ${fmtTime(t.due_time)}` : ''}` : ''}
-                    {t.repeats ? ` · repeats ${t.repeats}` : ''}
-                    {t.is_private ? ' · personal' : ''}
-                  </div>
-                  {t.linkEventRaw && <div className="va-item-sub">🔗 linked to “{t.linkEventRaw}”</div>}
-                  {t.details && <div className="va-item-sub">{t.details}</div>}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {ed ? (
+                    <div className="va-edit">
+                      <input className="va-edit-in" value={t.title} placeholder="Title" onChange={(e) => updateItem('tasks', i, { title: e.target.value })} />
+                      <select className="va-edit-in" value={t.assigneeId || ''} onChange={(e) => updateItem('tasks', i, { assigneeId: e.target.value || null })}>
+                        <option value="">Unassigned</option>
+                        {members.map((m) => <option key={m.id} value={m.id}>{m.id === profile?.id ? 'You' : m.display_name}</option>)}
+                      </select>
+                      <div className="va-edit-row">
+                        <input type="date" className="va-edit-in" value={t.due_date || ''} onChange={(e) => updateItem('tasks', i, { due_date: e.target.value || null })} />
+                        <input type="time" className="va-edit-in" value={t.due_time || ''} onChange={(e) => updateItem('tasks', i, { due_time: e.target.value || null })} />
+                      </div>
+                      <div className="va-edit-row">
+                        <select className="va-edit-in" value={t.repeats || 'none'} onChange={(e) => updateItem('tasks', i, { repeats: e.target.value === 'none' ? null : e.target.value })}>
+                          <option value="none">Doesn't repeat</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                        <label className="va-edit-check"><input type="checkbox" checked={t.is_private} onChange={(e) => updateItem('tasks', i, { is_private: e.target.checked })} /> Personal</label>
+                      </div>
+                      <button type="button" className="va-edit-done" onClick={() => setEditing(null)}>Done</button>
+                    </div>
+                  ) : (<>
+                    <div className="va-item-title">{t.title}</div>
+                    <div className="va-item-sub">
+                      {memberName(t.assigneeId) || 'Unassigned'}
+                      {t.due_date ? ` · ${fmtDate(t.due_date)}${t.due_time ? ` ${fmtTime(t.due_time)}` : ''}` : ''}
+                      {t.repeats ? ` · repeats ${t.repeats}` : ''}
+                      {t.is_private ? ' · personal' : ''}
+                    </div>
+                    {t.linkEventRaw && <div className="va-item-sub">🔗 linked to “{t.linkEventRaw}”</div>}
+                    {t.details && <div className="va-item-sub">{t.details}</div>}
+                  </>)}
                 </div>
+                {!ed && <button type="button" className="va-item-edit" onClick={() => setEditing('tasks:' + i)}>Edit</button>}
               </div>
-            ))}
+              );
+            })}
 
-            {plan.events.map((e, i) => (
+            {plan.events.map((e, i) => {
+              const ed = editing === 'events:' + i;
+              return (
               <div key={'e' + i} className="va-item">
                 <span className="va-item-tag" style={{ background: 'rgba(45,156,255,0.14)', color: 'var(--kinnekt-blue, #2D9CFF)' }}>Event</span>
-                <div style={{ minWidth: 0 }}>
-                  <div className="va-item-title">{e.title}</div>
-                  <div className="va-item-sub">
-                    {fmtDate(e.date)}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''}
-                    {e.attendeeIds.length ? ` · ${e.attendeeIds.map(memberName).filter(Boolean).join(', ')}` : ''}
-                    {e.location ? ` · ${e.location}` : ''}
-                  </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {ed ? (
+                    <div className="va-edit">
+                      <input className="va-edit-in" value={e.title} placeholder="Title" onChange={(ev) => updateItem('events', i, { title: ev.target.value })} />
+                      <div className="va-edit-row">
+                        <input type="date" className="va-edit-in" value={e.date || ''} onChange={(ev) => updateItem('events', i, { date: ev.target.value })} />
+                        <input type="time" className="va-edit-in" value={e.start_time || ''} onChange={(ev) => updateItem('events', i, { start_time: ev.target.value || null })} />
+                      </div>
+                      <input className="va-edit-in" value={e.location || ''} placeholder="Location (optional)" onChange={(ev) => updateItem('events', i, { location: ev.target.value || null })} />
+                      <button type="button" className="va-edit-done" onClick={() => setEditing(null)}>Done</button>
+                    </div>
+                  ) : (<>
+                    <div className="va-item-title">{e.title}</div>
+                    <div className="va-item-sub">
+                      {fmtDate(e.date)}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''}
+                      {e.attendeeIds.length ? ` · ${e.attendeeIds.map(memberName).filter(Boolean).join(', ')}` : ''}
+                      {e.location ? ` · ${e.location}` : ''}
+                    </div>
+                  </>)}
                 </div>
+                {!ed && <button type="button" className="va-item-edit" onClick={() => setEditing('events:' + i)}>Edit</button>}
               </div>
-            ))}
+              );
+            })}
 
-            {plan.items.map((it, i) => (
+            {plan.items.map((it, i) => {
+              const ed = editing === 'items:' + i;
+              return (
               <div key={'s' + i} className="va-item">
                 <span className="va-item-tag" style={{ background: 'rgba(61,217,197,0.16)', color: '#1FA999' }}>List</span>
-                <div style={{ minWidth: 0 }}>
-                  <div className="va-item-title">{it.item}</div>
-                  <div className="va-item-sub">
-                    {it.spaceTitle ? `→ ${it.spaceTitle}` : <span style={{ color: 'var(--kinnekt-coral)' }}>no list named “{it.spaceRaw}” — will be skipped</span>}
-                  </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {ed ? (
+                    <div className="va-edit">
+                      <input className="va-edit-in" value={it.item} placeholder="Item" onChange={(e) => updateItem('items', i, { item: e.target.value })} />
+                      <select className="va-edit-in" value={it.spaceId || ''} onChange={(e) => { const sp = spaces.find((s) => s.id === e.target.value); updateItem('items', i, { spaceId: sp?.id || null, spaceTitle: sp?.title || null }); }}>
+                        <option value="">— pick a list —</option>
+                        {spaces.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+                      </select>
+                      <button type="button" className="va-edit-done" onClick={() => setEditing(null)}>Done</button>
+                    </div>
+                  ) : (<>
+                    <div className="va-item-title">{it.item}</div>
+                    <div className="va-item-sub">
+                      {it.spaceTitle ? `→ ${it.spaceTitle}` : <span style={{ color: 'var(--kinnekt-coral)' }}>no list named “{it.spaceRaw}” — tap Edit to pick one, or it's skipped</span>}
+                    </div>
+                  </>)}
                 </div>
+                {!ed && <button type="button" className="va-item-edit" onClick={() => setEditing('items:' + i)}>Edit</button>}
               </div>
-            ))}
+              );
+            })}
 
             {(plan.posts || []).map((p, i) => {
+              const ed = editing === 'posts:' + i;
               const kindLabel = p.kind === 'urgent' ? 'Urgent' : p.kind === 'reminder' ? 'Reminder' : p.kind === 'poll' ? 'Poll' : 'Message';
               return (
                 <div key={'p' + i} className="va-item">
                   <span className="va-item-tag" style={{ background: 'rgba(255,140,140,0.16)', color: 'var(--kinnekt-coral)' }}>Post</span>
-                  <div style={{ minWidth: 0 }}>
-                    <div className="va-item-title">{p.text || (p.kind === 'poll' ? '(poll)' : '(empty)')}</div>
-                    <div className="va-item-sub">
-                      {kindLabel}
-                      {p.kind === 'poll' && p.options.length ? ` · ${p.options.join(', ')}` : ''}
-                    </div>
-                    {p.invalid && (
-                      <div className="va-item-sub" style={{ color: 'var(--kinnekt-coral)' }}>a poll needs a question and at least 2 options — will be skipped</div>
-                    )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {ed ? (
+                      <div className="va-edit">
+                        <input className="va-edit-in" value={p.text} placeholder={p.kind === 'poll' ? 'Question' : 'Message'} onChange={(e) => updateItem('posts', i, { text: e.target.value, invalid: p.kind === 'poll' && (!e.target.value.trim() || p.options.length < 2) })} />
+                        <select className="va-edit-in" value={p.kind} onChange={(e) => { const kind = e.target.value; updateItem('posts', i, { kind, invalid: kind === 'poll' && (!(p.text || '').trim() || p.options.length < 2) }); }}>
+                          <option value="message">Message</option>
+                          <option value="urgent">Urgent</option>
+                          <option value="reminder">Reminder</option>
+                          <option value="poll">Poll</option>
+                        </select>
+                        <button type="button" className="va-edit-done" onClick={() => setEditing(null)}>Done</button>
+                      </div>
+                    ) : (<>
+                      <div className="va-item-title">{p.text || (p.kind === 'poll' ? '(poll)' : '(empty)')}</div>
+                      <div className="va-item-sub">
+                        {kindLabel}
+                        {p.kind === 'poll' && p.options.length ? ` · ${p.options.join(', ')}` : ''}
+                      </div>
+                      {p.invalid && (
+                        <div className="va-item-sub" style={{ color: 'var(--kinnekt-coral)' }}>a poll needs a question and at least 2 options — will be skipped</div>
+                      )}
+                    </>)}
                   </div>
+                  {!ed && <button type="button" className="va-item-edit" onClick={() => setEditing('posts:' + i)}>Edit</button>}
                 </div>
               );
             })}
