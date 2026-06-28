@@ -743,9 +743,6 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
 
   const recording = phase === 'recording';
   const working = phase === 'working';
-  const label = recording ? 'Listening… tap to stop'
-    : working ? 'Thinking…'
-    : 'Tap to dictate';
 
   return (
     <div className="va-wrap">
@@ -771,10 +768,11 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
           </svg>
         )}
       </button>
-      <div className={'va-label' + (phase === 'error' ? ' va-error' : '')}>{phase === 'error' ? error : label}</div>
-      {phase !== 'error' && <div className="va-sub">(powered by AI)</div>}
       {phase === 'error' && (
-        <button type="button" className="va-retry" onClick={reset}>Try again</button>
+        <>
+          <div className="va-label va-error">{error}</div>
+          <button type="button" className="va-retry" onClick={reset}>Try again</button>
+        </>
       )}
 
       {/* Portal the review sheet up to .fb-screen (where the other modals

@@ -465,12 +465,13 @@ html { overscroll-behavior-x: none; }
 .fb-tab.active:hover { background: var(--brand-grad-fill); }
 
 /* ── Live clock banner (above the home feed) ─────────────────── */
-/* ── Voice assistant — floating glass dock pinned to the bottom ────────────────
+/* ── Voice assistant — floating mic pinned to the bottom ───────────────────────
    A sibling of .fb-scroll (child of .fb-screen), so it stays put while the
-   feed scrolls underneath. Same frosted-glass treatment as the top header.
-   The mic circle is lifted to straddle the top edge of the bar (FAB style)
-   via .va-btn's relative offset. The feed reserves matching bottom clearance
-   in .fb-sec-wrap so the last section never hides behind the dock. */
+   feed scrolls underneath. No glass bar — just the button + label floating
+   over the content. The wrap ignores taps (pointer-events:none) so the empty
+   space beside the button stays interactive; only the button + retry link opt
+   back in. The feed reserves bottom clearance in .fb-sec-wrap so the last
+   section never hides behind the floating mic. */
 .va-wrap {
   position: absolute;
   left: 0;
@@ -480,13 +481,9 @@ html { overscroll-behavior-x: none; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
-  background: var(--surface-glass);
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-  border-top: 1px solid var(--border-soft);
-  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.12);
+  gap: 4px;
+  padding: 0 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  pointer-events: none;
 }
 .va-btn {
   position: relative;
@@ -494,11 +491,9 @@ html { overscroll-behavior-x: none; }
      the mic's center hole (lighter rim in light mode, faint in dark). */
   --va-grad: linear-gradient(var(--kinnekt-purple), var(--kinnekt-blue), var(--kinnekt-cyan), var(--kinnekt-coral));
   --va-core-ring: rgba(255, 255, 255, 0.92);
-  /* Lift the circle so it pops above the bar's top edge; the matching
-     negative margin reclaims the shifted space so the label rides up with
-     it instead of leaving a gap below. */
-  top: -30px;
-  margin-bottom: -30px;
+  /* The wrap is pointer-events:none so taps pass through to the content
+     beside the mic; the button itself opts back in. */
+  pointer-events: auto;
   width: 58px;
   height: 58px;
   border-radius: 50%;
@@ -567,15 +562,8 @@ html { overscroll-behavior-x: none; }
   text-align: center;
 }
 .va-label.va-error { color: var(--kinnekt-coral); max-width: 280px; line-height: 1.4; }
-.va-sub {
-  font-family: var(--font-main);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--text-muted);
-  margin-top: -5px;
-}
 .va-retry {
+  pointer-events: auto;
   font-family: var(--font-main);
   font-size: 12px;
   font-weight: 600;
@@ -793,11 +781,10 @@ html { overscroll-behavior-x: none; }
      collapsed). flex-shrink: 0 + flex-basis: auto means it never
      shrinks below its natural content size when content is taller. */
   flex: 1 0 auto;
-  /* Bottom clearance for the floating voice dock (.va-wrap, pinned to the
-     screen bottom). Covers the glass bar height plus the mic circle that
-     overhangs above it, so scrolling to the end leaves the last section
-     resting just above the dock instead of hidden behind it. */
-  padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+  /* Bottom clearance for the floating mic (.va-wrap, pinned to the screen
+     bottom) so scrolling to the end leaves the last section resting just
+     above the button instead of hidden behind it. */
+  padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px));
   /* Hard cap: clip anything that extends past the wrap's box (the glow
      layer, a transiently mis-measured child during a realtime reflow,
      etc.) so it can never add scrollable height below the last section.
