@@ -746,9 +746,9 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
 
   return (
     <div className="va-wrap">
-      {working && (
+      {(recording || working) && (
         <div className="va-thinking" role="status" aria-live="polite">
-          Thinking<span className="va-dots" aria-hidden><span>.</span><span>.</span><span>.</span></span>
+          {recording ? 'Speak to dictate' : 'Thinking'}<span className="va-dots" aria-hidden><span>.</span><span>.</span><span>.</span></span>
         </div>
       )}
       <button
