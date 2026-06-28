@@ -756,8 +756,10 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
         disabled={working}
         aria-label="Add to Kinnekt by voice"
       >
-        <span className="va-glow" aria-hidden />
-        <span className="va-ring" aria-hidden />
+        <span className="va-wheel" aria-hidden>
+          <span /><span /><span /><span />
+        </span>
+        <span className="va-core" aria-hidden />
         {recording ? (
           <span className="va-stop" aria-hidden />
         ) : (
@@ -10566,25 +10568,6 @@ export function MainApp({ profile, onSettings }) {
         </div>
 
         <div className="fb-sec-wrap">
-          <VoiceAssistant
-            members={members}
-            spaces={spaces}
-            tasks={tasks}
-            spaceItems={spaceItems}
-            events={events}
-            profile={profile}
-            onAddTask={addTask}
-            onAddEvent={addEvent}
-            onAddSpaceItem={addSpaceItem}
-            onAddNote={addNote}
-            onComplete={toggleTask}
-            onDelete={deleteTask}
-            onPostpone={postponeTask}
-            onPass={passBaton}
-            onRelease={releaseTask}
-            onUpdate={updateTask}
-            onToggleItem={toggleSpaceItem}
-          />
           <LiveClock />
           <NotesSection
             notes={notes}
@@ -10666,6 +10649,31 @@ export function MainApp({ profile, onSettings }) {
           />
         </div>
       </div>
+
+      {/* Floating glass dock — pinned to the bottom of .fb-screen (a sibling
+          of .fb-scroll, not inside it) so the mic stays reachable from any
+          section while the feed scrolls underneath it. The feed reserves
+          bottom clearance (.fb-sec-wrap padding-bottom) so the last section
+          never hides behind the dock. */}
+      <VoiceAssistant
+        members={members}
+        spaces={spaces}
+        tasks={tasks}
+        spaceItems={spaceItems}
+        events={events}
+        profile={profile}
+        onAddTask={addTask}
+        onAddEvent={addEvent}
+        onAddSpaceItem={addSpaceItem}
+        onAddNote={addNote}
+        onComplete={toggleTask}
+        onDelete={deleteTask}
+        onPostpone={postponeTask}
+        onPass={passBaton}
+        onRelease={releaseTask}
+        onUpdate={updateTask}
+        onToggleItem={toggleSpaceItem}
+      />
 
       <AddTaskModal
         open={modal === 'task'}
