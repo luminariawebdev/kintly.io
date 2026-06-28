@@ -553,6 +553,44 @@ html { overscroll-behavior-x: none; }
 /* Dark mode: the inner ring around the mic should be a faint light hairline,
    not a bright white halo. */
 :root[data-theme="dark"] .va-btn { --va-core-ring: rgba(255, 255, 255, 0.16); }
+/* "Thinking" pill — a small frosted box that floats just above the mic while
+   the AI is processing, so it's clearly working and the user doesn't re-tap.
+   Opaque-ish backing keeps the text legible over whatever content is behind. */
+.va-thinking {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 6px 13px;
+  border-radius: var(--r-pill);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--border-glass);
+  box-shadow: var(--shadow-soft);
+  font-family: var(--font-main);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  animation: va-think-in 0.2s var(--ease, ease-out);
+}
+/* Three dots that fill in one→two→three, hold, then all clear and repeat. */
+.va-dots {
+  display: inline-block;
+  width: 15px;
+  text-align: left;
+  margin-left: 1px;
+  color: var(--kinnekt-purple);
+  font-weight: 800;
+}
+.va-dots > span { opacity: 0; }
+.va-dots > span:nth-child(1) { animation: va-dot1 1.5s infinite; }
+.va-dots > span:nth-child(2) { animation: va-dot2 1.5s infinite; }
+.va-dots > span:nth-child(3) { animation: va-dot3 1.5s infinite; }
+@keyframes va-dot1 { 0%, 12% { opacity: 0; } 18%, 90% { opacity: 1; } 96%, 100% { opacity: 0; } }
+@keyframes va-dot2 { 0%, 40% { opacity: 0; } 46%, 90% { opacity: 1; } 96%, 100% { opacity: 0; } }
+@keyframes va-dot3 { 0%, 68% { opacity: 0; } 74%, 90% { opacity: 1; } 96%, 100% { opacity: 0; } }
+@keyframes va-think-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 .va-label {
   font-family: var(--font-main);
   font-size: 12px;
@@ -635,6 +673,7 @@ html { overscroll-behavior-x: none; }
 @keyframes va-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .va-wheel { animation: none; }
+  .va-dots > span { animation: none; opacity: 1; }
 }
 
 .live-clock {
