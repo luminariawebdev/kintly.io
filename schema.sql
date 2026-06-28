@@ -124,10 +124,16 @@ alter table public.tasks add column if not exists baton_offer         uuid refer
 -- shown in the task detail while it's unassigned. Cleared when reclaimed.
 alter table public.tasks add column if not exists pool_reason         text;
 alter table public.tasks add column if not exists pool_by             uuid references public.profiles;
--- True when the current assignment came from a one-day "claim" of an
--- unassigned task. A recurring task's next occurrence reads this so it resets
--- to Unassigned instead of sticking to whoever picked it up that day.
+-- True when the current assignment is a temporary pickup — either a claim of
+-- an unassigned task or an "I've got it" take-over of someone else's. A
+-- recurring task's next occurrence reads this so it reverts to the series'
+-- home owner (recur_owner) instead of sticking to whoever covered it that day.
 alter table public.tasks add column if not exists claimed             boolean default false;
+-- Where a temporary pickup reverts to on the next recurring occurrence:
+-- null = back to the Unassigned pool, a profile = the original assignee the
+-- task was recurrently assigned to before it was grabbed. Only meaningful
+-- while `claimed` is true; respawn clears it on the fresh occurrence.
+alter table public.tasks add column if not exists recur_owner         uuid references public.profiles;
 -- Postpone: who moved the due date, and what it was before the latest move.
 -- The new date is just due_date/due_time; these record the previous values so
 -- the row can show "<person> postponed from <old> to <new>".
@@ -623,8 +629,9 @@ security definer
 set search_path = public
 as $$
 declare
-  v_src public.tasks;
-  v_new public.tasks;
+  v_src   public.tasks;
+  v_new   public.tasks;
+  v_owner uuid;
 begin
   if auth.uid() is null then
     raise exception 'not authenticated';
@@ -645,8 +652,15 @@ begin
     return null;
   end if;
 
+  -- Who owns the NEXT occurrence? If this one was a temporary pickup (claimed
+  -- via "I've got it" — from the pool or off someone else), it reverts to the
+  -- series' home owner (recur_owner): null = back to the Unassigned pool, a
+  -- profile = the original assignee. It must NOT stick to whoever covered it.
+  -- Otherwise it stays with the current assignee as normal.
+  v_owner := case when coalesce(v_src.claimed, false) then v_src.recur_owner else v_src.assigned_to end;
+
   -- Guard against double-spawns (double-tap / re-fire): bail if an open
-  -- occurrence for this series already sits on the target day.
+  -- occurrence for this series + target owner already sits on the target day.
   if exists (
     select 1 from public.tasks
     where group_id = v_src.group_id
@@ -654,16 +668,18 @@ begin
       and due_date = p_next_due
       and completed = false
       and recurrence is not null
-      and coalesce(assigned_to::text, '') = coalesce(v_src.assigned_to::text, '')
+      and coalesce(assigned_to::text, '') = coalesce(v_owner::text, '')
   ) then
     return null;
   end if;
 
+  -- The fresh occurrence is a clean assignment: claimed/recur_owner reset to
+  -- their defaults (false / null) since they aren't carried over here.
   insert into public.tasks
     (group_id, created_by, assigned_to, note_id, event_id, title,
      description, due_date, due_time, recurrence, is_private, space_id, completed)
   values
-    (v_src.group_id, v_src.created_by, v_src.assigned_to, v_src.note_id,
+    (v_src.group_id, v_src.created_by, v_owner, v_src.note_id,
      v_src.event_id, v_src.title, v_src.description, p_next_due,
      v_src.due_time, v_src.recurrence, v_src.is_private, v_src.space_id, false)
   returning * into v_new;
@@ -760,6 +776,58 @@ begin
 end;
 $$;
 grant execute on function public.decide_suggestion(uuid, boolean) to authenticated;
+
+-- "I've got it" take-over: grab a task currently on someone else's plate and
+-- make it yours. Runs as definer because the caller is neither the creator nor
+-- the current assignee, so the tasks_update policy would reject a direct write.
+-- Any member of the task's group may take any open, non-private task that's
+-- assigned to a *different* person. Clears any pending hand-off offer and the
+-- `claimed` flag, so a recurring series keeps coming to the new holder until
+-- someone takes it back. Returns the updated row (or null if not permitted).
+create or replace function public.grab_task(p_task_id uuid)
+returns public.tasks
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_task public.tasks;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select * into v_task
+  from public.tasks
+  where id = p_task_id
+    and group_id = public.my_group_id()
+    and is_private is not true
+    and completed = false
+    and cancelled_at is null
+    and assigned_to is not null
+    and assigned_to <> v_uid
+  for update;
+
+  if v_task.id is null then
+    return null;  -- not found, wrong group, private/closed, or not someone else's
+  end if;
+
+  -- Take it over for now, but remember who the recurring series belongs to so
+  -- the next occurrence reverts to them, not to me. coalesce preserves the
+  -- true original across a chain of take-overs (Dad -> Alex -> Bob still -> Dad).
+  update public.tasks
+  set recur_owner = coalesce(recur_owner, assigned_to),
+      assigned_to = v_uid,
+      baton_offer = null,
+      claimed     = true
+  where id = p_task_id
+  returning * into v_task;
+
+  return v_task;
+end;
+$$;
+grant execute on function public.grab_task(uuid) to authenticated;
 
 -- ─── Realtime ────────────────────────────────────────────────────────────────
 -- postgres_changes only fires for tables in the supabase_realtime

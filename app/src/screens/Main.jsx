@@ -1433,7 +1433,7 @@ function useRerenderEvery(ms) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone, suggestInfo }) {
+function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo }) {
   const color = getColor(assignee?.color);
   const isCancelled = !!task.cancelled_at;
   const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
@@ -1456,6 +1456,9 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
   const offerName = offer && getProfile ? (getProfile(offer)?.display_name || 'someone') : '';
   const assignedToMe = task.assigned_to === myId;
   const canClaim = onClaim && live && !task.assigned_to && !offer;
+  // Take over a task that's on someone else's plate (group, open, not mine,
+  // and not one already offered to me — that gets the Accept/Decline flow).
+  const canGrab = onGrab && live && task.assigned_to && !assignedToMe && !offeredToMe;
   const canHandOff = onPass && onRelease && live && assignedToMe;
   // Postpone works on personal/private tasks too (you just can't hand those
   // off), so it isn't gated on `live` — only on it being yours and open.
@@ -1602,6 +1605,13 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
           </div>
         )}
 
+        {/* Take over — grab a task that's on someone else's plate. */}
+        {canGrab && (
+          <div style={{ marginTop: 7 }}>
+            <button onClick={stop(() => onGrab(task))} style={chip('var(--kinnekt-purple)', '#fff')}>I've got it</button>
+          </div>
+        )}
+
         {/* Unified Hand off (holder): pass to a person, or back to the pool. */}
         {canHandOff && (
           <div style={{ marginTop: 7 }}>
@@ -1669,7 +1679,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
 // doesn't touch their props (bell menu, scroll-driven tab sync, modal
 // opens) skips re-rendering hundreds of rows. MainApp passes only
 // useCallback'd handlers and primitive/stable values for this to work.
-const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, suggestions, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onRelease, onPass, onRespond, onPostpone, collapsed, onToggleCollapse, filter, setFilter }) {
+const TasksSection = React.memo(function TasksSection({ tasks, members, myId, getProfile, suggestions, onToggle, onAdd, onAddPersonal, onDelete, onShowTask, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, collapsed, onToggleCollapse, filter, setFilter }) {
   // Per-task suggestion summary for the row badge: how many approved, and
   // (for the task's creator) how many pending notes still need a decision.
   const suggestInfo = React.useMemo(() => {
@@ -1684,7 +1694,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
     return m;
   }, [suggestions]);
   // Claim / release / baton handlers + roster, spread onto every TaskRow.
-  const rowExtra = { members, getProfile, onClaim, onRelease, onPass, onRespond, onPostpone, suggestInfo };
+  const rowExtra = { members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo };
   const [showDone, setShowDone] = React.useState(false);
   // Personal view gets its own completed-toggle so expanding "Completed"
   // in one view doesn't silently expand it in the other.
@@ -5886,7 +5896,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond, suggestions, onSuggest, onDecideSuggestion, onWithdrawSuggestion }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond, onGrab, suggestions, onSuggest, onDecideSuggestion, onWithdrawSuggestion }) {
   const [cancelMode, setCancelMode] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [cancelling, setCancelling] = React.useState(false);
@@ -5942,6 +5952,11 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
   const iAmCreator = task.created_by === myId;
   const myPending = pendingSuggestions.filter(s => s.suggested_by === myId);
   const canSuggest = onSuggest && !iAmCreator && !task.cancelled_at && !task.completed;
+  // Take over a task that's on someone else's plate (open, group, not mine; if
+  // it's offered to me I use Accept instead, handled by the baton callout).
+  const canGrab = onGrab && task.assigned_to && task.assigned_to !== myId
+    && !task.is_private && !task.completed && !task.cancelled_at
+    && task.baton_offer !== myId;
 
   return (
     <Modal open={open} onClose={onClose} title="Task">
@@ -6113,6 +6128,29 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
                 <button onClick={() => onPass(task, null)} className="copy-btn" style={{ marginLeft: 0 }}>Cancel hand-off</button>
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* Take over — this task is on someone else's plate; cover it for them. */}
+      {canGrab && (() => {
+        const from = getProfile?.(task.assigned_to);
+        const fromName = from ? from.display_name : 'someone';
+        return (
+          <div style={{
+            marginBottom: 14, padding: '12px 14px',
+            background: 'rgba(106, 77, 255, 0.06)',
+            border: '1px solid rgba(106, 77, 255, 0.28)',
+            borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              On <strong style={{ color: from ? getColor(from.color) : 'var(--text-primary)' }}>{fromName}</strong>’s plate. Cover it for them?
+            </div>
+            <button
+              onClick={() => onGrab(task)}
+              className="copy-btn"
+              style={{ marginLeft: 0, background: 'var(--kinnekt-purple)', color: '#fff', borderColor: 'transparent' }}
+            >I've got it</button>
           </div>
         );
       })()}
@@ -7073,7 +7111,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
           <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color) }}>✋</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="fb-bell-text">
-              <strong>{p.by_name || 'Someone'}</strong> claimed a task you created
+              <strong>{p.by_name || 'Someone'}</strong> picked up an open task
             </div>
             <div className="fb-bell-sub">{p.task_title}</div>
           </div>
@@ -7089,6 +7127,19 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               <strong>{p.by_name || 'Someone'}</strong> put a task up for grabs
             </div>
             <div className="fb-bell-sub">{p.task_title}{p.reason ? ` · “${p.reason}”` : ''}</div>
+          </div>
+        </>
+      );
+    }
+    if (n.type === 'task_taken_over') {
+      return (
+        <>
+          <span className="fb-bell-icon-circle" style={{ background: getColor(p.by_color) }}>🙌</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="fb-bell-text">
+              <strong>{p.by_name || 'Someone'}</strong> took over {p.from_name ? <><strong>{p.from_name}</strong>’s task</> : 'a task'}
+            </div>
+            <div className="fb-bell-sub">{p.task_title}</div>
           </div>
         </>
       );
@@ -7264,7 +7315,7 @@ function NotificationsMenu({ notifications, onMarkOne, onMarkAll, onOpenTask, on
               if (!n.read) onMarkOne(n.id);
               const id = n.payload?.task_id || n.payload?.event_id || n.payload?.note_id;
               if (!id) return;
-              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'task_postponed' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined' || n.type === 'task_suggested' || n.type === 'suggestion_approved') && onOpenTask) onOpenTask(id);
+              if ((n.type === 'task_assigned' || n.type === 'task_cancelled' || n.type === 'task_claimed' || n.type === 'task_released' || n.type === 'task_taken_over' || n.type === 'task_postponed' || n.type === 'baton_offered' || n.type === 'baton_accepted' || n.type === 'baton_declined' || n.type === 'task_suggested' || n.type === 'suggestion_approved') && onOpenTask) onOpenTask(id);
               else if ((n.type === 'event_invited' || n.type === 'event_rsvp') && onOpenEvent) onOpenEvent(id);
               else if ((n.type === 'note_tagged' || n.type === 'note_replied' || n.type === 'announcement') && onOpenNote) onOpenNote(id);
             };
@@ -9050,14 +9101,23 @@ export function MainApp({ profile, onSettings }) {
     if (next && snapshot) {
       const nextDue = computeNextDue(snapshot);
       if (nextDue) {
-        // A one-day pickup of an unassigned recurring task: the NEXT
-        // occurrence goes back to Unassigned, not to whoever grabbed it once.
+        // A temporary pickup ("I've got it" — from the pool OR off another
+        // person) must NOT make the picker the permanent recurring owner. The
+        // next occurrence reverts to the series' home owner (recur_owner):
+        // null = back to the Unassigned pool, a person = the original assignee.
         const wasClaimed = !!snapshot.claimed;
+        const ownerAfter = wasClaimed ? (snapshot.recur_owner ?? null) : undefined;
         const addRow = (row) => {
           const r = Array.isArray(row) ? row[0] : row;
           if (!r || !r.id) return;
-          if (wasClaimed && r.assigned_to) {
-            setTasks(p => p.some(t => t.id === r.id) ? p : [{ ...r, assigned_to: null, claimed: false }, ...p]);
+          // The definer RPC already routes the new occurrence to the home owner.
+          // For the pool case (owner = null) we also pin it client-side (RLS
+          // permits writing null), which covers older DBs whose respawn RPC
+          // predates this. A *person* owner can only be set by the RPC — RLS
+          // blocks a client write assigning to someone else — so there we trust
+          // whatever the RPC returned.
+          if (wasClaimed && ownerAfter === null && r.assigned_to) {
+            setTasks(p => p.some(t => t.id === r.id) ? p : [{ ...r, assigned_to: null, claimed: false, recur_owner: null }, ...p]);
             supabase.from('tasks').update({ assigned_to: null }).eq('id', r.id).then(() => {}, () => {});
           } else {
             setTasks(p => p.some(t => t.id === r.id) ? p : [r, ...p]);
@@ -9076,7 +9136,7 @@ export function MainApp({ profile, onSettings }) {
           const s = snapshot;
           let payload = {
             title: s.title, description: s.description,
-            assigned_to: wasClaimed ? null : s.assigned_to,
+            assigned_to: wasClaimed ? (s.recur_owner ?? null) : s.assigned_to,
             recurrence: s.recurrence, group_id: s.group_id, created_by: s.created_by,
             space_id: s.space_id, is_private: s.is_private, due_time: s.due_time,
             due_date: nextDue, completed: false,
@@ -9295,22 +9355,24 @@ export function MainApp({ profile, onSettings }) {
       alert('Could not claim task: ' + error.message);
       return;
     }
-    if (task.created_by && task.created_by !== profile.id) {
-      notify([task.created_by], 'task_claimed', {
+    // Anyone picking up a task pings the whole group (except the picker).
+    const targets = members.map(m => m.id).filter(id => id && id !== profile.id);
+    if (targets.length > 0) {
+      notify(targets, 'task_claimed', {
         task_id: task.id, task_title: task.title,
         by_name: profile.display_name, by_color: profile.color,
       });
     }
-  }, [profile]);
+  }, [profile, members]);
 
   const releaseTask = React.useCallback(async (task, reason) => {
     const r = reason && reason.trim();
     if (!task || !r) return;
     // Store who dropped it + why, so the task detail can show the note.
     // Clear `claimed` — it's back in the pool, not a personal pickup.
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: null, claimed: false, pool_reason: r, pool_by: profile.id } : t));
-    let { error } = await supabase.from('tasks').update({ assigned_to: null, claimed: false, pool_reason: r, pool_by: profile.id }).eq('id', task.id);
-    if (error && /pool_reason|pool_by|claimed/i.test(error.message || '')) {
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: null, claimed: false, recur_owner: null, pool_reason: r, pool_by: profile.id } : t));
+    let { error } = await supabase.from('tasks').update({ assigned_to: null, claimed: false, recur_owner: null, pool_reason: r, pool_by: profile.id }).eq('id', task.id);
+    if (error && /pool_reason|pool_by|claimed|recur_owner/i.test(error.message || '')) {
       // Columns not migrated yet — release anyway; the note just won't persist.
       ({ error } = await supabase.from('tasks').update({ assigned_to: null }).eq('id', task.id));
     }
@@ -9328,6 +9390,46 @@ export function MainApp({ profile, onSettings }) {
       });
     }
   }, [profile, members]);
+
+  // ── "I've got it" take-over: grab a task that's on someone else's plate and
+  // make it yours (instant — no acceptance needed, since they may be away). The
+  // current assignee isn't the creator/assignee match RLS expects, so this goes
+  // through the security-definer grab_task RPC. Everyone in the group except the
+  // picker gets a heads-up.
+  const grabTask = React.useCallback(async (task) => {
+    if (!task || !profile) return;
+    const prevAssigned = task.assigned_to;
+    const prevOffer = task.baton_offer ?? null;
+    const prevClaimed = task.claimed ?? false;
+    const prevRecurOwner = task.recur_owner ?? null;
+    // Optimistic: it's mine now, but flagged as a temporary pickup that reverts
+    // to the original owner on the next recurring occurrence (recur_owner).
+    setTasks(prev => prev.map(t => t.id === task.id ? {
+      ...t, assigned_to: profile.id, baton_offer: null, claimed: true,
+      recur_owner: (t.recur_owner ?? prevAssigned ?? null),
+    } : t));
+    const { data, error } = await supabase.rpc('grab_task', { p_task_id: task.id });
+    if (error || !data) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: prevAssigned, baton_offer: prevOffer, claimed: prevClaimed, recur_owner: prevRecurOwner } : t));
+      const missing = error && /grab_task|could not find|schema cache|PGRST202|function/i.test(error.message || '');
+      alert(missing
+        ? "Take-over isn't enabled yet — the grab_task database function still needs to be added in Supabase."
+        : ('Could not take over the task: ' + (error?.message || 'it may have just changed.')));
+      return;
+    }
+    // Sync to whatever the DB returned (covers a concurrently-edited row).
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...data } : t));
+    // Tell the whole group except me — the picker doesn't need a notice.
+    const targets = members.map(m => m.id).filter(id => id && id !== profile.id);
+    if (targets.length > 0) {
+      const from = prevAssigned ? getProfile(prevAssigned) : null;
+      notify(targets, 'task_taken_over', {
+        task_id: task.id, task_title: task.title,
+        by_name: profile.display_name, by_color: profile.color,
+        from_name: from ? from.display_name : null,
+      });
+    }
+  }, [profile, members, getProfile]);
 
   // ── Hand off: pass a task to a specific person (a pending offer in
   // baton_offer they accept/decline). toId null cancels/clears the offer.
@@ -10589,7 +10691,7 @@ export function MainApp({ profile, onSettings }) {
             collapsed={collapsed.notes}
             onToggleCollapse={toggleCollapseNotes}
           />
-          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} suggestions={suggestions} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
+          <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} suggestions={suggestions} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onGrab={grabTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* ListsSection is hidden — Spaces handles the same use case
               with more flexibility. The component, state, modals, and
               CRUD wiring all stay in place; just uncomment to bring it
@@ -10856,6 +10958,7 @@ export function MainApp({ profile, onSettings }) {
         onPostpone={(t) => setPostponeTarget(t)}
         onPass={passBaton}
         onRespond={respondBaton}
+        onGrab={grabTask}
         suggestions={suggestions}
         onSuggest={addSuggestion}
         onDecideSuggestion={decideSuggestion}
