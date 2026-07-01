@@ -17,5 +17,3 @@ export const PALETTE = [
   { id: 'rose',        hex: '#FF86C8', label: 'Rose' },
   { id: 'black',       hex: '#2D2D2D', label: 'Black' },
 ];
-
-export const colorHex = (id) => (PALETTE.find(c => c.id === id) || {}).hex || '#9aa0a6';

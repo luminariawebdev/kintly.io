@@ -4,11 +4,20 @@ import { PALETTE } from '../lib/colors';
 import { VERSION_LABEL } from '../lib/build';
 import { EmojiInput, KinnektLogo } from '../Components';
 
-export function AuthScreen({ initialStep = 'login', onComplete, onGroupReady }) {
+export function AuthScreen({ initialStep = 'login', profile, onComplete, onGroupReady, onEnterSpace }) {
   const [step, setStep] = React.useState(initialStep);
 
+  // Safety net: if the parent moves us to the group picker (e.g. after a
+  // successful sign-in with 2+ groups) while this component instance is reused,
+  // React would keep the stale internal step and leave the login form on screen
+  // ("Signing in…" forever). Sync to the requested step. (The key={screen} on
+  // the parent already forces a remount; this is belt-and-suspenders.)
+  React.useEffect(() => {
+    if (initialStep === 'group-setup') setStep('group-setup');
+  }, [initialStep]);
+
   if (step === 'group-setup') {
-    return <GroupSetupScreen onGroupReady={onGroupReady} />;
+    return <GroupSetupScreen profile={profile} onGroupReady={onGroupReady} onEnterSpace={onEnterSpace} />;
   }
 
   return (
@@ -52,9 +61,16 @@ function LoginForm({ onComplete }) {
     if (!email || !pw) { setErr('Please fill in all fields'); return; }
     setLoading(true);
     setErr('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
-    if (error) { setErr(error.message); setLoading(false); }
-    else onComplete();
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password: pw });
+      if (error) { setErr(error.message); setLoading(false); return; }
+      onComplete(data?.user?.id);
+    } catch {
+      // A thrown rejection (network drop) — not a returned { error } — would
+      // otherwise leave the button stuck on "Signing in…" forever.
+      setErr('Network error — check your connection and try again.');
+      setLoading(false);
+    }
   };
 
   // Sends the Supabase recovery email. The link lands back on the app,
@@ -65,12 +81,17 @@ function LoginForm({ onComplete }) {
     setErr('');
     if (!email) { setErr('Enter your email above first.'); emailRef.current?.focus(); return; }
     setLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin,
-    });
-    setLoading(false);
-    if (error) { setErr(error.message); return; }
-    setResetSent(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      setLoading(false);
+      if (error) { setErr(error.message); return; }
+      setResetSent(true);
+    } catch {
+      setLoading(false);
+      setErr('Network error — check your connection and try again.');
+    }
   };
 
   const goReset = () => {
@@ -191,14 +212,18 @@ function SignupForm({ onComplete }) {
     setLoading(true);
     setErr('');
 
-    const { error } = await supabase.auth.signUp({ email, password: pw });
-    if (error) { setErr(error.message); setLoading(false); return; }
-
-    // The handle_new_user trigger creates the profile row (placeholder
-    // name from the email, profile_complete = false). The setup prompt
-    // fills in the real values, so there's nothing to insert here.
-    setLoading(false);
-    onComplete();
+    try {
+      const { error } = await supabase.auth.signUp({ email, password: pw });
+      if (error) { setErr(error.message); setLoading(false); return; }
+      // The handle_new_user trigger creates the profile row (placeholder
+      // name from the email, profile_complete = false). The setup prompt
+      // fills in the real values, so there's nothing to insert here.
+      setLoading(false);
+      onComplete();
+    } catch {
+      setErr('Network error — check your connection and try again.');
+      setLoading(false);
+    }
   };
 
   return (
@@ -222,94 +247,58 @@ function SignupForm({ onComplete }) {
   );
 }
 
-function GroupSetupScreen({ onGroupReady }) {
+function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
   const [mode, setMode] = React.useState(null);
   const [groupName, setGroupName] = React.useState('');
   const [inviteCode, setInviteCode] = React.useState('');
   const [err, setErr] = React.useState('');
   const [loading, setLoading] = React.useState(false);
-  const [created, setCreated] = React.useState(null); // { name, code, fullProfile }
+  const [created, setCreated] = React.useState(null); // { name, code, id }
+  const [spaces, setSpaces] = React.useState([]);      // [{ id, name, is_personal }]
 
-  const assignGroup = async (user, groupId) => {
-    // Read current profile so we have display_name + color for the fallback upsert
-    const { data: current } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
+  // Every space this account already belongs to (shared groups + Personal),
+  // so a returning member can pick which to enter and a new one can jump
+  // straight to Personal.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+      const { data } = await supabase
+        .from('group_members')
+        .select('group_id, groups(id, name, is_personal)')
+        .eq('user_id', user.id);
+      if (cancelled) return;
+      const list = (data || []).map(r => r.groups).filter(Boolean);
+      list.sort((a, b) => (a.is_personal === b.is_personal)
+        ? (a.name || '').localeCompare(b.name || '')
+        : (a.is_personal ? 1 : -1));
+      setSpaces(list);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-    // First try: standard update, asking the server to return the row
-    const { data: updated, error: upErr } = await supabase
-      .from('profiles')
-      .update({ group_id: groupId })
-      .eq('id', user.id)
-      .select();
-
-    if (!upErr && updated && updated.length > 0 && updated[0].group_id === groupId) {
-      return updated[0];
-    }
-
-    // Fallback: upsert with all required fields. The INSERT policy permits
-    // id = auth.uid(), the UPDATE policy permits the same — this combines both.
-    const { data: upserted, error: usErr } = await supabase
-      .from('profiles')
-      .upsert({
-        id: user.id,
-        display_name: current?.display_name || user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
-        color: current?.color || user.user_metadata?.color || 'coral',
-        group_id: groupId,
-      }, { onConflict: 'id' })
-      .select();
-
-    if (usErr) {
-      throw new Error(`Could not save group membership: ${usErr.message}`);
-    }
-    if (!upserted || upserted.length === 0 || upserted[0].group_id !== groupId) {
-      throw new Error('Profile update returned no rows — RLS may be blocking the update.');
-    }
-    return upserted[0];
-  };
+  const enter = (id) => { if (onEnterSpace) onEnterSpace(id); else window.location.reload(); };
 
   const createGroup = async () => {
     if (!groupName.trim()) { setErr('Enter a group name'); return; }
-    setLoading(true);
-    setErr('');
-
+    setLoading(true); setErr('');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not signed in');
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-
-      const { data: group, error: gErr } = await supabase
-        .from('groups').insert({ name: groupName.trim(), invite_code: code }).select().single();
-      if (gErr) throw new Error(gErr.message);
-
-      await assignGroup(user, group.id);
-
-      setCreated({ name: groupName.trim(), code });
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
-    }
+      const { data: group, error } = await supabase.rpc('create_group', { p_name: groupName.trim() });
+      if (error || !group) throw new Error(error?.message || 'Could not create group');
+      setCreated({ name: group.name, code: group.invite_code, id: group.id });
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
   };
 
   const joinGroup = async () => {
     if (!inviteCode.trim()) { setErr('Enter an invite code'); return; }
-    setLoading(true);
-    setErr('');
-
+    setLoading(true); setErr('');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not signed in');
-
-      const { data: group, error: gErr } = await supabase
-        .from('groups').select('id, name, invite_code').eq('invite_code', inviteCode.trim().toUpperCase()).single();
-      if (gErr || !group) throw new Error('Invalid invite code — check with your group admin');
-
-      await assignGroup(user, group.id);
-
-      window.location.reload();
-    } catch (e) {
-      setErr(e.message);
-      setLoading(false);
-    }
+      const { data: group, error } = await supabase.rpc('join_group_by_code', { p_code: inviteCode.trim() });
+      if (error) throw new Error(error.message);
+      if (!group) throw new Error('Invalid invite code — check with your group admin');
+      enter(group.id);
+    } catch (e) { setErr(e.message); setLoading(false); }
   };
 
   if (created) {
@@ -326,7 +315,7 @@ function GroupSetupScreen({ onGroupReady }) {
               </div>
             </div>
             <div className="auth-actions">
-              <button className="fb-btn solid" onClick={() => window.location.reload()}>
+              <button className="fb-btn solid" onClick={() => enter(created.id)}>
                 Continue to app →
               </button>
             </div>
@@ -336,20 +325,37 @@ function GroupSetupScreen({ onGroupReady }) {
     );
   }
 
+  const groups = spaces.filter(s => !s.is_personal);
+  const personal = spaces.find(s => s.is_personal);
+
   return (
     <div className="fb-screen">
       <div className="fb-scroll">
         <div className="auth-wrap" style={{ paddingTop: 50 }}>
           <div className="auth-mark" style={{ marginBottom: 24 }}>
-            <h1>Your <em>group</em></h1>
-            <p>Create a new family group or join one with an invite code</p>
+            <h1>Your <em>spaces</em></h1>
+            <p>Choose where to go — enter a space, join a group, or create one</p>
           </div>
 
           {!mode && (
-            <div className="auth-actions">
-              <button className="fb-btn solid" onClick={() => setMode('create')}>Create a group</button>
-              <button className="fb-btn" onClick={() => setMode('join')}>Join with invite code</button>
-            </div>
+            <>
+              {/* Spaces you already belong to. */}
+              {(groups.length > 0 || personal) && (
+                <div className="auth-actions" style={{ marginBottom: 18 }}>
+                  {groups.map(g => (
+                    <button key={g.id} className="fb-btn" onClick={() => enter(g.id)}>{g.name} →</button>
+                  ))}
+                  {personal && (
+                    <button className="fb-btn" onClick={() => enter(personal.id)}>🔒 Go to Personal →</button>
+                  )}
+                </div>
+              )}
+
+              <div className="auth-actions">
+                <button className="fb-btn solid" onClick={() => setMode('create')}>Create a group</button>
+                <button className="fb-btn" onClick={() => setMode('join')}>Join with invite code</button>
+              </div>
+            </>
           )}
 
           {mode === 'create' && (

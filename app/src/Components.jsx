@@ -129,49 +129,6 @@ export function EmojiInput({ value, onChange, presets = POPULAR_EMOJIS, placehol
   );
 }
 
-export const USERS = {
-  maya: { id: 'maya', name: 'Maya', color: 'var(--u-maya)', initial: 'M', role: 'Mom' },
-  theo: { id: 'theo', name: 'Theo', color: 'var(--u-theo)', initial: 'T', role: 'Dad' },
-  iris: { id: 'iris', name: 'Iris', color: 'var(--u-iris)', initial: 'I', role: 'Kid' },
-  leo:  { id: 'leo',  name: 'Leo',  color: 'var(--u-leo)',  initial: 'L', role: 'Kid' },
-};
-export const USERLIST = ['maya', 'theo', 'iris', 'leo'].map(k => USERS[k]);
-export const ME = 'maya';
-
-export function ColorDot({ user, size = 'md', style }) {
-  const u = typeof user === 'string' ? USERS[user] : user;
-  const cls = 'dot' + (size === 'lg' ? ' lg' : size === 'xl' ? ' xl' : '');
-  return <span className={cls} style={{ ...(u ? { '--c': u.color } : null), ...style }} />;
-}
-
-export function UserBadge({ user, you = false, size = 'md' }) {
-  const u = typeof user === 'string' ? USERS[user] : user;
-  if (!u) return null;
-  return (
-    <span className="userbadge">
-      <ColorDot user={u} size={size} />
-      <span className="nm">{u.name}</span>
-      {you && <span className="you">you</span>}
-    </span>
-  );
-}
-
-export function StickyHeader({ group = 'Park-Family', onMenu, onProfile }) {
-  return (
-    <div className="fb-stickyhead">
-      <div className="fb-stickyhead-row">
-        <div className="fb-wordmark">kinnekt</div>
-        <button className="fb-grp-pill" onClick={onMenu}>
-          <ColorDot user="maya" />
-          <span className="nm">{group}</span>
-          <span className="car">▾</span>
-        </button>
-        <button className="fb-prof" onClick={onProfile} aria-label="Profile">M</button>
-      </div>
-    </div>
-  );
-}
-
 export function AnchorTabs({ active, onChange }) {
   const tabs = [
     { id: 'notes',    label: 'Home' },
@@ -199,69 +156,15 @@ export function AnchorTabs({ active, onChange }) {
   );
 }
 
-export function TaskRow({ task, onToggle }) {
-  const creator = USERS[task.createdBy];
-  const assignee = USERS[task.assignee];
-  const overdue = task.due && task.dueOrder < 0;
-  return (
-    <div
-      className={'taskrow' + (task.done ? ' done' : '')}
-      style={{ '--c': assignee?.color }}
-    >
-      <button
-        type="button"
-        className={'check' + (task.done ? ' on' : '')}
-        onClick={onToggle}
-        aria-label={task.done ? 'Mark incomplete' : 'Mark complete'}
-      />
-      <div className="body">
-        <div className="title">{task.title}</div>
-        <div className="meta">
-          {task.due && (
-            <span className={'due' + (overdue ? ' overdue' : '')}>{task.due}</span>
-          )}
-          {task.due && <span className="sep">·</span>}
-          <span>by {creator?.name}</span>
-          {task.tag && <><span className="sep">·</span><span>{task.tag}</span></>}
-        </div>
-      </div>
-      {task.priority === 'high' && <span className="badge">!</span>}
-    </div>
-  );
-}
-
-export function EventChip({ event, style }) {
-  const u = USERS[event.assignee];
-  return (
-    <div className="evt" style={{ '--c': u?.color, ...style }} title={event.title}>
-      {event.title}
-    </div>
-  );
-}
-
-export function NoteCard({ note, tall = false }) {
-  const u = USERS[note.author];
-  return (
-    <div
-      className={'note' + (tall ? ' tall' : '')}
-      style={{ '--c': u?.color }}
-    >
-      {note.pinned && <span className="pin" />}
-      <div className="note-hd">
-        <ColorDot user={u} />
-        <span className="nm">{u?.name}</span>
-        <span className="when">{note.when}</span>
-      </div>
-      <div className="body">{note.body}</div>
-      {note.tag && <span className="tag">#{note.tag}</span>}
-    </div>
-  );
-}
-
 // `compact` switches the sheet from the default 75%-min bottom drawer
 // to a content-sized sheet that bottom-aligns. Used by date/time
 // pickers so the wheels land near the trigger button instead of
 // drifting toward the upper half of the screen.
+// Stack of currently-open modals so only the TOPMOST handles Escape. Without
+// this, a date/time picker opened inside an add sheet closes BOTH on one Esc,
+// discarding the whole in-progress form.
+const __modalStack = [];
+
 export function Modal({ open, title, onClose, children, footer, compact }) {
   const sheetRef = React.useRef(null);
   const dragRef = React.useRef({ startY: 0, dragging: false, offset: 0 });
@@ -275,6 +178,24 @@ export function Modal({ open, title, onClose, children, footer, compact }) {
       sheetRef.current.scrollTop = 0;
     }
   }, [open]);
+
+  // Escape closes the sheet (keyboard / accessibility). No autoFocus — inputs
+  // wait for a user tap so the iOS keyboard doesn't pop the sheet mid-form.
+  React.useEffect(() => {
+    if (!open) return;
+    const token = {};
+    __modalStack.push(token);
+    const onKey = (e) => {
+      // Only the topmost open modal reacts to Escape.
+      if (e.key === 'Escape' && __modalStack[__modalStack.length - 1] === token) onClose?.();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      const i = __modalStack.indexOf(token);
+      if (i !== -1) __modalStack.splice(i, 1);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -321,6 +242,9 @@ export function Modal({ open, title, onClose, children, footer, compact }) {
         className={'sheet' + (compact ? ' sheet-compact' : '')}
         ref={sheetRef}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === 'string' ? title : undefined}
       >
         <div
           className="sheet-grab"
@@ -343,15 +267,3 @@ export function Modal({ open, title, onClose, children, footer, compact }) {
   );
 }
 
-export function buildMay2026() {
-  const FIRST_DOW = 5;
-  const DAYS = 31;
-  const cells = [];
-  for (let i = 0; i < FIRST_DOW; i++) {
-    cells.push({ d: 26 + i, m: 'prev', dim: true });
-  }
-  for (let i = 1; i <= DAYS; i++) cells.push({ d: i, m: 'curr' });
-  let nx = 1;
-  while (cells.length < 42) { cells.push({ d: nx++, m: 'next', dim: true }); }
-  return cells;
-}

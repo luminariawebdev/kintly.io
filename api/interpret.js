@@ -19,6 +19,27 @@ async function readJson(req) {
   try { return JSON.parse(raw); } catch { return {}; }
 }
 
+// Verify the caller is a signed-in Supabase user before we spend API budget.
+// Without this, anyone who finds the URL could loop the endpoint and run up the
+// owner's Anthropic bill. SUPABASE_URL/ANON are public (the anon key already
+// ships in the browser bundle).
+const SUPABASE_URL = 'https://bqdkizavhlpswjtgxdjw.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxZGtpemF2aGxwc3dqdGd4ZGp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3ODQzMDYsImV4cCI6MjA5NDM2MDMwNn0.Oedpsru9CCbKihZ-azAu4Uj2MNOF2HGNRFGFM2f86Fg';
+async function getUser(req) {
+  const h = req.headers['authorization'] || req.headers['Authorization'] || '';
+  const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
+  if (!token) return null;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) return null;
+    const u = await r.json().catch(() => null);
+    return u && u.id ? u : null;
+  } catch { return null; }
+}
+
 function buildSystem(ctx) {
   const members = (ctx.members || []).join(', ') || '(none listed)';
   const spaces = (ctx.spaces || []).join(', ') || '(none listed)';
@@ -160,6 +181,113 @@ const stageTool = {
   },
 };
 
+// ── Validate the model's tool output before handing it to the client ─────────
+// The model is forced to call stage_items, but its arguments are untrusted: a
+// prompt-injected transcript could emit a destructive `action` against an
+// arbitrary task_id, or malformed dates/enums. We coerce every field to a known
+// shape, drop unknown keys, cap array sizes, and — critically — reject any
+// action whose task_id/item_id isn't in the caller's own context.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MAX_ITEMS = 25;
+const normDate = (v) => {
+  if (typeof v !== 'string') return null;
+  const m = v.trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  // Reject calendar rollover (e.g. Feb 30 → Mar 2) deterministically via a
+  // UTC round-trip instead of relying on host Date.parse strictness.
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return `${m[1]}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+};
+const normTime = (v) => {
+  if (typeof v !== 'string') return null;
+  const m = v.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const s = `${m[1].padStart(2, '0')}:${m[2]}`;
+  return TIME_RE.test(s) ? s : null;
+};
+const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+const optStr = (v, max) => (v == null ? null : str(v, max));
+const oneOf = (v, allowed) => (allowed.includes(v) ? v : null);
+const arr = (v) => (Array.isArray(v) ? v.slice(0, MAX_ITEMS) : []);
+
+function sanitizeStaged(input, ctx) {
+  const obj = input && typeof input === 'object' ? input : {};
+  const taskIds = new Set((ctx.open_tasks || []).map((t) => t && t.id != null ? String(t.id) : '').filter(Boolean));
+  const itemIds = new Set((ctx.list_items || []).map((i) => i && i.id != null ? String(i.id) : '').filter(Boolean));
+
+  const tasks = arr(obj.tasks).map((t) => (t && typeof t === 'object') ? {
+    title: str(t.title, 200),
+    assignee: typeof t.assignee === 'string' ? t.assignee.slice(0, 80) : 'me',
+    due_date: normDate(t.due_date),
+    due_time: normTime(t.due_time),
+    repeats: oneOf(t.repeats, ['none', 'daily', 'weekly', 'monthly']),
+    details: optStr(t.details, 1000),
+    private: t.private === true,
+    link_to_event: optStr(t.link_to_event, 200),
+  } : null).filter((t) => t && t.title.trim());
+
+  const rawEvents = arr(obj.events).map((e) => (e && typeof e === 'object') ? {
+    title: str(e.title, 200),
+    date: normDate(e.date),
+    start_time: normTime(e.start_time),
+    attendees: Array.isArray(e.attendees) ? e.attendees.filter((a) => typeof a === 'string').slice(0, 50).map((a) => a.slice(0, 80)) : [],
+    location: optStr(e.location, 200),
+  } : null).filter((e) => e && e.title.trim());
+  const events = rawEvents.filter((e) => e.date);
+  // Events with a real title but an unparseable date: don't silently drop them
+  // — surface them in the note so the user knows to restate the date.
+  const droppedEvents = rawEvents.filter((e) => !e.date);
+
+  const space_items = arr(obj.space_items).map((s) => (s && typeof s === 'object') ? {
+    space: str(s.space, 120),
+    item: str(s.item, 200),
+  } : null).filter((s) => s && s.space.trim() && s.item.trim());
+
+  const posts = arr(obj.posts).map((p) => (p && typeof p === 'object') ? {
+    kind: oneOf(p.kind, ['message', 'urgent', 'reminder', 'poll']) || 'message',
+    text: optStr(p.text, 2000),
+    poll_options: Array.isArray(p.poll_options) ? p.poll_options.filter((o) => typeof o === 'string' && o.trim()).slice(0, 12).map((o) => o.slice(0, 120)) : [],
+  } : null).filter(Boolean);
+
+  const actions = arr(obj.actions).map((a) => {
+    if (!a || typeof a !== 'object') return null;
+    const op = oneOf(a.op, ['complete', 'delete', 'postpone', 'handoff', 'edit', 'check_off_item']);
+    if (!op) return null;
+    if (op === 'check_off_item') {
+      const item_id = a.item_id != null ? String(a.item_id) : '';
+      if (!itemIds.has(item_id)) return null; // must reference a real list item the user can see
+      return { op, item_id, target_label: str(a.target_label, 200) };
+    }
+    const task_id = a.task_id != null ? String(a.task_id) : '';
+    if (!taskIds.has(task_id)) return null; // must reference a task in the caller's own open list
+    return {
+      op,
+      task_id,
+      target_label: str(a.target_label, 200),
+      new_date: normDate(a.new_date),
+      new_time: normTime(a.new_time),
+      handoff_to: optStr(a.handoff_to, 80),
+      new_title: optStr(a.new_title, 200),
+      new_assignee: optStr(a.new_assignee, 80),
+      new_due_date: normDate(a.new_due_date),
+      new_due_time: normTime(a.new_due_time),
+      new_repeats: oneOf(a.new_repeats, ['none', 'daily', 'weekly', 'monthly']),
+      new_details: optStr(a.new_details, 1000),
+    };
+  }).filter(Boolean);
+
+  let note = optStr(obj.note, 1000) || '';
+  if (droppedEvents.length) {
+    const names = droppedEvents.map((e) => `"${e.title.trim()}"`).join(', ');
+    note = (note ? note + ' ' : '') + `I couldn't work out a date for ${names}, so ${droppedEvents.length > 1 ? 'they were' : 'it was'} left out — try again with the date.`;
+  }
+  return { tasks, events, space_items, posts, actions, note };
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'POST only' });
@@ -171,12 +299,22 @@ module.exports = async (req, res) => {
     return;
   }
 
+  const user = await getUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Please sign in to use the voice assistant.' });
+    return;
+  }
+
   try {
     const body = await readJson(req);
     const text = body && body.text;
     const ctx = (body && body.context) || {};
     if (!text || !String(text).trim()) {
       res.status(400).json({ error: 'No text to interpret.' });
+      return;
+    }
+    if (String(text).length > 4000) {
+      res.status(413).json({ error: 'That request was too long — try saying a bit less at once.' });
       return;
     }
 
@@ -199,6 +337,7 @@ module.exports = async (req, res) => {
         tool_choice: { type: 'tool', name: 'stage_items' },
         messages: [{ role: 'user', content: String(text) }],
       }),
+      signal: AbortSignal.timeout(30000),
     });
     const data = await r.json().catch(() => null);
     if (!r.ok) {
@@ -206,17 +345,18 @@ module.exports = async (req, res) => {
       res.status(502).json({ error: msg });
       return;
     }
-    const block = (data.content || []).find((b) => b.type === 'tool_use' && b.name === 'stage_items');
+    const block = ((data && data.content) || []).find((b) => b.type === 'tool_use' && b.name === 'stage_items');
     const input = (block && block.input) || {};
-    res.status(200).json({
-      tasks: Array.isArray(input.tasks) ? input.tasks : [],
-      events: Array.isArray(input.events) ? input.events : [],
-      space_items: Array.isArray(input.space_items) ? input.space_items : [],
-      posts: Array.isArray(input.posts) ? input.posts : [],
-      actions: Array.isArray(input.actions) ? input.actions : [],
-      note: typeof input.note === 'string' ? input.note : '',
-    });
+    // Validate/clamp the model output against the caller's own context before
+    // the client acts on it (drops actions that reference unknown ids, etc).
+    res.status(200).json(sanitizeStaged(input, ctx));
   } catch (e) {
-    res.status(500).json({ error: String((e && e.message) || e) });
+    // Don't leak internal error strings (hostnames, stack details) to the client.
+    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      res.status(504).json({ error: 'The assistant took too long — please try again.' });
+      return;
+    }
+    console.error('interpret error:', e);
+    res.status(500).json({ error: 'Something went wrong interpreting that.' });
   }
 };

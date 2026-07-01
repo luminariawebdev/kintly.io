@@ -313,7 +313,7 @@ function SwipeToDelete({ children, onDelete, disabled, label = 'Delete' }) {
   );
 }
 
-function Dot({ profile, size = '', style }) {
+const Dot = React.memo(function Dot({ profile, size = '', style }) {
   const avatar = profile?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
   const color = getColor(profile?.color);
@@ -351,7 +351,7 @@ function Dot({ profile, size = '', style }) {
       style={{ '--c': color, background: color, ...style }}
     />
   );
-}
+});
 
 /**
  * Renders a person's name as a third-person byline (e.g. next to the
@@ -367,7 +367,7 @@ function Dot({ profile, size = '', style }) {
  * caller passes an author-color override (which already equals
  * `--me-color` in that branch — this just makes the intent explicit).
  */
-function MemberName({ profile, isMe, style, className }) {
+const MemberName = React.memo(function MemberName({ profile, isMe, style, className }) {
   const ctxMyId = React.useContext(MyIdContext);
   if (!profile) return null;
   // Caller can force the decision with `isMe`, but in most spots we
@@ -383,7 +383,7 @@ function MemberName({ profile, isMe, style, className }) {
   // override still applies for the logged-in user.
   const cls = ['member-name', me ? 'me-name' : '', className].filter(Boolean).join(' ');
   return <span className={cls} style={{ '--member-c': color, '--me-color': color, ...style }}>{text}</span>;
-}
+});
 
 // Live date + time banner shown above the home feed. Uses the device's
 // own local timezone (no forced zone), so it follows the user wherever
@@ -431,6 +431,42 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     setPlan((p) => (p ? { ...p, [listKey]: p[listKey].map((it, i) => (i === index ? { ...it, ...patch } : it)) } : p));
   const recRef = React.useRef(null);
   const chunksRef = React.useRef([]);
+  const streamRef = React.useRef(null);  // getUserMedia stream — MediaRecorder.stream is undefined on iOS Safari
+  const abortRef = React.useRef(null);   // aborts the in-flight transcribe/interpret fetches
+  const deadRef = React.useRef(false);   // set on unmount so late async work bails
+  const phaseRef = React.useRef(phase);
+  React.useEffect(() => { phaseRef.current = phase; }, [phase]);
+
+  const stopStream = () => {
+    try { streamRef.current?.getTracks?.().forEach((t) => t.stop()); } catch { /* noop */ }
+    streamRef.current = null;
+  };
+
+  // Tear down on unmount. Stop the mic via the STREAM ref (recRef.current.stream
+  // is undefined on iOS Safari, so the old teardown never actually stopped it),
+  // detach onstop so it can't re-enter process() after unmount, and abort any
+  // in-flight request so we don't spend API budget on an abandoned recording.
+  React.useEffect(() => () => {
+    deadRef.current = true;
+    if (recRef.current) { try { recRef.current.onstop = null; recRef.current.stop(); } catch { /* noop */ } }
+    try { abortRef.current?.abort(); } catch { /* noop */ }
+    stopStream();
+  }, []);
+
+  // Watchdog: if we're stuck in 'working' past the real server budget
+  // (transcribe ~35s + interpret ~35s), ABORT the fetches and recover to error.
+  // Aborting makes process()'s catch bail cleanly so a late response can't
+  // slam a phantom review sheet open after the user has given up.
+  React.useEffect(() => {
+    if (phase !== 'working') return;
+    const t = setTimeout(() => {
+      try { abortRef.current?.abort(); } catch { /* noop */ }
+      stopStream();
+      setError('That took too long — please try again.');
+      setPhase('error');
+    }, 75000);
+    return () => clearTimeout(t);
+  }, [phase]);
 
   const norm = (s) => (s || '').trim().toLowerCase();
   const resolveMember = (name) => {
@@ -506,6 +542,7 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
   };
 
   const start = async () => {
+    if (phase !== 'idle' && phase !== 'error') return; // ignore rapid re-taps mid-flow
     setError('');
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('Voice input is not supported on this browser.');
@@ -514,11 +551,13 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       const rec = new MediaRecorder(stream);
       chunksRef.current = [];
       rec.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
       rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
+        stopStream();
+        if (deadRef.current) return; // unmounted mid-record — don't kick off the pipeline
         const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' });
         process(blob);
       };
@@ -542,10 +581,25 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     try {
       if (!blob || !blob.size) { setError("I didn't catch any audio. Try again."); setPhase('error'); return; }
       const audio = await blobToBase64(blob);
+      // The /api endpoints now require a signed-in user (so they can't be
+      // called anonymously to burn the API keys). Send the session token.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setError('Your session expired — reload the app and try again.');
+        setPhase('error');
+        return;
+      }
+      const authHeaders = {
+        'content-type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      };
+      const controller = new AbortController();
+      abortRef.current = controller;
       const tr = await fetch('/api/transcribe', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({ audio, mime: blob.type || 'audio/webm' }),
+        signal: controller.signal,
       });
       const trData = await tr.json().catch(() => ({}));
       if (!tr.ok) throw new Error(trData.error || 'Could not transcribe the audio.');
@@ -555,8 +609,9 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
 
       const ir = await fetch('/api/interpret', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({ text, context: buildContext() }),
+        signal: controller.signal,
       });
       const irData = await ir.json().catch(() => ({}));
       if (!ir.ok) throw new Error(irData.error || 'Could not understand that.');
@@ -569,13 +624,15 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
         return !!t && !/^<?\s*(unknown|untitled|none|n\/?a|tbd|\?+)\s*>?$/i.test(t);
       };
       const plannedTasks = (irData.tasks || []).filter((t) => isRealTitle(t.title)).map((t) => {
-        const isPrivate = !!t.private;
+        // Phase 3: no in-group private items. Voice always creates GROUP tasks
+        // in the active space; personal todos live in the separate Personal
+        // space (switch to it to add there).
+        const isPrivate = false;
         // Default assignee = the logged-in user. Only "unassigned" (or a named
-        // person) overrides it. Private tasks are always the speaker's own.
+        // person) overrides it.
         const said = (t.assignee || '').trim();
         let assigneeId;
-        if (isPrivate) assigneeId = profile?.id || null;
-        else if (!said) assigneeId = profile?.id || null;
+        if (!said) assigneeId = profile?.id || null;
         else assigneeId = resolveMember(said); // "unassigned" → null, name → member
         return {
           title: t.title.trim(),
@@ -641,9 +698,13 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
         setPhase('error');
         return;
       }
+      // Bail if the watchdog aborted or we were unmounted/superseded while
+      // awaiting — otherwise a late response would pop a phantom review sheet.
+      if (deadRef.current || phaseRef.current !== 'working') return;
       setPlan({ tasks: plannedTasks, events, items, posts, actions, note: irData.note || '' });
       setPhase('review');
     } catch (e) {
+      if (deadRef.current || (e && e.name === 'AbortError')) return; // watchdog/unmount already handled it
       setError((e && e.message) || 'Something went wrong.');
       setPhase('error');
     }
@@ -838,7 +899,6 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
                           <option value="weekly">Weekly</option>
                           <option value="monthly">Monthly</option>
                         </select>
-                        <label className="va-edit-check"><input type="checkbox" checked={t.is_private} onChange={(e) => updateItem('tasks', i, { is_private: e.target.checked })} /> Personal</label>
                       </div>
                       <button type="button" className="va-edit-done" onClick={() => setEditing(null)}>Done</button>
                     </div>
@@ -848,7 +908,6 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
                       {memberName(t.assigneeId) || 'Unassigned'}
                       {t.due_date ? ` · ${fmtDate(t.due_date)}${t.due_time ? ` ${fmtTime(t.due_time)}` : ''}` : ''}
                       {t.repeats ? ` · repeats ${t.repeats}` : ''}
-                      {t.is_private ? ' · personal' : ''}
                     </div>
                     {t.linkEventRaw && <div className="va-item-sub">🔗 linked to “{t.linkEventRaw}”</div>}
                     {t.details && <div className="va-item-sub">{t.details}</div>}
@@ -1015,7 +1074,10 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
   const within24hBack = (iso) => !!iso && new Date(iso).getTime() >= back;
 
   // A task is overdue if it's open and its due moment is already past.
-  const isOverdue = (t) => t.due_time
+  // Only trust due_time when it's a real HH:MM — a malformed value would make
+  // `new Date()` return NaN and silently drop the task from the overdue bucket.
+  const validTime = (s) => typeof s === 'string' && /^\d{2}:\d{2}$/.test(s);
+  const isOverdue = (t) => validTime(t.due_time)
     ? new Date(`${t.due_date}T${t.due_time}`).getTime() < now
     : t.due_date < todayIso;
 
@@ -1040,7 +1102,7 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
       if (!e.date || e.date < todayIso || e.date > tomorrowIso) return false;
       // Today's timed events only if they haven't already started; all-day
       // today and anything tomorrow are included.
-      if (e.date === todayIso && e.start_time) {
+      if (e.date === todayIso && validTime(e.start_time)) {
         return new Date(`${e.date}T${e.start_time}`).getTime() >= now;
       }
       return true;
@@ -1293,40 +1355,74 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
   const startMs = windowStart.getTime();
   const endMs   = windowEnd.getTime();
   const toIso = toLocalISO;
-  for (const e of rawEvents) {
-    // Multi-day event: expand the single row into one entry per day.
-    if (e.end_date && e.end_date > e.date) {
-      const [sy, sm, sd] = e.date.split('-').map(Number);
-      const [ey, em, ed] = e.end_date.split('-').map(Number);
-      const spanStart = new Date(Math.max(startMs, new Date(sy, sm - 1, sd).getTime()));
-      const spanEnd   = new Date(Math.min(endMs,   new Date(ey, em - 1, ed).getTime()));
-      let cur = new Date(spanStart); cur.setHours(0,0,0,0);
-      while (cur.getTime() <= spanEnd.getTime()) {
-        out.push({ ...e, date: toIso(cur), _isMultiDay: true });
+  const DAY = 86400000;
+  // Emit one occurrence of `e` whose first day is `firstDay` (a local-midnight
+  // Date). Single-day → one entry; multi-day (spanDays>1) → one entry per day
+  // across the span, each clipped to the window and tagged with THIS
+  // occurrence's own span bounds. `markers` adds recurrence tags when relevant.
+  const emitOccurrence = (e, firstDay, spanDays, markers) => {
+    if (spanDays > 1) {
+      const occStartIso = toIso(firstDay);
+      // Calendar-day arithmetic, NOT ms addition: on a DST fall-back day (25h)
+      // `firstDay.getTime() + 24h` lands at 11pm the same day, which duplicated
+      // a day and dropped the last one for any span crossing early November.
+      const occEnd = new Date(firstDay); occEnd.setDate(occEnd.getDate() + (spanDays - 1));
+      const occEndIso = toIso(occEnd);
+      const occEndMs = occEnd.getTime();
+      let cur = new Date(firstDay); cur.setHours(0, 0, 0, 0);
+      while (cur.getTime() <= occEndMs) {
+        const ms = cur.getTime();
+        if (ms >= startMs && ms <= endMs) {
+          out.push({ ...e, date: toIso(cur), end_date: null, _spanStart: occStartIso, _spanEnd: occEndIso, _isMultiDay: true, ...markers });
+        }
         cur.setDate(cur.getDate() + 1);
       }
+    } else {
+      out.push({ ...e, date: toIso(firstDay), ...markers });
+    }
+  };
+
+  for (const e of rawEvents) {
+    const r = e.recurrence;
+    const hasRecur = !!(r && r.freq && r.freq !== 'none');
+    const isMultiDay = !!(e.end_date && e.end_date > e.date);
+
+    // Span length (inclusive days) of a multi-day event; 1 otherwise.
+    // For a RECURRING event we force spanDays=1: recurrence takes precedence, so
+    // each occurrence renders on its start day only. Otherwise a daily-recurring
+    // multi-day event would emit overlapping spans and show N copies per day.
+    let spanDays = 1;
+    if (isMultiDay && !hasRecur) {
+      const [sy, sm, sd] = e.date.split('-').map(Number);
+      const [ey, em, ed] = e.end_date.split('-').map(Number);
+      spanDays = Math.round((new Date(ey, em - 1, ed).getTime() - new Date(sy, sm - 1, sd).getTime()) / DAY) + 1;
+    }
+
+    // Non-recurring: a plain single-day event passes through 1:1 (even outside
+    // the window, as before); a multi-day one fans out across its span.
+    if (!hasRecur) {
+      if (!isMultiDay) { out.push(e); continue; }
+      const [sy, sm, sd] = e.date.split('-').map(Number);
+      emitOccurrence(e, new Date(sy, sm - 1, sd), spanDays, {});
       continue;
     }
 
-    const r = e.recurrence;
-    if (!r || !r.freq || r.freq === 'none') {
-      out.push(e);
-      continue;
-    }
-    // Anchor: the original event date is the FIRST occurrence. Don't
-    // emit any instance before it (a weekly-Wednesday event starting
-    // on the 14th shouldn't show on the previous Wednesday).
+    // Recurring (possibly ALSO multi-day — previously this case was dropped).
+    // The original date is the FIRST occurrence; don't emit before it.
     const [ay, am, ad] = (e.date || '').split('-').map(Number);
     if (!ay) { out.push(e); continue; }
     const anchor = new Date(ay, am - 1, ad);
     const anchorMs = anchor.getTime();
-    const scanStart = new Date(Math.max(startMs, anchorMs));
+    // Start a span-length early so a multi-day occurrence that STARTS just
+    // before the window but reaches into it still shows its visible days.
+    const scanStart = new Date(Math.max(startMs - (spanDays - 1) * DAY, anchorMs));
     scanStart.setHours(0, 0, 0, 0);
+    const occMarkers = (d) => ({ _occDate: toIso(d), _isRecurrence: true });
 
     if (r.freq === 'daily') {
       let cur = new Date(scanStart);
       while (cur.getTime() <= endMs) {
-        out.push({ ...e, date: toIso(cur), _occDate: toIso(cur), _isRecurrence: true });
+        emitOccurrence(e, new Date(cur), spanDays, occMarkers(cur));
         cur.setDate(cur.getDate() + 1);
       }
       continue;
@@ -1337,9 +1433,7 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
         : [anchor.getDay()]; // fall back to original weekday if no days set
       let cur = new Date(scanStart);
       while (cur.getTime() <= endMs) {
-        if (days.includes(cur.getDay())) {
-          out.push({ ...e, date: toIso(cur), _occDate: toIso(cur), _isRecurrence: true });
-        }
+        if (days.includes(cur.getDay())) emitOccurrence(e, new Date(cur), spanDays, occMarkers(cur));
         cur.setDate(cur.getDate() + 1);
       }
       continue;
@@ -1351,9 +1445,7 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
       if (cur.getTime() < scanStart.getTime()) cur.setMonth(cur.getMonth() + 1);
       while (cur.getTime() <= endMs) {
         // Guard for months without the anchor day (e.g. Feb 30 → skip)
-        if (cur.getDate() === anchor.getDate()) {
-          out.push({ ...e, date: toIso(cur), _occDate: toIso(cur), _isRecurrence: true });
-        }
+        if (cur.getDate() === anchor.getDate()) emitOccurrence(e, new Date(cur), spanDays, occMarkers(cur));
         cur.setMonth(cur.getMonth() + 1);
         cur.setDate(anchor.getDate());
       }
@@ -1433,7 +1525,11 @@ function useRerenderEvery(ms) {
 }
 
 // ─── Task Row ────────────────────────────────────────────────────────────────
-function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo }) {
+function TaskRowBase({ task, assignee, myId, onToggle, onDelete, onShowTask, ttl, members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo }) {
+  // Stable props in, handlers bound to this task internally — lets React.memo
+  // (applied below) skip re-rendering rows whose task object didn't change, so
+  // toggling one task no longer re-renders the whole list.
+  const onClick = onShowTask ? () => onShowTask(task) : undefined;
   const color = getColor(assignee?.color);
   const isCancelled = !!task.cancelled_at;
   const overdue = !task.completed && !isCancelled && dueDateOverdue(task.due_date);
@@ -1476,7 +1572,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
   // than the secondary chips (padding) with ~15% bigger text (11 → 12.7px).
   const chipLg = (bg, fg) => ({ ...chip(bg, fg), fontSize: 12.7, padding: '5px 12px' });
   return (
-    <SwipeToDelete onDelete={onDelete} disabled={!canActOnTask}>
+    <SwipeToDelete onDelete={() => onDelete(task.id)} disabled={!canActOnTask}>
     <div
       className={'trow' + (task.completed ? ' done' : '') + (isCancelled ? ' cancelled' : '')}
       style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px', background: 'var(--surface-glass-strong)', cursor: onClick ? 'pointer' : 'default' }}
@@ -1493,7 +1589,7 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
           flexShrink: 0, marginTop: 1,
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
         }}
-        onClick={(e) => { e.stopPropagation(); if (canActOnTask) onToggle(); }}
+        onClick={(e) => { e.stopPropagation(); if (canActOnTask) onToggle(task.id, task.completed); }}
         title={isCancelled ? 'This task was cancelled' : (canActOnTask ? '' : 'Only the assignee can complete this task')}
       >
         {task.completed && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
@@ -1673,6 +1769,10 @@ function TaskRow({ task, assignee, myId, onToggle, onDelete, onClick, ttl, membe
     </SwipeToDelete>
   );
 }
+// Memoized: with stable per-row props (the task object keeps its reference when
+// unchanged, and handlers are bound to the task internally), only the row whose
+// task actually changed re-renders — not the entire list on every toggle.
+const TaskRow = React.memo(TaskRowBase);
 
 // ─── Tasks Section ────────────────────────────────────────────────────────────
 // The four big sections are memoized so MainApp-level state churn that
@@ -1694,14 +1794,13 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
     return m;
   }, [suggestions]);
   // Claim / release / baton handlers + roster, spread onto every TaskRow.
-  const rowExtra = { members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo };
+  // Memoized so the spread onto each (now memoized) TaskRow is referentially
+  // stable — otherwise a fresh object every render would defeat TaskRow's memo.
+  const rowExtra = React.useMemo(
+    () => ({ members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo }),
+    [members, getProfile, onClaim, onGrab, onRelease, onPass, onRespond, onPostpone, suggestInfo]
+  );
   const [showDone, setShowDone] = React.useState(false);
-  // Personal view gets its own completed-toggle so expanding "Completed"
-  // in one view doesn't silently expand it in the other.
-  const [showDonePersonal, setShowDonePersonal] = React.useState(false);
-  // Two-view toggle: 'group' shows the shared tasks grouped by
-  // assignee, 'personal' shows only this user's private todos.
-  const [view, setView] = React.useState('group');
 
   // Re-render every 6h so the completed-task "disappears in …" countdown
   // ticks down and rows past the cutoff drop out, even with the app
@@ -1754,11 +1853,9 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   // Personal todos are flagged is_private and only ever surfaced to
   // the creator (RLS enforces this server-side too). Everything else
   // is "shared" — grouped by assignee like before.
-  const sharedTasks   = tasks.filter(t => !t.is_private);
-  const personalTasks = tasks.filter(t => t.is_private && t.created_by === myId);
+  const sharedTasks = tasks.filter(t => !t.is_private);
 
   const filtered = applyFilter(sharedTasks);
-  const filteredPersonal = applyFilter(personalTasks);
 
   // Soonest-due first (overdue → today → tomorrow → … → no date last), so
   // the list reads top-to-bottom in the order things actually come due.
@@ -1772,8 +1869,6 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   };
   const openItems = filtered.filter(t => !t.completed).sort(byDueAsc);
   const doneItems = filtered.filter(t => t.completed && isFresh(t));
-  const openPersonal = filteredPersonal.filter(t => !t.completed).sort(byDueAsc);
-  const donePersonal = filteredPersonal.filter(t => t.completed && isFresh(t));
 
   // A task mid-hand-off is "in transit" to the person it was offered to, so
   // it surfaces in THEIR list (with an Accept/Decline) rather than the
@@ -1789,7 +1884,6 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
 
   const unassigned = openItems.filter(t => !pendingOwner(t));
   const openCount = sharedTasks.filter(t => !t.completed).length;
-  const personalCount = personalTasks.filter(t => !t.completed).length;
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-tasks">
@@ -1799,34 +1893,17 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
           <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
         <div className="fb-sec-hd-right">
-          <div className="fb-sec-meta">{view === 'group' ? `${openCount} open` : `${personalCount} open`}</div>
+          <div className="fb-sec-meta">{openCount} open</div>
         </div>
       </div>
 
       {!collapsed && (<>
-      {/* View toggle: shared group tasks vs the current user's
-          private todos. Counts shown so the inactive tab still
-          surfaces unread/pending work. */}
-      <div className="task-view-toggle">
-        <button
-          type="button"
-          className={'task-view-tab' + (view === 'group' ? ' on' : '')}
-          onClick={() => setView('group')}
-        >
-          Group
-          <span className="task-view-count">{openCount}</span>
-        </button>
-        <button
-          type="button"
-          className={'task-view-tab' + (view === 'personal' ? ' on' : '')}
-          onClick={() => setView('personal')}
-        >
-          🔒 Personal
-          <span className="task-view-count">{personalCount}</span>
-        </button>
-      </div>
-
-      {view === 'group' && (<>
+      {/* Phase 3: the in-group Group/Personal toggle is gone — a regular group
+          shows only group content, and a member's private items live in their
+          separate Personal space (its own group). This single list is the old
+          "group" view; in the Personal space it simply shows that space's
+          (solo) items. */}
+      {(<>
       {(() => {
         // "Right now" — tasks mid-hand-off (offered, awaiting a yes): who's
         // passing to whom, tap to open. Hidden when there are none.
@@ -1874,7 +1951,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               </div>
               <div className="tasklist">
                 {g.items.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={g.member} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} {...rowExtra} />
+                  <TaskRow key={t.id} task={t} assignee={g.member} myId={myId} onToggle={onToggle} onDelete={onDelete} onShowTask={onShowTask} {...rowExtra} />
                 ))}
               </div>
             </div>
@@ -1887,7 +1964,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               </div>
               <div className="tasklist">
                 {unassigned.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={null} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} {...rowExtra} />
+                  <TaskRow key={t.id} task={t} assignee={null} myId={myId} onToggle={onToggle} onDelete={onDelete} onShowTask={onShowTask} {...rowExtra} />
                 ))}
               </div>
             </div>
@@ -1907,7 +1984,7 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
               {showDone && (
                 <div className="tasklist">
                   {doneItems.map(t => (
-                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} {...rowExtra} />
+                    <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={onToggle} onDelete={onDelete} onShowTask={onShowTask} ttl={completedTtlLabel(t.completed_at, now)} {...rowExtra} />
                   ))}
                 </div>
               )}
@@ -1923,56 +2000,6 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
       <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
         <span className="plus">+</span> Add task
       </button>
-      </>)}
-
-      {/* ── Personal todos view ────────────────────────────────────
-          Private to the current user — RLS hides these rows from
-          every other group member. Same layout as a flat tasklist
-          since assignee is always "me". */}
-      {view === 'personal' && (<>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>🔒 Only you can see these.</div>
-        {openPersonal.length === 0 && donePersonal.length === 0 ? (
-          <div className="kbd-hint" style={{ padding: '20px 0' }}>NO PERSONAL TODOS — ADD ONE BELOW</div>
-        ) : (
-          <div className="fb-listbox">
-            <div className="fb-listbox-legend">Your private list</div>
-            {openPersonal.length > 0 && (
-              <div className="tasklist">
-                {openPersonal.map(t => (
-                  <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} {...rowExtra} />
-                ))}
-              </div>
-            )}
-            {donePersonal.length > 0 && (
-              <div style={{ marginTop: 18 }}>
-                <button
-                  onClick={() => setShowDonePersonal(s => !s)}
-                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 0, borderTop: '1px solid var(--rule)', cursor: 'pointer', font: 'inherit' }}
-                >
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.55 }}>
-                    Completed · {donePersonal.length}
-                  </span>
-                  <span style={{ opacity: 0.5, fontSize: 12 }}>{showDonePersonal ? '▴ hide' : '▾ show'}</span>
-                </button>
-                {showDonePersonal && (
-                  <div className="tasklist">
-                    {donePersonal.map(t => (
-                      <TaskRow key={t.id} task={t} assignee={getProfile(t.assigned_to)} myId={myId} onToggle={() => onToggle(t.id, t.completed)} onDelete={() => onDelete(t.id)} onClick={onShowTask ? () => onShowTask(t) : undefined} ttl={completedTtlLabel(t.completed_at, now)} {...rowExtra} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        <div className="fb-chips" style={{ marginTop: 14 }}>
-          {[['week', 'This week'], ['all', 'All']].map(([k, label]) => (
-            <button key={k} className={'fb-chip' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{label}</button>
-          ))}
-        </div>
-        <button className="fb-btn" onClick={onAddPersonal || onAdd} style={{ marginTop: 14 }}>
-          <span className="plus">+</span> Add personal task
-        </button>
       </>)}
 
       {/* Load — who's carried the household this week. Shared stat, shown
@@ -2205,28 +2232,9 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
         </div>
       </div>
 
-      {/* View toggle: shared group events vs the current user's private
-          events. Counts shown so the inactive tab still surfaces what's
-          queued. Sits between the calendar and the Upcoming list. */}
-      <div className="task-view-toggle" style={{ marginTop: 14 }}>
-        <button
-          type="button"
-          className={'task-view-tab' + (view === 'group' ? ' on' : '')}
-          onClick={() => setView('group')}
-        >
-          Group
-          <span className="task-view-count">{groupOpenCount}</span>
-        </button>
-        <button
-          type="button"
-          className={'task-view-tab' + (view === 'personal' ? ' on' : '')}
-          onClick={() => setView('personal')}
-        >
-          🔒 Personal
-          <span className="task-view-count">{personalOpenCount}</span>
-        </button>
-      </div>
-
+      {/* Phase 3: in-group Group/Personal toggle removed — private events now
+          live in the member's separate Personal space. This shows group events
+          (and, inside the Personal space, that space's own events). */}
       <div className="upcoming-inner">
         <div className="upcoming-legend">Upcoming</div>
         {upcoming.length === 0 ? (
@@ -2710,10 +2718,12 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
   // ── Poll: question + option list with circular vote buttons ─────────────
   if (type === 'poll') {
     const question = n.payload?.question || n.content || '';
-    const options = Array.isArray(n.payload?.options) ? n.payload.options : [];
+    // Guard each option's shape too — a malformed poll row ({id,text} missing)
+    // would otherwise crash the whole feed render with key/undefined errors.
+    const options = (Array.isArray(n.payload?.options) ? n.payload.options : []).filter(o => o && typeof o === 'object' && o.id != null);
     const votes = n.payload?.votes && typeof n.payload.votes === 'object' ? n.payload.votes : {};
     const myVoteId = Object.keys(votes).find(oid => Array.isArray(votes[oid]) && votes[oid].includes(myId));
-    const totalVotes = Object.values(votes).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+    const totalVotes = options.reduce((s, o) => s + (Array.isArray(votes[o.id]) ? votes[o.id].length : 0), 0);
     return (
       <SwipeToDelete onDelete={() => onDelete(n.id)} disabled={!canDelete}>
         <div className={`chat-row ${isMe ? 'me' : 'them'}`} style={{ marginTop: 10 }}>
@@ -3593,9 +3603,8 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
   const buildPayload = () => ({
     title: title.trim(),
     description: description.trim() || null,
-    // Personal todos force assignee = creator and ignore space tagging
-    // — they're scoped to the current user only.
-    assigned_to: isPrivate ? myId : assignee,
+    // Solo space (e.g. the Personal space) → nothing to assign, it's yours.
+    assigned_to: (isPrivate || (members || []).length <= 1) ? myId : assignee,
     due_date: getDueDate(),
     due_time: dueTime || null,
     recurrence: getRecurrence(),
@@ -3651,13 +3660,6 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
         <span className="field-hint">Type <strong>#</strong> to tag a Space</span>
       </div>
       <div className="field">
-        <label>Visibility</label>
-        <div className="date-row">
-          <button type="button" className={'pick' + (!isPrivate ? ' on' : '')} onClick={() => setIsPrivate(false)}>Shared with group</button>
-          <button type="button" className={'pick' + (isPrivate ? ' on' : '')} onClick={() => setIsPrivate(true)}>🔒 Personal · only you</button>
-        </div>
-      </div>
-      <div className="field">
         <label>Details <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <textarea
           value={description}
@@ -3671,7 +3673,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
           {description.length} / 500
         </div>
       </div>
-      {!isPrivate && (
+      {!isPrivate && (members || []).length > 1 && (
       <div className="field">
         <label>Assign to</label>
         <div className="assignee-picker">
@@ -3952,6 +3954,13 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
 
   const save = async () => {
     if (!title.trim() || !date) return;
+    // Single-day event: end time can't be before start time (a multi-day span
+    // legitimately can, since the end time is on a later date).
+    const isSpan = !!(endDate && endDate > date);
+    if (!isSpan && startTime && endTime && endTime < startTime) {
+      alert('The end time is before the start time.');
+      return;
+    }
     setSaving(true);
     // RSVP recipients are merged into the attendee list so addEvent's
     // notify() loop reaches them with `event_invited` (the RSVP
@@ -4014,13 +4023,6 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
           />
         </div>
         <span className="field-hint">Type <strong>#</strong> to tag a Space</span>
-      </div>
-      <div className="field">
-        <label>Visibility</label>
-        <div className="date-row">
-          <button type="button" className={'pick' + (!isPrivate ? ' on' : '')} onClick={() => setIsPrivate(false)}>Shared with group</button>
-          <button type="button" className={'pick' + (isPrivate ? ' on' : '')} onClick={() => setIsPrivate(true)}>🔒 Personal · only you</button>
-        </div>
       </div>
       <div className="field">
         <label>Description <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
@@ -4110,6 +4112,8 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
         </div>
       </div>
       {!isPrivate && (<>
+      {/* Solo space (e.g. Personal) → no one to invite, so Attendees is hidden. */}
+      {(members || []).length > 1 && (
       <div className="field">
         <label>Attendees <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <div className="assignee-picker">
@@ -4126,6 +4130,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
           ))}
         </div>
       </div>
+      )}
 
       {/* Send RSVP + Linked tasks are creation-only actions (they fire
           notifications / create new task rows), so they're hidden when
@@ -4135,6 +4140,8 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
           get an `event_invited` notification (the RSVP request) on save
           and are merged into the attendee list so their responses show
           up. "Everyone" is a one-tap convenience, not the default. */}
+      {/* Solo space (e.g. Personal) → no one to request an RSVP from. */}
+      {(members || []).length > 1 && (
       <div className="field">
         <label>Send RSVP <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
         <div className="assignee-picker">
@@ -4168,6 +4175,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
           </div>
         )}
       </div>
+      )}
 
       {/* Linked tasks — full task payloads (title/details/assignee/due/
           repeat) staged here, then created on Event save with event_id
@@ -4948,7 +4956,8 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
       setPollQuestion('');
       setPollOptions(['', '']);
       setSpaceId(initialSpaceId || null);
-      setTimeout(() => editorRef.current?.focus(), 50);
+      // No autoFocus on open — auto-popping the iOS keyboard leaves the sheet
+      // scrolled mid-form. The user taps the editor to start typing.
     }
   }, [open, profile?.id, initialSpaceId]);
 
@@ -6414,9 +6423,16 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
   // Esc key closes the lightbox
   React.useEffect(() => {
     if (!zoomedPhoto) return;
-    const onKey = (e) => { if (e.key === 'Escape') setZoomedPhoto(null); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        // Capture phase + stopImmediatePropagation so closing the lightbox
+        // doesn't also close the note modal underneath it.
+        e.stopImmediatePropagation();
+        setZoomedPhoto(null);
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [zoomedPhoto]);
 
   // Reset edit mode whenever we open a different note
@@ -6625,10 +6641,10 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
     }
     if (noteType === 'poll') {
       const question = note.payload?.question || note.content || '';
-      const options = Array.isArray(note.payload?.options) ? note.payload.options : [];
+      const options = (Array.isArray(note.payload?.options) ? note.payload.options : []).filter(o => o && typeof o === 'object' && o.id != null);
       const votes = note.payload?.votes && typeof note.payload.votes === 'object' ? note.payload.votes : {};
       const myVoteId = Object.keys(votes).find(oid => Array.isArray(votes[oid]) && votes[oid].includes(myId));
-      const totalVotes = Object.values(votes).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+      const totalVotes = options.reduce((s, o) => s + (Array.isArray(votes[o.id]) ? votes[o.id].length : 0), 0);
       return (
         <div style={{
           padding: '14px 16px',
@@ -7465,8 +7481,7 @@ function ListDetailModal({ open, list, items, members, getProfile, myId, onClose
     if (open) {
       setDraft('');
       setShowActivity(false);
-      // Focus add-input so user can start typing immediately
-      setTimeout(() => inputRef.current?.focus(), 320);
+      // No autoFocus on open (iOS keyboard pops the sheet mid-form). Tap to type.
     }
   }, [open]);
 
@@ -7658,124 +7673,6 @@ function AddListModal({ open, onClose, members, myId, initialTitle = '', spaces,
         <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
       </div>
     </Modal>
-  );
-}
-
-// ─── List Card (section row) ──────────────────────────────────────────────────
-// Tap to open ListDetailModal. Shows title, counts, member avatars, delete.
-function ListCard({ list, items, members, getProfile, myId, onOpen, onDeleteList }) {
-  const openCount = (items || []).filter(i => !i.completed).length;
-  const doneCount = (items || []).filter(i =>  i.completed).length;
-  const color     = getColor(list.color || 'coral');
-
-  // Member avatars for who the list is shared with
-  const sharedWith = Array.isArray(list.member_ids) && list.member_ids.length > 0
-    ? list.member_ids.map(id => getProfile(id)).filter(Boolean)
-    : members || [];
-
-  return (
-    <div className="list-card" style={{ '--c': color }}>
-      <button type="button" className="list-card-hd" onClick={() => onOpen(list)}>
-        <span className="list-card-caret" aria-hidden>▸</span>
-        <span className="list-card-title">{list.title}</span>
-        <div className="list-card-right">
-          {/* Member dot cluster */}
-          <span className="list-card-members">
-            {sharedWith.slice(0, 4).map(m => (
-              <span key={m.id} title={m.display_name || m.name} style={{ '--c': getColor(m.color) }} className="list-member-dot" />
-            ))}
-            {sharedWith.length > 4 && <span className="list-card-count" style={{ fontSize: 10 }}>+{sharedWith.length - 4}</span>}
-          </span>
-          <span className="list-card-count">
-            {openCount} {openCount === 1 ? 'item' : 'items'}
-            {doneCount > 0 && <> · {doneCount} done</>}
-          </span>
-        </div>
-        {list.created_by === myId && (
-          <span
-            role="button"
-            tabIndex={0}
-            className="list-card-del"
-            aria-label="Delete list"
-            onClick={e => { e.stopPropagation(); if (window.confirm(`Delete "${list.title}"?`)) onDeleteList(list.id); }}
-          >×</span>
-        )}
-      </button>
-      {list.space_id && (
-        <div style={{ padding: '0 12px 10px' }}>
-          <SpaceTag spaceId={list.space_id} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ListsSection({
-  lists, listItems, members, getProfile, myId,
-  collapsed, onToggleCollapse,
-  onAddList, onDeleteList,
-  onAddItem, onToggleItem, onDeleteItem, onCycleAssignee,
-  activityByList, onLoadActivity,
-  // Modal callbacks — state lives in MainApp so modals render at screen
-  // level (same as AddTaskModal/AddEventModal) and scroll stays isolated.
-  onOpenAddModal, onOpenDetail,
-}) {
-  // Only show lists the current user is a member of (or created).
-  // Lists without member_ids (legacy / no column yet) are visible to all.
-  const visibleLists = (lists || [])
-    .filter(l => {
-      if (l.archived_at) return false;
-      if (l.created_by === myId) return true;
-      if (!Array.isArray(l.member_ids) || l.member_ids.length === 0) return true;
-      return l.member_ids.includes(myId);
-    })
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-  const totalOpenItems = (listItems || []).filter(i => {
-    const list = visibleLists.find(l => l.id === i.list_id);
-    return list && !i.completed;
-  }).length;
-
-  return (
-    <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-lists">
-      <div className="fb-sec-hd">
-        <div className="fb-sec-hd-left">
-          <h2 className="fb-sec-title">Shared <em>lists</em></h2>
-          <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
-        </div>
-        <div className="fb-sec-hd-right">
-          <div className="fb-sec-meta">{totalOpenItems} open</div>
-        </div>
-      </div>
-
-      {!collapsed && (<>
-      {/* Same primary section-action button as "+ Add task" / "+ Post". */}
-      <button className="fb-btn" onClick={() => onOpenAddModal?.()}>
-        <span className="plus">+</span> Create list
-      </button>
-
-      {visibleLists.length === 0 ? (
-        <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', padding: '16px 2px', marginTop: 32 }}>
-          No lists yet — tap <strong>+ Create list</strong> to get started.
-        </div>
-      ) : (
-        <div className="lists-stack">
-          {visibleLists.map(list => (
-            <ListCard
-              key={list.id}
-              list={list}
-              items={(listItems || []).filter(i => i.list_id === list.id)}
-              members={members}
-              getProfile={getProfile}
-              myId={myId}
-              onOpen={onOpenDetail}
-              onDeleteList={onDeleteList}
-            />
-          ))}
-        </div>
-      )}
-      </>)}
-    </section>
   );
 }
 
@@ -8192,6 +8089,8 @@ function AddSpaceModal({ open, onClose, members, myId, initial, onSave }) {
           }}
         />
       </div>
+      {/* Solo space (e.g. Personal) → no one to share with, so this is hidden. */}
+      {(members || []).length > 1 && (
       <div className="field">
         <label>
           Shared with
@@ -8230,6 +8129,7 @@ function AddSpaceModal({ open, onClose, members, myId, initial, onSave }) {
             : `${memberIds.length} ${memberIds.length === 1 ? 'person' : 'people'} will see this space.`}
         </div>
       </div>
+      )}
     </Modal>
   );
 }
@@ -8723,6 +8623,8 @@ export function MainApp({ profile, onSettings }) {
   const [bellOpen, setBellOpen] = React.useState(false);
   const bellMenuRef = React.useRef(null);
   const [loading, setLoading] = React.useState(true);
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  const fetchSeqRef = React.useRef(0);
   const scrollRef = React.useRef(null);
 
   // Manual refresh — button in the sticky header. Re-runs the same
@@ -8774,7 +8676,7 @@ export function MainApp({ profile, onSettings }) {
   // collapses that section's body and (if there's a next section) smooth-
   // scrolls to it — a quick way to walk Home Feed → Tasks → Calendar.
   const [collapsed, setCollapsed] = React.useState({
-    notes: false, tasks: false, calendar: false, lists: false, spaces: false,
+    notes: false, tasks: false, calendar: false, spaces: false,
   });
   const toggleCollapse = React.useCallback((id) => {
     const wasCollapsed = collapsed[id];
@@ -8818,26 +8720,33 @@ export function MainApp({ profile, onSettings }) {
   // events / notes) have landed; the secondary tables ride along as
   // fire-and-forget so a missing migration never blocks the app.
   const fetchAll = React.useCallback(async () => {
-    if (!profile?.group_id) return;
+    if (!profile?.group_id) { setLoading(false); return; }
+    setLoadFailed(false);
+    // Request token: switching group fires a new fetchAll while this one may
+    // still be in flight. Gate every setter so a stale response can't overwrite
+    // the newer group's data (cross-space data bleed).
+    const seq = ++fetchSeqRef.current;
+    const live = () => fetchSeqRef.current === seq;
 
     // Shared Lists — silently fall back to [] if the tables don't exist.
     Promise.all([
       supabase.from('shared_lists').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
       supabase.from('shared_list_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true }),
     ]).then(([l, i]) => {
+      if (!live()) return;
       if (!l.error) setLists(l.data || []);
       if (!i.error) setListItems(i.data || []);
     });
 
     // Spaces + space items — same defensive pattern.
     supabase.from('spaces').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false })
-      .then(({ data, error }) => { if (!error) setSpaces(data || []); });
+      .then(({ data, error }) => { if (live() && !error) setSpaces(data || []); });
     supabase.from('space_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true })
-      .then(({ data, error }) => { if (!error) setSpaceItems(data || []); });
+      .then(({ data, error }) => { if (live() && !error) setSpaceItems(data || []); });
 
     // Task suggestions (silently [] if the table isn't migrated yet).
     supabase.from('task_suggestions').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: true })
-      .then(({ data, error }) => { if (!error) setSuggestions(data || []); });
+      .then(({ data, error }) => { if (live() && !error) setSuggestions(data || []); });
 
     // Notifications (silently no-op if table missing)
     supabase.from('notifications')
@@ -8845,8 +8754,9 @@ export function MainApp({ profile, onSettings }) {
       .eq('user_id', profile.id)
       .order('created_at', { ascending: false })
       .limit(50)
-      .then(({ data }) => { if (data) setNotifications(data); });
+      .then(({ data }) => { if (live() && data) setNotifications(data); });
 
+    try {
     const [m, t, e, n] = await Promise.all([
       supabase.from('profiles').select('*').eq('group_id', profile.group_id),
       supabase.from('tasks').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
@@ -8881,13 +8791,21 @@ export function MainApp({ profile, onSettings }) {
     const fresh = stale.length === 0
       ? allTasks
       : allTasks.filter(task => !stale.some(s => s.id === task.id));
+    if (!live()) return; // a newer group's fetch superseded this one
     setMembers(m.data || []);
     setTasks(fresh);
     setEvents(e.data || []);
     setNotes(n.data || []);
     setLoading(false);
     if (stale.length > 0) {
-      supabase.from('tasks').delete().in('id', stale.map(s => s.id));
+      supabase.from('tasks').delete().in('id', stale.map(s => s.id)).then(undefined, () => {});
+    }
+    } catch (err) {
+      // A core query rejected (offline, auth expiry, server). Don't hang on the
+      // skeleton forever — surface a retryable error instead.
+      console.error('fetchAll failed:', err);
+      setLoadFailed(true);
+      setLoading(false);
     }
   }, [profile?.group_id, profile?.id]);
 
@@ -8899,12 +8817,20 @@ export function MainApp({ profile, onSettings }) {
     const channel = supabase
       .channel('kinnekt-notifications-' + profile.id)
       .on('postgres_changes', {
-        event: 'INSERT',
+        event: '*',
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${profile.id}`,
-      }, ({ new: row }) => {
-        setNotifications(prev => [row, ...prev.filter(n => n.id !== row.id)]);
+      }, ({ eventType, new: row, old }) => {
+        // Listen to all events so mark-read (UPDATE) and clear (DELETE) on one
+        // device reflect on the others, not just new INSERTs.
+        if (eventType === 'DELETE') {
+          setNotifications(prev => prev.filter(n => n.id !== old.id));
+        } else if (eventType === 'INSERT') {
+          setNotifications(prev => prev.some(n => n.id === row.id) ? prev : [row, ...prev]);
+        } else {
+          setNotifications(prev => prev.map(n => n.id === row.id ? row : n));
+        }
       })
       .subscribe();
 
@@ -8995,7 +8921,9 @@ export function MainApp({ profile, onSettings }) {
           if (eventType === 'DELETE') {
             setEvents(prev => prev.filter(e => e.id !== old.id));
           } else if (eventType === 'INSERT') {
-            setEvents(prev => prev.some(e => e.id === row.id) ? prev : [...prev, row]);
+            // Keep date order (the initial fetch is ordered by date) so a
+            // realtime-added event doesn't land at the bottom out of sequence.
+            setEvents(prev => prev.some(e => e.id === row.id) ? prev : [...prev, row].sort((a, b) => (a.date || '').localeCompare(b.date || '')));
           } else {
             setEvents(prev => prev.map(e => e.id === row.id ? row : e));
           }
@@ -9046,17 +8974,27 @@ export function MainApp({ profile, onSettings }) {
     const unread = notifications.filter(n => !n.read).map(n => n.id);
     if (unread.length === 0) return;
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    await supabase.from('notifications').update({ read: true }).in('id', unread);
+    const { error } = await supabase.from('notifications').update({ read: true }).in('id', unread);
+    if (error) setNotifications(prev => prev.map(n => unread.includes(n.id) ? { ...n, read: false } : n));
   };
   const markOneRead = async (id) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-    await supabase.from('notifications').update({ read: true }).eq('id', id);
+    const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id);
+    if (error) setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: false } : n));
   };
 
   // Handlers passed into the React.memo'd sections are wrapped in
   // useCallback so an unrelated MainApp state change (bell open, tab
   // sync, a modal toggling) doesn't re-render every section.
-  const getProfile = React.useCallback((id) => members.find(m => m.id === id), [members]);
+  // O(1) profile lookup. getProfile is called per task row, per calendar dot,
+  // per feed post, per day-summary tag — an Array.find there is O(rows×members)
+  // every render. A Map keyed once on `members` removes that quadratic factor.
+  const profileById = React.useMemo(() => {
+    const m = new Map();
+    (members || []).forEach(p => m.set(p.id, p));
+    return m;
+  }, [members]);
+  const getProfile = React.useCallback((id) => profileById.get(id), [profileById]);
 
   // The "Next 24 hours" card lives INSIDE the Home Feed section. Memoize
   // the element so NotesSection (memoized) only re-renders when the data
@@ -9089,7 +9027,14 @@ export function MainApp({ profile, onSettings }) {
     let { error } = await supabase.from('tasks').update({ completed: next, completed_at: completedAt }).eq('id', id);
     // Fall back without completed_at if the column hasn't been migrated yet
     if (error && /completed_at/i.test(error.message || '')) {
-      await supabase.from('tasks').update({ completed: next }).eq('id', id);
+      ({ error } = await supabase.from('tasks').update({ completed: next }).eq('id', id));
+    }
+    // On a real failure (e.g. RLS), revert the optimistic flip and DO NOT spawn
+    // a recurrence off a completion that never persisted.
+    if (error) {
+      if (snapshot) setTasks(prev => prev.map(t => t.id === id ? snapshot : t));
+      alert('Could not update the task: ' + (error.message || 'please try again.'));
+      return;
     }
 
     // Roll a recurring task forward to its next scheduled day on
@@ -9300,8 +9245,15 @@ export function MainApp({ profile, onSettings }) {
     return { error: null };
   };
   const deleteTask = React.useCallback(async (id) => {
-    setTasks(prev => prev.filter(t => t.id !== id));
-    await supabase.from('tasks').delete().eq('id', id);
+    let removed = null;
+    setTasks(prev => { removed = prev.find(t => t.id === id) || null; return prev.filter(t => t.id !== id); });
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) {
+      // Restore the row instead of letting it silently reappear on next refresh
+      // (the "it won't delete / ghost task" case when RLS blocks the delete).
+      if (removed) setTasks(prev => prev.some(t => t.id === id) ? prev : [removed, ...prev]);
+      alert('Could not delete the task: ' + (error.message || 'you may not have permission.'));
+    }
   }, []);
 
   const cancelTask = async (id, reason) => {
@@ -9309,21 +9261,24 @@ export function MainApp({ profile, onSettings }) {
     if (!task) return;
     const cancelledAt = new Date().toISOString();
     setTasks(prev => prev.map(t => t.id === id ? { ...t, cancelled_at: cancelledAt, cancellation_reason: reason || null } : t));
-    let payload = { cancelled_at: cancelledAt, cancellation_reason: reason || null };
+    const payload = { cancelled_at: cancelledAt, cancellation_reason: reason || null };
     let { error } = await supabase.from('tasks').update(payload).eq('id', id);
+    // Optional column missing → strip it and retry once (re-reading the new error).
+    if (error && (error.message || '').toLowerCase().includes('cancellation_reason')) {
+      const { cancellation_reason: _r, ...rest } = payload;
+      ({ error } = await supabase.from('tasks').update(rest).eq('id', id));
+    }
     if (error) {
-      // Fall back: strip whichever optional column is missing, retry
-      const msg = (error.message || '').toLowerCase();
-      if (msg.includes('cancellation_reason')) {
-        const { cancellation_reason: _r, ...rest } = payload;
-        ({ error } = await supabase.from('tasks').update(rest).eq('id', id));
-      }
-      if (error && msg.includes('cancelled_at')) {
+      // Any remaining failure (missing column, RLS denial, network): revert the
+      // optimistic cancel and STOP — never notify on a cancel that didn't persist.
+      const m = (error.message || '').toLowerCase();
+      if (m.includes('cancelled_at')) {
         alert('Cancellation columns missing — run:\n\nalter table public.tasks add column if not exists cancelled_at timestamptz;\nalter table public.tasks add column if not exists cancellation_reason text;');
-        // revert optimistic UI
-        setTasks(prev => prev.map(t => t.id === id ? { ...t, cancelled_at: null, cancellation_reason: null } : t));
-        return;
+      } else {
+        alert('Could not cancel the task: ' + (error.message || 'you may not have permission.'));
       }
+      setTasks(prev => prev.map(t => t.id === id ? task : t));
+      return;
     }
     // Notify the assignee (if it's not the canceller)
     if (task.assigned_to && task.assigned_to !== profile.id) {
@@ -9745,8 +9700,13 @@ export function MainApp({ profile, onSettings }) {
       const ok = window.confirm(`"${ev.title}" repeats. Deleting it removes every occurrence — delete the whole series?`);
       if (!ok) return;
     }
-    setEvents(prev => prev.filter(e => e.id !== id));
-    await supabase.from('events').delete().eq('id', id);
+    let removed = null;
+    setEvents(prev => { removed = prev.find(e => e.id === id) || null; return prev.filter(e => e.id !== id); });
+    const { error } = await supabase.from('events').delete().eq('id', id);
+    if (error) {
+      if (removed) setEvents(prev => prev.some(e => e.id === id) ? prev : [...prev, removed]);
+      alert('Could not delete the event: ' + (error.message || 'you may not have permission.'));
+    }
   }, [events]);
 
   // ─── Shared Lists CRUD ───────────────────────────────────────────────────
@@ -9799,7 +9759,8 @@ export function MainApp({ profile, onSettings }) {
       title: t,
       color: profile.color || 'coral',
       list_type: 'general',
-      member_ids: memberIds || (members || []).map(m => m.id),
+      // None selected → creator-only (see addSpace note; [] was read as "all").
+      member_ids: (Array.isArray(memberIds) && memberIds.length) ? memberIds : [profile.id],
       space_id: spaceId || null,
       archived_at: null,
       created_at: new Date().toISOString(),
@@ -9870,7 +9831,10 @@ export function MainApp({ profile, onSettings }) {
       emoji: emoji || '✨',
       color: color || 'coral',
       description: (description || '').trim() || null,
-      member_ids: memberIds || (members || []).map(m => m.id),
+      // None selected → scope to just the creator (matches the modal's "only
+      // you will see this"). An empty [] used to be read as "everyone", which
+      // silently made a meant-to-be-private space group-visible.
+      member_ids: (Array.isArray(memberIds) && memberIds.length) ? memberIds : [profile.id],
       pinned_at: null,
       archived_at: null,
       created_at: new Date().toISOString(),
@@ -9948,14 +9912,21 @@ export function MainApp({ profile, onSettings }) {
     const existing = spaces.find(s => s.id === id);
     setSpaces(prev => prev.filter(s => s.id !== id));
     // Locally null space_id on tagged items so the UI updates instantly.
-    // The DB has ON DELETE SET NULL and realtime UPDATE events will reconcile.
-    setTasks(prev => prev.map(t => t.space_id === id ? { ...t, space_id: null } : t));
-    setEvents(prev => prev.map(e => e.space_id === id ? { ...e, space_id: null } : e));
-    setNotes(prev => prev.map(n => n.space_id === id ? { ...n, space_id: null } : n));
-    setLists(prev => prev.map(l => l.space_id === id ? { ...l, space_id: null } : l));
+    // Capture which rows we touched (via the updater, so we don't need tasks/
+    // events/etc in this callback's deps) to restore them if the delete fails.
+    let tIds = [], eIds = [], nIds = [], lIds = [];
+    setTasks(prev => { tIds = prev.filter(t => t.space_id === id).map(t => t.id); return prev.map(t => t.space_id === id ? { ...t, space_id: null } : t); });
+    setEvents(prev => { eIds = prev.filter(e => e.space_id === id).map(e => e.id); return prev.map(e => e.space_id === id ? { ...e, space_id: null } : e); });
+    setNotes(prev => { nIds = prev.filter(n => n.space_id === id).map(n => n.id); return prev.map(n => n.space_id === id ? { ...n, space_id: null } : n); });
+    setLists(prev => { lIds = prev.filter(l => l.space_id === id).map(l => l.id); return prev.map(l => l.space_id === id ? { ...l, space_id: null } : l); });
     const { error } = await supabase.from('spaces').delete().eq('id', id);
     if (error) {
       if (existing) setSpaces(prev => prev.some(s => s.id === id) ? prev : [existing, ...prev]);
+      // Restore the space_id we optimistically stripped, so items don't show untagged.
+      setTasks(prev => prev.map(t => tIds.includes(t.id) ? { ...t, space_id: id } : t));
+      setEvents(prev => prev.map(e => eIds.includes(e.id) ? { ...e, space_id: id } : e));
+      setNotes(prev => prev.map(n => nIds.includes(n.id) ? { ...n, space_id: id } : n));
+      setLists(prev => prev.map(l => lIds.includes(l.id) ? { ...l, space_id: id } : l));
       alert('Could not delete space: ' + error.message);
     }
   }, [spaces]);
@@ -10169,10 +10140,18 @@ export function MainApp({ profile, onSettings }) {
         setEvents(prev => prev.map(e => e.id === eventId ? { ...e, rsvps: serverRsvps } : e));
       }
     } else {
-      ({ error } = await supabase
-        .from('events')
-        .update({ rsvps: nextRsvps })
-        .eq('id', eventId));
+      // Only fall back to the (non-atomic) whole-blob write when the RPC simply
+      // isn't installed yet — NOT on a transient error, which would re-open the
+      // concurrent-overwrite race the RPC exists to prevent.
+      const missing = /set_event_rsvp|could not find the function|does not exist|PGRST202|schema cache/i.test(rpcErr.message || '');
+      if (missing) {
+        ({ error } = await supabase
+          .from('events')
+          .update({ rsvps: nextRsvps })
+          .eq('id', eventId));
+      } else {
+        error = rpcErr;
+      }
     }
     if (error) {
       // Revert on failure (most likely cause: rsvps column not added yet)
@@ -10533,25 +10512,30 @@ export function MainApp({ profile, onSettings }) {
     }
   }, [notes, profile?.id]);
   const deleteNotification = async (id) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-    await supabase.from('notifications').delete().eq('id', id);
+    let removed;
+    setNotifications(prev => { removed = prev.find(n => n.id === id); return prev.filter(n => n.id !== id); });
+    const { error } = await supabase.from('notifications').delete().eq('id', id);
+    if (error && removed) setNotifications(prev => prev.some(n => n.id === id) ? prev : [removed, ...prev]);
   };
   const clearAllNotifications = async () => {
     if (notifications.length === 0) return;
     if (!window.confirm('Clear all notifications? This cannot be undone.')) return;
-    const ids = notifications.map(n => n.id);
+    const snapshot = notifications;
+    const ids = snapshot.map(n => n.id);
     // Optimistic empty so the menu feels instant.
     setNotifications([]);
     const { error } = await supabase.from('notifications').delete().in('id', ids);
     if (error) {
-      // Best-effort restore — the user will see them reappear and can retry.
+      // Restore immediately rather than waiting for a reload.
       console.error('Clear all notifications failed:', error);
       alert('Could not clear notifications: ' + error.message);
+      setNotifications(snapshot);
     }
   };
   const togglePin = React.useCallback(async (id, pinned) => {
     setNotes(prev => prev.map(n => n.id === id ? { ...n, pinned: !pinned } : n));
-    await supabase.from('notes').update({ pinned: !pinned }).eq('id', id);
+    const { error } = await supabase.from('notes').update({ pinned: !pinned }).eq('id', id);
+    if (error) setNotes(prev => prev.map(n => n.id === id ? { ...n, pinned } : n));
   }, []);
 
   // Scroll sync (scrollToSec + suppressScrollSync are defined up with
@@ -10571,7 +10555,9 @@ export function MainApp({ profile, onSettings }) {
         if (!el) continue;
         if (el.getBoundingClientRect().top - wrap.getBoundingClientRect().top - headH - 30 <= 0) cur = id;
       }
-      setTab(cur);
+      // Only write when the active section actually changed — otherwise every
+      // scroll frame re-rendered MainApp (and every context consumer with it).
+      setTab(prev => prev === cur ? prev : cur);
     };
     const onScroll = () => {
       cancelAnimationFrame(raf);
@@ -10593,9 +10579,17 @@ export function MainApp({ profile, onSettings }) {
     setSpaceDetailItem(space);
   }, []);
 
-  if (loading) {
+  // Stable context value — a fresh object here re-rendered every SpaceTag
+  // consumer (inside every task row, event card, feed post) on any MainApp
+  // render, defeating their memoization. spaces/showSpace/getProfile are all
+  // stable, so this only changes when the data actually does.
+  const spacesCtxValue = React.useMemo(() => ({ spaces, showSpace, getProfile }), [spaces, showSpace, getProfile]);
+
+  if (loading || !profile) {
     // Shimmering skeleton in the rough shape of the real layout —
-    // reads as "almost there" instead of a blank wait.
+    // reads as "almost there" instead of a blank wait. Guarding on `!profile`
+    // too: every handler below dereferences profile.group_id/.id, so rendering
+    // without a profile (a group-switch / load race) would hard-crash.
     return (
       <div className="fb-screen">
         <div className="skel-wrap" role="status" aria-label="Loading">
@@ -10610,9 +10604,28 @@ export function MainApp({ profile, onSettings }) {
     );
   }
 
+  if (loadFailed) {
+    // Core data failed to load (offline / server). Offer a retry instead of a
+    // silently-empty app or an endless skeleton.
+    return (
+      <div className="fb-screen">
+        <div role="alert" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, minHeight: '60vh', padding: 24, textAlign: 'center' }}>
+          <div style={{ fontSize: 15, opacity: 0.85 }}>Couldn't load your stuff. Check your connection.</div>
+          <button
+            type="button"
+            onClick={() => { setLoadFailed(false); setLoading(true); fetchAll(); }}
+            style={{ padding: '10px 22px', borderRadius: 999, border: 'none', background: 'var(--kinnekt-purple, #6A4DFF)', color: '#fff', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <MyIdContext.Provider value={profile?.id || null}>
-    <SpacesContext.Provider value={{ spaces, showSpace, getProfile }}>
+    <SpacesContext.Provider value={spacesCtxValue}>
     <div className="fb-screen">
       <div
         className="fb-scroll"
@@ -10692,32 +10705,9 @@ export function MainApp({ profile, onSettings }) {
             onToggleCollapse={toggleCollapseNotes}
           />
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} suggestions={suggestions} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onGrab={grabTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
-          {/* ListsSection is hidden — Spaces handles the same use case
-              with more flexibility. The component, state, modals, and
-              CRUD wiring all stay in place; just uncomment to bring it
-              back (and re-add 'lists' to AnchorTabs, SECTION_ORDER, and
-              the scroll-sync ids array). */}
-          {false && (
-          <ListsSection
-            lists={lists}
-            listItems={listItems}
-            members={members}
-            getProfile={getProfile}
-            myId={profile?.id}
-            collapsed={collapsed.lists}
-            onToggleCollapse={() => toggleCollapse('lists')}
-            onAddList={addList}
-            onDeleteList={deleteList}
-            onAddItem={addListItem}
-            onToggleItem={toggleListItem}
-            onDeleteItem={deleteListItem}
-            onCycleAssignee={cycleListItemAssignee}
-            activityByList={activityByList}
-            onLoadActivity={loadListActivity}
-            onOpenAddModal={() => setListAddOpen(true)}
-            onOpenDetail={setListDetailItem}
-          />
-          )}
+          {/* Lists are superseded by Spaces (the Lists tab is hidden). The
+              Spaces-reachable list modals + CRUD stay; only the standalone
+              ListsSection/ListCard were removed as dead in the cycle-2 cleanup. */}
           <SpacesSection
             spaces={spaces}
             tasks={tasks}

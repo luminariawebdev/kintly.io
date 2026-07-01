@@ -208,9 +208,10 @@ create policy "profiles_select" on public.profiles
 drop policy if exists "profiles_insert" on public.profiles;
 create policy "profiles_insert" on public.profiles
   for insert with check (id = auth.uid());
-drop policy if exists "profiles_update" on public.profiles;
-create policy "profiles_update" on public.profiles
-  for update using (id = auth.uid());
+-- NOTE: profiles_update is defined once, later in this file (the hardened
+-- version with a WITH CHECK that pins the active group to one you belong to).
+-- The old permissive definition that lived here was removed in Cycle 3 so a
+-- partial / out-of-order hand-run can't leave the insecure policy active.
 
 -- Tasks. SELECT hides other members' private todos. UPDATE/DELETE are
 -- restricted to the creator, the assignee, or anyone when unassigned —
@@ -507,11 +508,11 @@ create policy "space_items_delete" on public.space_items
 
 -- ─── Personal todos / events ─────────────────────────────────────────────────
 -- is_private=true rows are only visible to their creator. The columns
--- are defined with the tables above (the SELECT policies reference
--- them); these are just the supporting indexes.
-
-create index if not exists tasks_is_private_idx  on public.tasks (is_private);
-create index if not exists events_is_private_idx on public.events (is_private);
+-- are defined with the tables above (the SELECT policies reference them).
+-- NOTE: the old single-column boolean indexes (tasks/events _is_private_idx)
+-- were dropped in audit Cycle 2 — a 2-value boolean is too low-selectivity for
+-- the planner to use (it drives off group_id via the composite indexes below),
+-- so they only added write overhead. See the Cycle-2 Batch C block at the end.
 
 -- ─── Atomic RSVP + poll voting ───────────────────────────────────────────────
 -- Both RSVPs and poll votes live in jsonb columns. The app used to
@@ -607,8 +608,12 @@ begin
       coalesce(v_votes->p_option_id, '[]'::jsonb) || to_jsonb(v_uid));
   end if;
 
-  v_payload := jsonb_set(v_payload, '{votes}', v_votes);
-  update public.notes set payload = v_payload where id = p_note_id;
+  -- Write ONLY the votes subtree of the live row (under our lock) so we never
+  -- clobber a sibling key (a concurrent pin/edit) with a stale full-payload snapshot.
+  update public.notes
+  set payload = jsonb_set(coalesce(payload, '{}'::jsonb), '{votes}', v_votes)
+  where id = p_note_id
+  returning payload into v_payload;
   return v_payload;
 end;
 $$;
@@ -641,7 +646,8 @@ begin
   from public.tasks
   where id = p_task_id
     and group_id = public.my_group_id()
-    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null);
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  for update;  -- serialize so a double-complete can't spawn two occurrences
 
   if v_src.id is null then
     return null;  -- not found or caller not permitted
@@ -668,7 +674,16 @@ begin
       and due_date = p_next_due
       and completed = false
       and recurrence is not null
-      and coalesce(assigned_to::text, '') = coalesce(v_owner::text, '')
+      -- Narrow the match to THIS series, not just the title: on a pool revert
+      -- v_owner is null, which previously made the owner check '' = '' and
+      -- collapsed to "any unassigned same-titled task", suppressing legitimate
+      -- respawns of distinct series that happen to share a name.
+      and created_by = v_src.created_by
+      and coalesce(space_id::text, '') = coalesce(v_src.space_id::text, '')
+      and coalesce(due_time, '')       = coalesce(v_src.due_time, '')
+      -- NOTE: deliberately NOT keyed on assigned_to. A series has at most one
+      -- open occurrence per due_date regardless of who currently owns it;
+      -- including owner let a pool-revert (v_owner null) miss a real duplicate.
   ) then
     return null;
   end if;
@@ -719,8 +734,26 @@ begin
   end if;
 
   if p_accept then
+    -- Accepting a hand-off is a ONE-TIME takeover: you cover THIS occurrence,
+    -- but a recurring task reverts to the original owner (the person who handed
+    -- it off) next time — same semantics as "I've got it". recur_owner captures
+    -- the pre-accept assignee (the offerer) as the series' home owner.
     update public.tasks
-    set assigned_to = v_uid, baton_offer = null
+    set assigned_to = v_uid,
+        baton_offer = null,
+        -- Recurring: capture the offerer as the series home owner so the next
+        -- occurrence reverts to them. Non-recurring: clear any stale pickup
+        -- state so a later edit that adds recurrence can't resurrect a wrong owner.
+        recur_owner = case
+          when recurrence is not null and coalesce(recurrence->>'freq', 'none') <> 'none'
+          then coalesce(recur_owner, assigned_to)
+          else null
+        end,
+        claimed = case
+          when recurrence is not null and coalesce(recurrence->>'freq', 'none') <> 'none'
+          then true
+          else false
+        end
     where id = p_task_id
     returning * into v_task;
   else
@@ -781,9 +814,11 @@ grant execute on function public.decide_suggestion(uuid, boolean) to authenticat
 -- make it yours. Runs as definer because the caller is neither the creator nor
 -- the current assignee, so the tasks_update policy would reject a direct write.
 -- Any member of the task's group may take any open, non-private task that's
--- assigned to a *different* person. Clears any pending hand-off offer and the
--- `claimed` flag, so a recurring series keeps coming to the new holder until
--- someone takes it back. Returns the updated row (or null if not permitted).
+-- assigned to a *different* person. Clears any pending hand-off offer, records
+-- the original assignee in recur_owner, and SETS `claimed = true` — so a
+-- recurring series' next occurrence REVERTS to the original owner (recur_owner),
+-- not the grabber. (Do not "simplify" by clearing claimed; the revert depends
+-- on it being set.) Returns the updated row (or null if not permitted).
 create or replace function public.grab_task(p_task_id uuid)
 returns public.tasks
 language plpgsql
@@ -850,3 +885,449 @@ begin
     end;
   end loop;
 end $$;
+
+-- ─── Multi-group + Personal space (Phase 1: data model + switching) ───────────
+-- A user can belong to MANY groups plus one private Personal space. We keep
+-- profiles.group_id as the *active* space (so every existing RLS policy that
+-- reads my_group_id() keeps working untouched — you're only ever "in" one
+-- space at a time). group_members is the you<->groups membership. A Personal
+-- space is just a group flagged is_personal + owner_id, auto-created per account.
+
+alter table public.groups add column if not exists is_personal boolean default false;
+alter table public.groups add column if not exists owner_id    uuid references public.profiles;
+
+create table if not exists public.group_members (
+  group_id  uuid references public.groups   on delete cascade not null,
+  user_id   uuid references public.profiles on delete cascade not null,
+  role      text default 'member',
+  joined_at timestamptz default now(),
+  primary key (group_id, user_id)
+);
+create index if not exists group_members_user_idx on public.group_members (user_id);
+alter table public.group_members enable row level security;
+
+-- See your own memberships (to list "your spaces") + the roster of your active
+-- space. my_group_id() is security-definer, so this never recurses.
+drop policy if exists "group_members_select" on public.group_members;
+create policy "group_members_select" on public.group_members
+  for select using (user_id = auth.uid() or group_id = public.my_group_id());
+
+-- You may only add yourself, and never to a personal space (those are seeded by
+-- the definer trigger/backfill below; nobody can join someone's Personal).
+drop policy if exists "group_members_insert" on public.group_members;
+create policy "group_members_insert" on public.group_members
+  for insert with check (
+    user_id = auth.uid()
+    and coalesce((select g.is_personal from public.groups g where g.id = group_id), false) = false
+  );
+
+-- Leave a (non-personal) group.
+drop policy if exists "group_members_delete" on public.group_members;
+create policy "group_members_delete" on public.group_members
+  for delete using (
+    user_id = auth.uid()
+    and coalesce((select g.is_personal from public.groups g where g.id = group_id), false) = false
+  );
+
+-- Tighten profile self-update: you may only point your ACTIVE space at a group
+-- you actually belong to (prevents reading another group's data by id-spoofing).
+drop policy if exists "profiles_update" on public.profiles;
+create policy "profiles_update" on public.profiles
+  for update using (id = auth.uid())
+  with check (
+    id = auth.uid()
+    and (
+      group_id is null
+      or exists (
+        select 1 from public.group_members gm
+        where gm.user_id = auth.uid() and gm.group_id = profiles.group_id
+      )
+    )
+  );
+
+-- Create a new (shared) group and join it. Definer so the group + the first
+-- membership land atomically without tripping insert policies.
+create or replace function public.create_group(p_name text)
+returns public.groups
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_grp public.groups;
+  v_code text;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  loop
+    v_code := upper(substr(md5(random()::text || clock_timestamp()::text), 1, 6));
+    exit when not exists (select 1 from public.groups where invite_code = v_code);
+  end loop;
+  insert into public.groups (name, invite_code, is_personal, owner_id)
+  values (coalesce(nullif(trim(p_name), ''), 'My Group'), v_code, false, null)
+  returning * into v_grp;
+  insert into public.group_members (group_id, user_id, role)
+  values (v_grp.id, v_uid, 'owner');
+  return v_grp;
+end;
+$$;
+grant execute on function public.create_group(text) to authenticated;
+
+-- Join a shared group by its invite code. Definer so it can look the group up
+-- and add the membership regardless of select scope. Personal codes are inert.
+create or replace function public.join_group_by_code(p_code text)
+returns public.groups
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_grp public.groups;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  select * into v_grp from public.groups
+  where invite_code = upper(trim(p_code)) and coalesce(is_personal, false) = false;
+  if v_grp.id is null then return null; end if;  -- invalid code or a personal space
+  insert into public.group_members (group_id, user_id, role)
+  values (v_grp.id, v_uid, 'member')
+  on conflict (group_id, user_id) do nothing;
+  return v_grp;
+end;
+$$;
+grant execute on function public.join_group_by_code(text) to authenticated;
+
+-- Auto-create profile AND a private Personal space on signup. The Personal
+-- space is solo (owner_id = the new user) and never joinable by anyone else.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_personal uuid;
+begin
+  insert into public.profiles (id, display_name, color)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)),
+    coalesce(new.raw_user_meta_data->>'color', 'coral')
+  )
+  on conflict (id) do nothing;
+
+  -- Seed the Personal space, but never let a failure here abort signup (this
+  -- runs inside the auth.users insert transaction). If it fails — e.g. a rare
+  -- invite_code collision — the idempotent backfill / next login creates it.
+  begin
+    if not exists (select 1 from public.groups g where g.is_personal and g.owner_id = new.id) then
+      -- Retry on invite_code collision (the realistic failure) instead of a
+      -- one-shot attempt. Still never abort signup (the outer catch); the
+      -- idempotent backfill below is the recovery path if all retries fail.
+      for i in 1..5 loop
+        begin
+          insert into public.groups (name, invite_code, is_personal, owner_id)
+          values ('Personal', upper(substr(md5(random()::text || new.id::text || i::text), 1, 8)), true, new.id)
+          returning id into v_personal;
+          insert into public.group_members (group_id, user_id, role)
+          values (v_personal, new.id, 'owner');
+          exit;
+        exception when unique_violation then
+          -- code collided — loop and try a fresh one
+        end;
+      end loop;
+    end if;
+  exception when others then
+    null;
+  end;
+  -- profiles.group_id stays null → new accounts land on the onset choice screen.
+  return new;
+end;
+$$;
+
+-- Backfill existing accounts: a membership row for everyone's current active
+-- group, and one Personal space each. Idempotent.
+insert into public.group_members (group_id, user_id, role)
+select p.group_id, p.id, 'member'
+from public.profiles p
+where p.group_id is not null
+on conflict (group_id, user_id) do nothing;
+
+do $$
+declare r record; v_pid uuid;
+begin
+  for r in select id from public.profiles loop
+    if not exists (select 1 from public.groups g where g.is_personal and g.owner_id = r.id) then
+      insert into public.groups (name, invite_code, is_personal, owner_id)
+      values ('Personal', upper(substr(md5(random()::text || r.id::text), 1, 8)), true, r.id)
+      returning id into v_pid;
+      insert into public.group_members (group_id, user_id, role)
+      values (v_pid, r.id, 'owner')
+      on conflict (group_id, user_id) do nothing;
+    end if;
+  end loop;
+end $$;
+
+-- ─── Multi-group Phase 3: migrate in-group private items → Personal space ─────
+-- The in-group Group/Personal toggle is gone; a member's private tasks/events
+-- now live in their own Personal space (a solo group). Move every still-private
+-- row into its creator's Personal space and clear is_private (the Personal space
+-- itself provides the privacy). Re-assign moved tasks to the owner so they sit
+-- under the right person in that solo space. Idempotent: once moved, rows are no
+-- longer is_private, so a second run is a no-op. Run AFTER the Phase 1 backfill
+-- (every account must already have a Personal space).
+
+update public.tasks t
+set group_id    = pg.id,
+    assigned_to = t.created_by,
+    is_private  = false
+from public.groups pg
+where t.is_private = true
+  and pg.is_personal = true
+  and pg.owner_id = t.created_by
+  and t.group_id <> pg.id;
+
+update public.events e
+set group_id   = pg.id,
+    is_private = false
+from public.groups pg
+where e.is_private = true
+  and pg.is_personal = true
+  and pg.owner_id = e.created_by
+  and e.group_id <> pg.id;
+
+-- ─── Security hardening (audit Batch A) ──────────────────────────────────────
+-- Placed at the end so these override the earlier permissive definitions.
+-- Closes the cross-tenant hole (world-readable groups/invite codes), pins the
+-- root RLS helper's search_path, prevents relocating a task to another group,
+-- and stops notifications being addressed to non-members. NOTE: notes/events
+-- UPDATE intentionally stay group-wide (shared pinning + poll/RSVP fallbacks),
+-- which is an accepted trade-off inside a trusted group.
+
+-- Pin the root-of-trust helper's search_path (definer-hijack hardening).
+create or replace function public.my_group_id()
+returns uuid language sql security definer stable set search_path = public
+as $$ select group_id from public.profiles where id = auth.uid() $$;
+
+-- Membership test (definer → bypasses group_members RLS; no policy recursion).
+create or replace function public.is_member(p_group uuid)
+returns boolean language sql security definer stable set search_path = public
+as $$ select exists (select 1 from public.group_members where group_id = p_group and user_id = auth.uid()) $$;
+grant execute on function public.is_member(uuid) to authenticated;
+
+-- Groups are no longer world-readable. You only see groups you belong to, so
+-- invite codes stop leaking to everyone. Join-by-code still works because
+-- join_group_by_code is security definer and looks the group up itself.
+drop policy if exists "groups_select" on public.groups;
+create policy "groups_select" on public.groups
+  for select to authenticated using (public.is_member(id));
+
+-- Tasks UPDATE: add an explicit WITH CHECK so the resulting row must stay in
+-- your group and on an allowed owner — prevents moving a task into another
+-- group. (Claim/grab/baton/postpone all still satisfy this.)
+drop policy if exists "tasks_update" on public.tasks;
+create policy "tasks_update" on public.tasks
+  for update using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  ) with check (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
+
+-- Notifications: you may only create them for members of your active group
+-- (was: any user_id at all).
+drop policy if exists "notifications_insert" on public.notifications;
+create policy "notifications_insert" on public.notifications
+  for insert with check (
+    group_id = public.my_group_id()
+    and user_id in (select user_id from public.group_members where group_id = public.my_group_id())
+  );
+
+-- ─── Indexes (audit Batch C) ─────────────────────────────────────────────────
+-- group_id is filtered on every screen load, every RLS check, and every realtime
+-- change — but the hot tables lacked an index on it. Composite with the usual
+-- sort/filter column so the order can be index-served too.
+create index if not exists tasks_group_idx     on public.tasks    (group_id, created_at desc);
+create index if not exists tasks_assigned_idx   on public.tasks    (assigned_to);
+create index if not exists events_group_idx     on public.events   (group_id, date);
+create index if not exists notes_group_idx      on public.notes    (group_id, created_at desc);
+create index if not exists profiles_group_idx   on public.profiles (group_id);
+-- Reply lookups filter this JSONB expression; index it so opening a note's
+-- thread doesn't full-scan the (photo-heavy) notes table.
+create index if not exists notes_reply_to_idx   on public.notes    ((payload->>'reply_to'));
+
+-- ─── Security hardening (audit Cycle 2 — Batch A) ────────────────────────────
+-- Second audit pass. Closes direct-insert spoofing on groups/group_members,
+-- adds the missing WITH CHECKs that let a member relocate a note/event to
+-- another group, keeps "private" items out of shared groups (so they can't
+-- leak via realtime, which ignores per-row RLS), tightens two legacy insert
+-- policies, and narrows function EXECUTE grants from the implicit PUBLIC.
+
+-- groups: ALL creation goes through create_group() / handle_new_user (both
+-- SECURITY DEFINER, so they bypass RLS). Block direct client inserts entirely
+-- — `with check (true)` previously let a member forge a group row with someone
+-- else's owner_id or a squatted invite_code.
+drop policy if exists "groups_insert" on public.groups;
+create policy "groups_insert" on public.groups
+  for insert to authenticated with check (false);
+
+-- group_members: a member could self-insert with role='owner'. Pin direct
+-- inserts to role='member'; 'owner' is only ever set by create_group (definer).
+drop policy if exists "group_members_insert" on public.group_members;
+create policy "group_members_insert" on public.group_members
+  for insert with check (
+    user_id = auth.uid()
+    and role = 'member'
+    and coalesce((select g.is_personal from public.groups g where g.id = group_id), false) = false
+  );
+
+-- notes / events UPDATE are group-wide on purpose (shared pinning + poll/RSVP
+-- fallbacks) but had NO with-check, so a member could relocate a note/event
+-- into a different group they belong to. Pin the group post-update without
+-- restricting which other columns may change.
+drop policy if exists "notes_update" on public.notes;
+create policy "notes_update" on public.notes
+  for update using (group_id = public.my_group_id())
+  with check (group_id = public.my_group_id());
+drop policy if exists "events_update" on public.events;
+create policy "events_update" on public.events
+  for update using (group_id = public.my_group_id())
+  with check (group_id = public.my_group_id());
+
+-- Keep "private" items out of SHARED groups. Realtime (postgres_changes) does
+-- not apply per-row RLS — only the channel's group filter — so a private task/
+-- event sitting in a shared group would broadcast its contents to every member.
+-- The in-group private toggle was removed in Phase 3; enforce it in the DB too.
+drop policy if exists "tasks_insert" on public.tasks;
+create policy "tasks_insert" on public.tasks
+  for insert with check (
+    group_id = public.my_group_id() and created_by = auth.uid()
+    and (
+      is_private is not true
+      or exists (select 1 from public.groups g where g.id = group_id and g.is_personal)
+    )
+  );
+drop policy if exists "events_insert" on public.events;
+create policy "events_insert" on public.events
+  for insert with check (
+    group_id = public.my_group_id() and created_by = auth.uid()
+    and (
+      is_private is not true
+      or exists (select 1 from public.groups g where g.id = group_id and g.is_personal)
+    )
+  );
+
+-- Legacy insert policies: also require the referenced parent row to live in
+-- your group (defence in depth; previously leaned on RLS returning NULL for
+-- out-of-group ids).
+drop policy if exists "note_comments_insert" on public.note_comments;
+create policy "note_comments_insert" on public.note_comments
+  for insert with check (
+    group_id = public.my_group_id() and created_by = auth.uid()
+    and exists (select 1 from public.notes n where n.id = note_id and n.group_id = public.my_group_id())
+  );
+drop policy if exists "task_suggestions_insert" on public.task_suggestions;
+create policy "task_suggestions_insert" on public.task_suggestions
+  for insert with check (
+    group_id = public.my_group_id()
+    and suggested_by = auth.uid()
+    and exists (
+      select 1 from public.tasks t
+      where t.id = task_id and t.group_id = public.my_group_id() and t.created_by <> auth.uid()
+    )
+  );
+
+-- Narrow EXECUTE from the implicit PUBLIC grant (which also lets the anon role
+-- call them) to authenticated only. They already raise on a null auth.uid(),
+-- so this just shrinks the surface. Resolve each function's ACTUAL signature
+-- from the catalog so this never breaks if a param type differs from this file.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in ('set_event_rsvp', 'vote_on_poll', 'respond_baton', 'respawn_recurring_task')
+  loop
+    execute format('revoke execute on function %s from public', r.sig);
+    execute format('grant execute on function %s to authenticated', r.sig);
+  end loop;
+end $$;
+
+-- ─── Indexes (audit Cycle 2 — Batch C) ───────────────────────────────────────
+-- Partial index matching respawn_recurring_task's duplicate guard (group_id +
+-- due_date over open recurring rows), so checking off a recurring chore doesn't
+-- residual-scan the group's tasks. And drop the low-selectivity boolean indexes.
+create index if not exists tasks_recur_dedupe_idx
+  on public.tasks (group_id, due_date)
+  where completed = false and recurrence is not null;
+drop index if exists public.tasks_is_private_idx;
+drop index if exists public.events_is_private_idx;
+
+-- ─── Security + realtime + indexes (audit Cycle 3) ───────────────────────────
+-- Closes gaps this cycle found in the cycle-2 fixes and new issues.
+
+-- (1) Keep "private" items out of shared groups on UPDATE too, not just INSERT.
+--     Cycle 2 only guarded INSERT, so a member could flip is_private=true on a
+--     shared-group task/event; realtime (which ignores per-row RLS) would then
+--     broadcast its contents to every co-member. Also switch the INSERT guards
+--     to coalesce(is_personal,false) so a NULL flag can't wrongly reject a
+--     legit private insert into a personal space.
+drop policy if exists "tasks_insert" on public.tasks;
+create policy "tasks_insert" on public.tasks
+  for insert with check (
+    group_id = public.my_group_id() and created_by = auth.uid()
+    and (is_private is not true
+         or exists (select 1 from public.groups g where g.id = group_id and coalesce(g.is_personal, false)))
+  );
+drop policy if exists "tasks_update" on public.tasks;
+create policy "tasks_update" on public.tasks
+  for update using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  ) with check (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+    and (is_private is not true
+         or exists (select 1 from public.groups g where g.id = group_id and coalesce(g.is_personal, false)))
+  );
+drop policy if exists "events_insert" on public.events;
+create policy "events_insert" on public.events
+  for insert with check (
+    group_id = public.my_group_id() and created_by = auth.uid()
+    and (is_private is not true
+         or exists (select 1 from public.groups g where g.id = group_id and coalesce(g.is_personal, false)))
+  );
+drop policy if exists "events_update" on public.events;
+create policy "events_update" on public.events
+  for update using (group_id = public.my_group_id())
+  with check (
+    group_id = public.my_group_id()
+    and (is_private is not true
+         or exists (select 1 from public.groups g where g.id = group_id and coalesce(g.is_personal, false)))
+  );
+
+-- (2) Legacy note_comments_update was USING-only; add the WITH CHECK so an owner
+--     can't relocate a comment into another group (same class fixed elsewhere).
+drop policy if exists "note_comments_update" on public.note_comments;
+create policy "note_comments_update" on public.note_comments
+  for update using (created_by = auth.uid())
+  with check (created_by = auth.uid() and group_id = public.my_group_id());
+
+-- (3) REPLICA IDENTITY FULL on every published table. With the default identity,
+--     a DELETE's WAL record carries only the primary key, so Supabase Realtime
+--     can't evaluate the group_id/user_id channel filter against it and
+--     broadcasts the delete (row id + timing) to EVERY tenant. FULL puts the
+--     old row (incl. group_id) in the record so the existing filters apply.
+alter table public.tasks               replica identity full;
+alter table public.events              replica identity full;
+alter table public.notes               replica identity full;
+alter table public.notifications       replica identity full;
+alter table public.task_suggestions    replica identity full;
+alter table public.spaces              replica identity full;
+alter table public.space_items         replica identity full;
+alter table public.shared_lists        replica identity full;
+alter table public.shared_list_items   replica identity full;
+alter table public.shared_list_activity replica identity full;
+
+-- (4) group_id indexes on three group-scoped tables that were loaded by group_id
+--     and RLS-checked on group_id on every access + realtime event, but only had
+--     indexes on their parent key → sequential scans that grow with total rows.
+create index if not exists shared_list_items_group_idx on public.shared_list_items (group_id);
+create index if not exists space_items_group_idx       on public.space_items       (group_id);
+create index if not exists task_suggestions_group_idx  on public.task_suggestions  (group_id, created_at);

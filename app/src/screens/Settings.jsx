@@ -5,7 +5,7 @@ import { KinnektLogo, EmojiInput } from '../Components';
 import { PALETTE as COLORS } from '../lib/colors';
 import { VERSION_LABEL } from '../lib/build';
 
-export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) {
+export function SettingsScreen({ profile, onBack, onProfileUpdate, onSwitchSpace, onSignOut }) {
   const theme = React.useContext(ThemeContext);
   // Theme is staged locally and only applied on Save (mirrors the Profile
   // section). Auto is the default; the chips just set this pending value.
@@ -25,6 +25,14 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
   const [members, setMembers] = React.useState([]); // full group roster
   const groupMenuRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
+  // Multi-space switcher: every group/Personal the user belongs to.
+  const [spaces, setSpaces] = React.useState([]); // [{ id, name, is_personal }]
+  const [creatingGroup, setCreatingGroup] = React.useState(false);
+  const [joiningGroup, setJoiningGroup] = React.useState(false);
+  const [newGroupName, setNewGroupName] = React.useState('');
+  const [joinCode, setJoinCode] = React.useState('');
+  const [spaceBusy, setSpaceBusy] = React.useState(false);
+  const [spaceErr, setSpaceErr] = React.useState('');
 
   // Load the full group roster — powers the Members list below, plus the
   // "color already taken" map on the swatch picker (which excludes self).
@@ -58,6 +66,48 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
     })();
     return () => { cancelled = true; };
   }, [profile?.group_id, profile?.id]);
+
+  // Every space (group + Personal) this user belongs to, for the switcher.
+  const loadSpaces = React.useCallback(async () => {
+    if (!profile?.id) return;
+    const { data } = await supabase
+      .from('group_members')
+      .select('group_id, groups(id, name, is_personal)')
+      .eq('user_id', profile.id);
+    const list = (data || []).map(r => r.groups).filter(Boolean);
+    // Personal last; groups by name.
+    list.sort((a, b) => (a.is_personal === b.is_personal)
+      ? (a.name || '').localeCompare(b.name || '')
+      : (a.is_personal ? 1 : -1));
+    setSpaces(list);
+  }, [profile?.id]);
+  React.useEffect(() => { loadSpaces(); }, [loadSpaces, profile?.group_id]);
+
+  const createGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name || spaceBusy) return;
+    setSpaceBusy(true); setSpaceErr('');
+    const { data, error } = await supabase.rpc('create_group', { p_name: name });
+    setSpaceBusy(false);
+    if (error || !data) { setSpaceErr(error?.message || 'Could not create group.'); return; }
+    onSwitchSpace?.(data.id);
+  };
+  const joinGroup = async () => {
+    const code = joinCode.trim();
+    if (!code || spaceBusy) return;
+    setSpaceBusy(true); setSpaceErr('');
+    const { data, error } = await supabase.rpc('join_group_by_code', { p_code: code });
+    setSpaceBusy(false);
+    if (error) { setSpaceErr(error.message); return; }
+    if (!data) { setSpaceErr('Invalid invite code.'); return; }
+    onSwitchSpace?.(data.id);
+  };
+
+  // Shared inline styles for the space switcher panel.
+  const spaceInput = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--surface-glass)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'var(--font-main)' };
+  const spaceMiniBtn = { width: 'auto', padding: '7px 14px', fontSize: 12 };
+  const spaceLinkBtn = { background: 'transparent', border: 'none', color: 'var(--kinnekt-purple)', fontFamily: 'var(--font-main)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: 0 };
+  const spaceRowBtn = (current) => ({ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', fontSize: 14, background: 'transparent', border: 'none', cursor: current ? 'default' : 'pointer', color: 'var(--text-primary)', fontFamily: 'var(--font-main)' });
 
   React.useEffect(() => {
     if (!groupMenuOpen) return;
@@ -327,49 +377,78 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                     <div
                       onClick={(e) => e.stopPropagation()}
                       style={{
-                        position: 'absolute',
-                        top: 'calc(100% - 4px)',
-                        left: 14, right: 14,
-                        background: 'var(--surface-glass-strong)',
-                        backdropFilter: 'blur(22px)',
-                        WebkitBackdropFilter: 'blur(22px)',
-                        border: '1px solid var(--border-glass)',
-                        borderRadius: 'var(--r-lg)',
-                        boxShadow: 'var(--shadow-large)',
-                        padding: '8px 0',
-                        zIndex: 50,
+                        // Expand INLINE (not an absolute overlay): the parent
+                        // .set-group has overflow:hidden, which clipped a
+                        // floating dropdown and hid Personal Connect at the
+                        // bottom. Growing the card inline lets the page scroll
+                        // to everything instead.
+                        marginTop: 12,
+                        marginLeft: -16,
+                        marginRight: -16,
+                        marginBottom: -14,
+                        borderTop: '1px solid var(--border-soft)',
+                        background: 'var(--surface-glass-soft)',
+                        padding: '8px 2px',
                       }}
                     >
-                      <div style={{
-                        padding: '8px 14px 6px',
-                        fontFamily: 'var(--font-main)',
-                        fontSize: 10,
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.14em',
-                        color: 'var(--text-muted)',
-                      }}>Your groups</div>
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        padding: '12px 14px',
-                        fontSize: 14,
-                      }}>
-                        <span className="dot" style={{ '--c': me.hex, width: 12, height: 12 }} />
-                        <span style={{ flex: 1, fontWeight: 600 }}>{group.name}</span>
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>current</span>
+                      {/* GROUP CONNECT — your shared groups + join/create. */}
+                      <div style={{ padding: '8px 14px 6px', fontFamily: 'var(--font-main)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--text-muted)' }}>Group connect</div>
+                      {spaces.filter(s => !s.is_personal).map(s => {
+                        const current = s.id === profile?.group_id;
+                        return (
+                          <button key={s.id} onClick={() => { if (!current) onSwitchSpace?.(s.id); }} style={spaceRowBtn(current)}>
+                            <span className="dot" style={{ '--c': current ? me.hex : 'var(--text-muted)', width: 12, height: 12 }} />
+                            <span style={{ flex: 1, fontWeight: 600 }}>{s.name}</span>
+                            {current && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>current</span>}
+                          </button>
+                        );
+                      })}
+                      {spaces.filter(s => !s.is_personal).length === 0 && (
+                        <div style={{ padding: '6px 14px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>No groups yet</div>
+                      )}
+
+                      <div style={{ borderTop: '1px solid var(--border-soft)', marginTop: 4, paddingTop: 6 }}>
+                        {creatingGroup ? (
+                          <div style={{ padding: '6px 14px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <input value={newGroupName} onChange={e => { setNewGroupName(e.target.value); setSpaceErr(''); }} placeholder="New group name" onKeyDown={e => e.key === 'Enter' && createGroup()} style={spaceInput} />
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button className="fb-btn solid" disabled={spaceBusy || !newGroupName.trim()} onClick={createGroup} style={spaceMiniBtn}>{spaceBusy ? '…' : 'Create'}</button>
+                              <button className="fb-btn" onClick={() => { setCreatingGroup(false); setNewGroupName(''); setSpaceErr(''); }} style={spaceMiniBtn}>Cancel</button>
+                            </div>
+                          </div>
+                        ) : joiningGroup ? (
+                          <div style={{ padding: '6px 14px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <input value={joinCode} onChange={e => { setJoinCode(e.target.value.toUpperCase()); setSpaceErr(''); }} placeholder="Invite code" onKeyDown={e => e.key === 'Enter' && joinGroup()} style={{ ...spaceInput, textTransform: 'uppercase', letterSpacing: '0.12em', fontFamily: 'JetBrains Mono, monospace' }} />
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button className="fb-btn solid" disabled={spaceBusy || !joinCode.trim()} onClick={joinGroup} style={spaceMiniBtn}>{spaceBusy ? '…' : 'Join'}</button>
+                              <button className="fb-btn" onClick={() => { setJoiningGroup(false); setJoinCode(''); setSpaceErr(''); }} style={spaceMiniBtn}>Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 16, padding: '2px 14px 8px' }}>
+                            <button onClick={() => { setCreatingGroup(true); setJoiningGroup(false); setSpaceErr(''); }} style={spaceLinkBtn}>+ Create group</button>
+                            <button onClick={() => { setJoiningGroup(true); setCreatingGroup(false); setSpaceErr(''); }} style={spaceLinkBtn}>Join with code</button>
+                          </div>
+                        )}
+                        {spaceErr && <div style={{ padding: '0 14px 8px', fontSize: 12, color: 'var(--kinnekt-coral)' }}>{spaceErr}</div>}
                       </div>
-                      <div style={{
-                        padding: '12px 14px 14px',
-                        fontSize: 12,
-                        color: 'var(--text-muted)',
-                        fontStyle: 'italic',
-                        borderTop: '1px solid var(--border-soft)',
-                        marginTop: 4,
-                      }}>
-                        No other groups available
-                      </div>
+
+                      {/* PERSONAL CONNECT — your own private space. */}
+                      {(() => {
+                        const personal = spaces.find(s => s.is_personal);
+                        if (!personal) return null;
+                        const current = personal.id === profile?.group_id;
+                        return (
+                          <div style={{ borderTop: '1px solid var(--border-soft)', marginTop: 2, paddingTop: 6 }}>
+                            <div style={{ padding: '8px 14px 6px', fontFamily: 'var(--font-main)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--text-muted)' }}>Personal connect</div>
+                            <button onClick={() => { if (!current) onSwitchSpace?.(personal.id); }} style={spaceRowBtn(current)}>
+                              <span style={{ fontSize: 15 }}>🔒</span>
+                              <span style={{ flex: 1, fontWeight: 600 }}>Personal</span>
+                              {current && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>current</span>}
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -409,18 +488,22 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSignOut }) 
                     })}
                   </div>
                 </div>
-                <div className="set-row" style={{ alignItems: 'center' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <span className="lbl">Invite code</span>
-                    <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 20, letterSpacing: '0.12em', fontWeight: 600, marginTop: 2 }}>
-                      {group.invite_code}
+                {/* A Personal space is solo and can never be shared, so it has
+                    no invite code. */}
+                {!group.is_personal && (
+                  <div className="set-row" style={{ alignItems: 'center' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span className="lbl">Invite code</span>
+                      <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 20, letterSpacing: '0.12em', fontWeight: 600, marginTop: 2 }}>
+                        {group.invite_code}
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2 }}>Share this code to invite family members</div>
                     </div>
-                    <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2 }}>Share this code to invite family members</div>
+                    <button className="copy-btn" onClick={copyCode}>
+                      {copied ? '✓ copied' : 'copy'}
+                    </button>
                   </div>
-                  <button className="copy-btn" onClick={copyCode}>
-                    {copied ? '✓ copied' : 'copy'}
-                  </button>
-                </div>
+                )}
               </>
             ) : (
               <div className="set-row">

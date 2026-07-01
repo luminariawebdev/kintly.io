@@ -46,8 +46,18 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<ErrorBoundary><App /></ErrorBoundary>);
+// Guard against duplicate roots. If the dev server hot-reloads this entry
+// module, calling createRoot() again on the same container stacks multiple
+// React trees into one DOM node — they fight over the same state and the UI
+// stops responding to updates (e.g. the screen never advances after sign-in,
+// looking like a multi-minute "Signing in…" hang). Cache the root on the
+// container and reuse it so there's always exactly one. (No effect in
+// production, where this module runs once.)
+const container = document.getElementById('root');
+if (!container._reactRoot) {
+  container._reactRoot = ReactDOM.createRoot(container);
+}
+container._reactRoot.render(<ErrorBoundary><App /></ErrorBoundary>);
 
 // PWA: register the network-first service worker (public/sw.js).
 // Skipped on localhost so dev never fights a cache.

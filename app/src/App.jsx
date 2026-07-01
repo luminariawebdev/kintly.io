@@ -108,7 +108,7 @@ export function App() {
     };
   }, [screen]);
 
-  const loadProfile = React.useCallback(async (userId) => {
+  const loadProfile = React.useCallback(async (userId, opts = {}) => {
     setProfileErr('');
     const { data: prof, error: profErr } = await supabase
       .from('profiles')
@@ -117,8 +117,25 @@ export function App() {
       .maybeSingle();
 
     if (profErr) {
+      // Distinguish a dead/expired token from a transient network error. Only a
+      // real auth failure should destroy the session; a dropped packet must NOT
+      // hard-sign-out a valid user (a PWA hits this constantly on resume).
+      const isAuthErr = profErr.code === 'PGRST301'
+        || /jwt|token|not authenticated|401/i.test(profErr.message || '');
+      if (isAuthErr) {
+        await supabase.auth.signOut().catch(() => {});
+        setProfile(null);
+        setScreen('auth');
+        return;
+      }
+      // Transient: retry once, then fall back to the login screen WITHOUT
+      // signing out, so a reload/retry recovers the still-valid session.
+      if (!opts._retried) {
+        await new Promise(r => setTimeout(r, 800));
+        return loadProfile(userId, { ...opts, _retried: true });
+      }
       setProfileErr(profErr.message);
-      setScreen('group-setup');
+      setScreen('auth');
       return;
     }
 
@@ -127,35 +144,62 @@ export function App() {
       await new Promise(r => setTimeout(r, 1000));
       const { data: prof2 } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
       if (!prof2) { setScreen('group-setup'); return; }
-      return loadProfile(userId);
+      return loadProfile(userId, opts);
     }
 
     let fullProfile = prof;
     if (prof.group_id) {
-      const { data: grp } = await supabase.from('groups').select('id, name, invite_code').eq('id', prof.group_id).maybeSingle();
+      const { data: grp } = await supabase.from('groups').select('id, name, invite_code, is_personal').eq('id', prof.group_id).maybeSingle();
       fullProfile = { ...prof, group: grp || null };
     }
 
     setProfile(fullProfile);
-    // Routing: no group yet → group setup. In a group but hasn't done the
-    // name/color/avatar prompt → profile setup. Otherwise → the app.
+
+    // How many SHARED (non-personal) groups does this user belong to? Drives
+    // the login picker. Falls back to 0 if group_members isn't migrated yet.
+    let sharedCount = 0;
+    try {
+      const { data: mem } = await supabase
+        .from('group_members')
+        .select('group_id, groups(is_personal)')
+        .eq('user_id', userId);
+      sharedCount = (mem || []).filter(r => r.groups && !r.groups.is_personal).length;
+    } catch { /* pre-migration → treat as single-group */ }
+
+    // Routing: no active space → space picker / onset. In a space but hasn't
+    // done the name/color/avatar prompt → profile setup. At login with 2+
+    // shared groups → the picker (choose which to enter). Otherwise → the app.
     // `'profile_complete' in prof` guards the case where the column hasn't
-    // been migrated yet: if it's absent we skip the prompt (old behavior)
-    // rather than bouncing every existing member into setup.
+    // been migrated yet: if absent we skip the prompt (old behavior).
     const hasFlag = 'profile_complete' in fullProfile;
-    if (!fullProfile.group_id) setScreen('group-setup');
-    else if (hasFlag && fullProfile.profile_complete !== true) setScreen('profile-setup');
-    else setScreen('app');
+    let target;
+    if (!fullProfile.group_id) target = 'group-setup';
+    else if (hasFlag && fullProfile.profile_complete !== true) target = 'profile-setup';
+    else if (opts.atLogin && sharedCount >= 2) target = 'group-setup';
+    else target = 'app';
+    setScreen(target);
   }, []);
 
   React.useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
+    // If the user arrived via a password-reset link, the URL hash carries a
+    // recovery token. Let the PASSWORD_RECOVERY event (below) own routing and
+    // do NOT run normal boot routing — it would race and clobber the reset
+    // screen, dropping the user into the app instead of the password form.
+    const isRecovery = typeof window !== 'undefined' && /type=recovery/.test(window.location.hash || '');
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (isRecovery) return;
+        if (!session) { setScreen('auth'); return; }
+        // Route from the cached session. A dead/expired token is detected by the
+        // first real profiles query in loadProfile (which 401s → signs out),
+        // so we DON'T pay an extra getUser() round-trip on every launch or
+        // hard-sign-out a valid user on a transient network blip at boot.
+        await loadProfile(session.user.id, { atLogin: true });
+      } catch {
         setScreen('auth');
-      } else {
-        loadProfile(session.user.id);
       }
-    });
+    })();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') {
@@ -164,11 +208,15 @@ export function App() {
         setScreen('reset-pw');
         return;
       }
-      if (!session) {
+      // Only react to sign-OUT here. Sign-IN routing is driven explicitly by
+      // the login button (handleSignedIn) and the initial getSession() call.
+      // Awaiting Supabase queries INSIDE this callback deadlocks on gotrue's
+      // auth lock (the sign-in hangs on "Signing in…"); and routing on every
+      // SIGNED_IN would also bounce an active user to the picker on a
+      // background token refresh. So we deliberately do nothing on SIGNED_IN.
+      if (event === 'SIGNED_OUT' || !session) {
         setScreen('auth');
         setProfile(null);
-      } else if (event === 'SIGNED_IN') {
-        loadProfile(session.user.id);
       }
     });
 
@@ -186,7 +234,7 @@ export function App() {
     if (!prof) return;
     let fullProfile = prof;
     if (prof.group_id) {
-      const { data: grp } = await supabase.from('groups').select('id, name, invite_code').eq('id', prof.group_id).maybeSingle();
+      const { data: grp } = await supabase.from('groups').select('id, name, invite_code, is_personal').eq('id', prof.group_id).maybeSingle();
       fullProfile = { ...prof, group: grp || null };
     }
     setProfile(fullProfile);
@@ -197,14 +245,59 @@ export function App() {
     setScreen('app');
   }, []);
 
+  // Drives routing right after a successful email/password sign-in. Runs in the
+  // LoginForm submit chain (NOT inside onAuthStateChange), so it can safely
+  // await Supabase queries without deadlocking on the auth lock — which is what
+  // left the button stuck on "Signing in…". signInWithPassword has already
+  // resolved (and released the lock) by the time this runs.
+  const handleSignedIn = React.useCallback(async (userId) => {
+    let id = userId;
+    if (!id) {
+      const { data: { session } } = await supabase.auth.getSession();
+      id = session?.user?.id;
+    }
+    if (id) await loadProfile(id, { atLogin: true });
+    else setScreen('auth');
+  }, [loadProfile]);
+
+  // Enter a space (group OR Personal) — used by the login picker AND the
+  // Settings switcher. profiles.group_id is the active space; the WITH CHECK on
+  // profiles_update ensures you can only point at a group you belong to. Routing
+  // goes through loadProfile (no atLogin) so a brand-new account still lands in
+  // profile setup; everyone else drops straight into the app. MainApp's key is
+  // profile.group_id, so it remounts clean for the new space.
+  const enterSpace = React.useCallback(async (groupId) => {
+    if (!groupId) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    // .select() back the row so a silent 0-row update (e.g. RLS rejecting a
+    // group you're no longer a member of) is caught instead of looking "stuck".
+    const { data, error } = await supabase
+      .from('profiles').update({ group_id: groupId }).eq('id', session.user.id).select('group_id').maybeSingle();
+    if (error || !data) {
+      alert('Could not switch space' + (error ? ': ' + error.message : ' — you may no longer be a member of it.'));
+      return;
+    }
+    try {
+      await loadProfile(session.user.id);
+    } catch {
+      // Active space changed but the reload failed — hard reload to resync
+      // rather than leave the UI on the old space.
+      window.location.reload();
+    }
+  }, [loadProfile]);
+
   const screens = (
     <>
       {screen === 'loading' && <LoadingScreen />}
       {(screen === 'auth' || screen === 'group-setup') && (
         <AuthScreen
+          key={screen}
           initialStep={screen === 'group-setup' ? 'group-setup' : 'login'}
-          onComplete={refreshProfile}
+          profile={profile}
+          onComplete={handleSignedIn}
           onGroupReady={onGroupReady}
+          onEnterSpace={enterSpace}
         />
       )}
       {screen === 'reset-pw' && (
@@ -224,6 +317,7 @@ export function App() {
       )}
       {screen === 'app' && (
         <MainApp
+          key={profile?.group_id}
           profile={profile}
           onSettings={() => setScreen('settings')}
           onProfileUpdate={refreshProfile}
@@ -234,6 +328,7 @@ export function App() {
           profile={profile}
           onBack={() => setScreen('app')}
           onProfileUpdate={refreshProfile}
+          onSwitchSpace={enterSpace}
           onSignOut={() => { setScreen('auth'); setProfile(null); }}
         />
       )}
