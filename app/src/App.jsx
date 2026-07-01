@@ -56,6 +56,14 @@ export function App() {
   });
   const [resolved, setResolved] = React.useState(() => resolveTheme(themePref));
   const isMobile = useIsMobile();
+  // Desktop-only: preview inside the iPhone bezel ('ios') or full-width ('full').
+  // Persisted so the choice sticks across reloads. Ignored on real phones/PWA.
+  const [desktopView, setDesktopView] = React.useState(() => {
+    try { return localStorage.getItem('kinnekt:desktopView') || 'ios'; } catch { return 'ios'; }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem('kinnekt:desktopView', desktopView); } catch {}
+  }, [desktopView]);
 
   // Re-resolve on preference change. For 'auto' the theme is on a clock
   // schedule, so it has to flip at the 7am / 7pm boundaries while the app is
@@ -134,17 +142,25 @@ export function App() {
         await new Promise(r => setTimeout(r, 800));
         return loadProfile(userId, { ...opts, _retried: true });
       }
-      setProfileErr(profErr.message);
-      setScreen('auth');
+      // Still failing but the session is VALID — don't dump the user on a blank
+      // login form (they'd re-enter their password and hit the same wall in a
+      // loop). Show a retry screen that surfaces the error and re-runs the load.
+      setProfileErr(profErr.message || 'Could not reach the server.');
+      setScreen('profile-error');
       return;
     }
 
     if (!prof) {
-      // Profile doesn't exist yet — retry once after a short delay
+      // Profile doesn't exist yet — retry once after a short delay.
       await new Promise(r => setTimeout(r, 1000));
-      const { data: prof2 } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-      if (!prof2) { setScreen('group-setup'); return; }
-      return loadProfile(userId, opts);
+      const { data: prof2, error: prof2Err } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+      if (prof2) return loadProfile(userId, opts);
+      // A transient read error must NOT be mistaken for "no profile" — that
+      // would push a real, provisioned user into group-setup (risking a
+      // duplicate group). Retry once before concluding the profile is absent.
+      if (prof2Err && !opts._retried) return loadProfile(userId, { ...opts, _retried: true });
+      setScreen('group-setup');
+      return;
     }
 
     let fullProfile = prof;
@@ -186,6 +202,12 @@ export function App() {
     // do NOT run normal boot routing — it would race and clobber the reset
     // screen, dropping the user into the app instead of the password form.
     const isRecovery = typeof window !== 'undefined' && /type=recovery/.test(window.location.hash || '');
+    // Boot watchdog: a cold launch offline (cached token needs refreshing) can
+    // hang getSession()/loadProfile with no error, leaving a static "Loading…"
+    // and no recovery but a force-quit. Fall through to the login screen.
+    const bootTimer = setTimeout(() => {
+      setScreen(prev => (prev === 'loading' ? 'auth' : prev));
+    }, 8000);
     (async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -198,6 +220,8 @@ export function App() {
         await loadProfile(session.user.id, { atLogin: true });
       } catch {
         setScreen('auth');
+      } finally {
+        clearTimeout(bootTimer);
       }
     })();
 
@@ -220,7 +244,7 @@ export function App() {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => { clearTimeout(bootTimer); subscription.unsubscribe(); };
   }, [loadProfile]);
 
   const refreshProfile = React.useCallback(async () => {
@@ -303,11 +327,31 @@ export function App() {
       {screen === 'reset-pw' && (
         <ResetPasswordScreen
           onDone={async () => {
+            // Strip the recovery token from the URL hash. Left in place, a later
+            // reload re-triggers the boot recovery-guard and traps the user back
+            // on this screen (or a blank one) instead of the app.
+            try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch {}
             const { data: { session } } = await supabase.auth.getSession();
             if (session) loadProfile(session.user.id);
             else setScreen('auth');
           }}
         />
+      )}
+      {screen === 'profile-error' && (
+        <div className="fb-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div style={{ textAlign: 'center', maxWidth: 300 }}>
+            <div className="marklogo" style={{ margin: '0 auto 16px' }} />
+            <div style={{ fontSize: 15, opacity: 0.85, marginBottom: 6 }}>Couldn’t reach the server.</div>
+            <div style={{ fontSize: 12, opacity: 0.5, marginBottom: 18, lineHeight: 1.4 }}>
+              Your connection may be down — you’re still signed in.
+            </div>
+            <button
+              type="button"
+              onClick={() => { setScreen('loading'); handleSignedIn(); }}
+              style={{ padding: '10px 22px', borderRadius: 999, border: 'none', background: 'var(--kinnekt-purple, #6A4DFF)', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+            >Try again</button>
+          </div>
+        </div>
       )}
       {screen === 'profile-setup' && profile && (
         <ProfileSetupScreen
@@ -341,16 +385,39 @@ export function App() {
         // Real phone / installed PWA: render edge-to-edge, no mockup frame.
         <div className="app-mobile-root">{screens}</div>
       ) : (
-        // Desktop: show the app inside the iPhone mockup for preview.
-        <div className="app-shell" style={{
-          minHeight: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 24,
-        }}>
-          <IOSDevice width={FRAME_W} height={FRAME_H}>{screens}</IOSDevice>
-        </div>
+        // Desktop: toggle between the iPhone bezel preview and full-width.
+        <>
+          <button
+            type="button"
+            onClick={() => setDesktopView(v => (v === 'ios' ? 'full' : 'ios'))}
+            title={desktopView === 'ios' ? 'Switch to desktop (full-width) view' : 'Switch to iPhone preview'}
+            style={{
+              position: 'fixed', top: 16, right: 16, zIndex: 2000,
+              padding: '8px 14px', borderRadius: 999,
+              border: '1px solid var(--border-glass, rgba(0,0,0,0.12))',
+              background: 'var(--surface-glass-strong, #fff)',
+              color: 'var(--text-primary, #222)',
+              fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.14)',
+              backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+            }}
+          >
+            {desktopView === 'ios' ? '🖥️ Desktop view' : '📱 iPhone view'}
+          </button>
+          {desktopView === 'ios' ? (
+            <div className="app-shell" style={{
+              minHeight: '100vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 24,
+            }}>
+              <IOSDevice width={FRAME_W} height={FRAME_H}>{screens}</IOSDevice>
+            </div>
+          ) : (
+            <div className="app-mobile-root">{screens}</div>
+          )}
+        </>
       )}
     </ThemeContext.Provider>
   );

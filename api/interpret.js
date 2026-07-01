@@ -8,36 +8,34 @@
 //
 // Zero dependencies — uses the runtime's built-in fetch.
 
-async function readJson(req) {
-  if (req.body && typeof req.body === 'object') return req.body;
-  if (typeof req.body === 'string') {
-    try { return JSON.parse(req.body); } catch { return {}; }
-  }
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  const raw = Buffer.concat(chunks).toString('utf8');
-  try { return JSON.parse(raw); } catch { return {}; }
-}
+const { readJson, getUser } = require('./_shared');
 
-// Verify the caller is a signed-in Supabase user before we spend API budget.
-// Without this, anyone who finds the URL could loop the endpoint and run up the
-// owner's Anthropic bill. SUPABASE_URL/ANON are public (the anon key already
-// ships in the browser bundle).
-const SUPABASE_URL = 'https://bqdkizavhlpswjtgxdjw.supabase.co';
-const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxZGtpemF2aGxwc3dqdGd4ZGp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3ODQzMDYsImV4cCI6MjA5NDM2MDMwNn0.Oedpsru9CCbKihZ-azAu4Uj2MNOF2HGNRFGFM2f86Fg';
-async function getUser(req) {
-  const h = req.headers['authorization'] || req.headers['Authorization'] || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
-  if (!token) return null;
-  try {
-    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!r.ok) return null;
-    const u = await r.json().catch(() => null);
-    return u && u.id ? u : null;
-  } catch { return null; }
+// The client-supplied context is interpolated straight into the system prompt.
+// Bound it so a caller can't inflate the prompt (token-cost amplification, all
+// billed to the app owner) or push unbounded data at the model.
+function clampContext(ctx) {
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return {};
+  const capArr = (a, n) => (Array.isArray(a) ? a.slice(0, n) : []);
+  const s = (v, n) => (typeof v === 'string' ? v.slice(0, n) : v);
+  return {
+    weekday: s(ctx.weekday, 20), today: s(ctx.today, 40), time: s(ctx.time, 20),
+    timezone: s(ctx.timezone, 60), me: s(ctx.me, 80),
+    members: capArr(ctx.members, 100).map((m) => s(m, 80)),
+    spaces: capArr(ctx.spaces, 100).map((m) => s(m, 80)),
+    // Clamp the FIELDS inside these arrays too (not just array length) — else a
+    // single giant title bypasses the token bound — and drop non-object elements
+    // so buildSystem can't throw on a null (which sanitizeStaged already guards).
+    open_tasks: capArr(ctx.open_tasks, 250).map((t) => (t && typeof t === 'object') ? {
+      id: s(t.id, 64), title: s(t.title, 200), assignee: s(t.assignee, 80),
+      due_date: s(t.due_date, 20), due_time: s(t.due_time, 20),
+    } : null).filter(Boolean),
+    list_items: capArr(ctx.list_items, 250).map((i) => (i && typeof i === 'object') ? {
+      id: s(i.id, 64), title: s(i.title, 200), space: s(i.space, 120),
+    } : null).filter(Boolean),
+    events: capArr(ctx.events, 250).map((e) => (e && typeof e === 'object') ? {
+      title: s(e.title, 200), date: s(e.date, 20),
+    } : null).filter(Boolean),
+  };
 }
 
 function buildSystem(ctx) {
@@ -308,12 +306,14 @@ module.exports = async (req, res) => {
   try {
     const body = await readJson(req);
     const text = body && body.text;
-    const ctx = (body && body.context) || {};
-    if (!text || !String(text).trim()) {
+    const ctx = clampContext(body && body.context);
+    // Reject non-string text outright — String({}) => "[object Object]" would
+    // otherwise sail under the length cap while a huge body was buffered.
+    if (typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ error: 'No text to interpret.' });
       return;
     }
-    if (String(text).length > 4000) {
+    if (text.length > 4000) {
       res.status(413).json({ error: 'That request was too long — try saying a bit less at once.' });
       return;
     }
@@ -335,14 +335,16 @@ module.exports = async (req, res) => {
         system: buildSystem(ctx),
         tools: [stageTool],
         tool_choice: { type: 'tool', name: 'stage_items' },
-        messages: [{ role: 'user', content: String(text) }],
+        messages: [{ role: 'user', content: text }],
       }),
       signal: AbortSignal.timeout(30000),
     });
     const data = await r.json().catch(() => null);
     if (!r.ok) {
-      const msg = (data && data.error && data.error.message) || `Assistant error (${r.status}).`;
-      res.status(502).json({ error: msg });
+      // Log the upstream detail server-side; never relay it — Anthropic's error
+      // strings can disclose billing/quota/account state to the caller.
+      console.error('interpret upstream error:', r.status, data && data.error && data.error.message);
+      res.status(502).json({ error: 'The assistant is unavailable right now — please try again.' });
       return;
     }
     const block = ((data && data.content) || []).find((b) => b.type === 'tool_use' && b.name === 'stage_items');
@@ -352,6 +354,10 @@ module.exports = async (req, res) => {
     res.status(200).json(sanitizeStaged(input, ctx));
   } catch (e) {
     // Don't leak internal error strings (hostnames, stack details) to the client.
+    if (e && e.statusCode === 413) {
+      res.status(413).json({ error: 'That request was too large.' });
+      return;
+    }
     if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
       res.status(504).json({ error: 'The assistant took too long — please try again.' });
       return;

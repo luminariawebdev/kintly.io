@@ -56,7 +56,7 @@ function firstGrapheme(str) {
 // A generous default set covering the common categories. Callers can
 // override via `presets` to scope it (e.g. avatar pickers might lean
 // faces, Space pickers might lean topics).
-export const POPULAR_EMOJIS = [
+const POPULAR_EMOJIS = [
   '✨', '⭐', '❤️', '🔥', '🌟', '🌈', '☀️', '🌙',
   '😀', '😎', '🥰', '🤓', '🥳', '🤩', '🥹', '😴',
   '🦊', '🐻', '🐼', '🐶', '🐱', '🐰', '🐸', '🦄',
@@ -179,15 +179,32 @@ export function Modal({ open, title, onClose, children, footer, compact }) {
     }
   }, [open]);
 
-  // Escape closes the sheet (keyboard / accessibility). No autoFocus — inputs
-  // wait for a user tap so the iOS keyboard doesn't pop the sheet mid-form.
+  // Escape closes the sheet + Tab is trapped inside it (keyboard / accessibility).
+  // No autoFocus — inputs wait for a user tap so the iOS keyboard doesn't pop the
+  // sheet mid-form; the trap only engages once the user actually presses Tab.
   React.useEffect(() => {
     if (!open) return;
     const token = {};
     __modalStack.push(token);
+    const isTopmost = () => __modalStack[__modalStack.length - 1] === token;
+    const focusablesIn = (root) => Array.from(root.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((el) => el.getClientRects().length > 0);
     const onKey = (e) => {
-      // Only the topmost open modal reacts to Escape.
-      if (e.key === 'Escape' && __modalStack[__modalStack.length - 1] === token) onClose?.();
+      if (!isTopmost()) return; // only the topmost open modal reacts
+      if (e.key === 'Escape') { onClose?.(); return; }
+      if (e.key !== 'Tab') return;
+      // Keep focus inside the sheet so keyboard / Switch-Control users can't
+      // Tab into the (visually hidden) background feed and activate it.
+      const sheet = sheetRef.current;
+      if (!sheet) return;
+      const f = focusablesIn(sheet);
+      if (f.length === 0) { e.preventDefault(); return; }
+      const first = f[0], last = f[f.length - 1];
+      const active = document.activeElement;
+      if (!sheet.contains(active)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+      if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
     };
     document.addEventListener('keydown', onKey);
     return () => {
@@ -196,6 +213,17 @@ export function Modal({ open, title, onClose, children, footer, compact }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [open, onClose]);
+
+  // Restore focus to whatever triggered the sheet when it closes. Split from the
+  // Esc/Tab effect (which re-runs when onClose changes) so focus isn't yanked
+  // back mid-open — this runs only when `open` actually toggles.
+  React.useEffect(() => {
+    if (!open) return;
+    const prevFocus = typeof document !== 'undefined' ? document.activeElement : null;
+    return () => {
+      try { if (prevFocus && prevFocus.focus && document.contains(prevFocus)) prevFocus.focus(); } catch { /* noop */ }
+    };
+  }, [open]);
 
   if (!open) return null;
 

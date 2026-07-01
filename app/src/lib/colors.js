@@ -17,3 +17,14 @@ export const PALETTE = [
   { id: 'rose',        hex: '#FF86C8', label: 'Rose' },
   { id: 'black',       hex: '#2D2D2D', label: 'Black' },
 ];
+
+// Legacy ids: picked on the old signup screen, no longer offered, still
+// renderable so those members' dots/chips don't fall through to gray.
+const LEGACY_COLORS = { peach: '#FFC18C', lemon: '#F0E68C', moss: '#C8D685' };
+
+// id → hex render map, derived from PALETTE (single source) + legacy ids, so a
+// hex is never hand-maintained in two files. getColor(id) reads this.
+export const COLOR_MAP = {
+  ...Object.fromEntries(PALETTE.map(p => [p.id, p.hex])),
+  ...LEGACY_COLORS,
+};

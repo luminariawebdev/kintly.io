@@ -1,16 +1,34 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- Kinnekt — consolidated backend migration (everything since Cycle-2 Batch A).
+-- Kinnekt — consolidated backend migration (audit Cycle 4).
 -- Run this ONE file in the Supabase SQL editor. Safe to re-run (idempotent).
--- It supersedes the earlier cycle2-batchB / cycle2-b18-baton / cycle2-batchC
--- files (their final, cycle-3-refined versions are included here), plus the new
--- Cycle-3 security / realtime / index fixes. You do NOT need those older files.
+-- It SUPERSEDES cycle3-all.sql: it contains the final cycle-3 RPCs/policies PLUS
+-- the new Cycle-4 security fixes, so you only need to run this file (whether or
+-- not you already ran cycle3-all.sql).
+--
+-- Cycle-4 highlights:
+--   • Spaces / Shared-Lists were the blind spot of earlier cycles — this brings
+--     them up to the same RLS bar as tasks/events/notes:
+--       - child items (space_items / shared_list_items / activity) must belong
+--         to a parent that is in your group (no cross-group child injection);
+--       - spaces / shared_lists / their items get the WITH CHECK on UPDATE that
+--         tasks/events already have (no relocating a row into another group).
+--   • notifications_update gets a WITH CHECK so you can't reassign your own
+--     notification to another user's inbox.
+--   • respawn_recurring_task no longer carries a private task into a shared
+--     group, and rejects a forged/duplicate next-due date.
+--   • handle_new_user logs (warns) instead of silently swallowing seed failures.
+--   • vote_on_poll distinguishes "no such poll" from "poll with NULL payload".
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ─── RPCs (final versions) ───────────────────────────────────────────────────
 
--- Recurring respawn: row-locked (no double-spawn on double-complete) and the
--- dedup guard is keyed on the SERIES (created_by/space_id/due_time), not on
--- assigned_to (which let a pool-revert miss a real duplicate).
+-- Recurring respawn: row-locked (no double-spawn on double-complete); dedup
+-- keyed on the SERIES (created_by/space_id/due_time), not assigned_to.
+-- Cycle-4: (a) reject a client next-due that isn't strictly after the source's
+-- due date (the date is client-computed, so a forged/duplicate date could
+-- otherwise sidestep the dedup and multi-spawn a series); (b) never carry a
+-- private task into a shared group's new occurrence (realtime ignores per-row
+-- RLS, so a private row in a shared group would leak to co-members).
 create or replace function public.respawn_recurring_task(p_task_id uuid, p_next_due date)
 returns public.tasks
 language plpgsql
@@ -41,6 +59,11 @@ begin
     return null;
   end if;
 
+  -- The next-due is computed on the client; it must move the series forward.
+  if p_next_due is null or p_next_due <= v_src.due_date then
+    return null;
+  end if;
+
   v_owner := case when coalesce(v_src.claimed, false) then v_src.recur_owner else v_src.assigned_to end;
 
   if exists (
@@ -63,7 +86,11 @@ begin
   values
     (v_src.group_id, v_src.created_by, v_owner, v_src.note_id,
      v_src.event_id, v_src.title, v_src.description, p_next_due,
-     v_src.due_time, v_src.recurrence, v_src.is_private, v_src.space_id, false)
+     v_src.due_time, v_src.recurrence,
+     -- keep private only if the target group is a personal space
+     (v_src.is_private and exists (
+        select 1 from public.groups g where g.id = v_src.group_id and coalesce(g.is_personal, false))),
+     v_src.space_id, false)
   returning * into v_new;
 
   return v_new;
@@ -71,8 +98,7 @@ end;
 $$;
 
 -- Baton accept = ONE-TIME takeover (recurring reverts to the offerer next time);
--- non-recurring accepts clear any stale pickup state so a later recurrence edit
--- can't resurrect a wrong owner.
+-- non-recurring accepts clear any stale pickup state.
 create or replace function public.respond_baton(p_task_id uuid, p_accept boolean)
 returns public.tasks
 language plpgsql
@@ -126,7 +152,8 @@ end;
 $$;
 
 -- Signup: seed the Personal space with an invite_code RETRY loop and never abort
--- signup on failure (the idempotent backfill is the recovery path).
+-- signup on failure. Cycle-4: warn (don't silently swallow) so a genuine seed
+-- fault is diagnosable in the logs, while signup still succeeds.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
@@ -156,13 +183,15 @@ begin
       end loop;
     end if;
   exception when others then
-    null;
+    raise warning 'handle_new_user: personal-space seed failed for %: %', new.id, sqlerrm;
   end;
   return new;
 end;
 $$;
 
 -- Poll vote: write only the votes subtree (no clobber of a concurrent pin/edit).
+-- Cycle-4: use FOUND (not "payload is null") so a poll whose payload column is
+-- literally NULL isn't mistaken for "no such poll".
 create or replace function public.vote_on_poll(p_note_id uuid, p_option_id text)
 returns jsonb
 language plpgsql
@@ -187,9 +216,10 @@ begin
     and type = 'poll'
   for update;
 
-  if v_payload is null then
+  if not found then
     return null;
   end if;
+  v_payload := coalesce(v_payload, '{}'::jsonb);
 
   if not coalesce(v_payload->'options', '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('id', p_option_id)) then
     return v_payload;
@@ -220,10 +250,36 @@ begin
 end;
 $$;
 
+-- RSVP: distinguish "no such event / not permitted" (raise) from a real write,
+-- instead of returning an ambiguous NULL the client can't interpret. The raise
+-- path is unreachable via the UI (you can't see an event you can't RSVP to).
+create or replace function public.set_event_rsvp(p_event_id uuid, p_status text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_uid   text := auth.uid()::text;
+  v_rsvps jsonb;
+begin
+  if auth.uid() is null then raise exception 'not authenticated'; end if;
+  if p_status is not null and p_status not in ('yes', 'maybe', 'no') then
+    raise exception 'invalid rsvp status %', p_status;
+  end if;
+  update public.events
+  set rsvps = case
+    when p_status is null then coalesce(rsvps, '{}'::jsonb) - v_uid
+    else coalesce(rsvps, '{}'::jsonb) || jsonb_build_object(v_uid, p_status)
+  end
+  where id = p_event_id
+    and group_id = public.my_group_id()
+    and (is_private is not true or created_by = auth.uid())
+  returning rsvps into v_rsvps;
+  if not found then raise exception 'event not found or not permitted'; end if;
+  return v_rsvps;
+end;
+$$;
+
 -- ─── Policies ────────────────────────────────────────────────────────────────
 
--- Single hardened profiles_update (you may only point your active space at a
--- group you belong to).
+-- profiles: you may only point your active space at a group you belong to.
 drop policy if exists "profiles_update" on public.profiles;
 create policy "profiles_update" on public.profiles
   for update using (id = auth.uid())
@@ -238,9 +294,9 @@ create policy "profiles_update" on public.profiles
     )
   );
 
--- Keep "private" items out of shared groups on INSERT *and* UPDATE (realtime
--- ignores per-row RLS, so a private task/event in a shared group leaks). Use
--- coalesce(is_personal,false) so a NULL flag can't reject a legit personal insert.
+-- tasks / events: keep "private" items out of shared groups on INSERT *and*
+-- UPDATE (realtime ignores per-row RLS). coalesce(is_personal,false) so a NULL
+-- flag can't reject a legit personal insert.
 drop policy if exists "tasks_insert" on public.tasks;
 create policy "tasks_insert" on public.tasks
   for insert with check (
@@ -275,11 +331,99 @@ create policy "events_update" on public.events
          or exists (select 1 from public.groups g where g.id = group_id and coalesce(g.is_personal, false)))
   );
 
--- Legacy note_comments_update: add the WITH CHECK it was missing.
+-- note_comments (legacy): the WITH CHECK it was missing.
 drop policy if exists "note_comments_update" on public.note_comments;
 create policy "note_comments_update" on public.note_comments
   for update using (created_by = auth.uid())
   with check (created_by = auth.uid() and group_id = public.my_group_id());
+
+-- notifications INSERT: only notify actual members of your active group (the
+-- notifications realtime channel filters by user_id, so an arbitrary user_id
+-- here would forge an alert into a non-member's inbox). This hardened policy
+-- lives in schema.sql too; re-stated here so this run-file is self-contained.
+drop policy if exists "notifications_insert" on public.notifications;
+create policy "notifications_insert" on public.notifications
+  for insert with check (
+    group_id = public.my_group_id()
+    and user_id in (select user_id from public.group_members
+                    where group_id = public.my_group_id())
+  );
+
+-- notifications: a missing WITH CHECK let a user UPDATE their own notification's
+-- user_id, moving it into another user's inbox (the notifications realtime
+-- channel is filtered by user_id, so the victim's client would ingest it).
+-- Pin the post-image user_id to the caller. (Do NOT pin group_id here — a user's
+-- notifications legitimately span multiple groups, and mark-read must still work
+-- while active in a different group.)
+drop policy if exists "notifications_update" on public.notifications;
+create policy "notifications_update" on public.notifications
+  for update using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+-- task_suggestions: pin delete to the active group (self-scoped integrity).
+drop policy if exists "task_suggestions_delete" on public.task_suggestions;
+create policy "task_suggestions_delete" on public.task_suggestions
+  for delete using (suggested_by = auth.uid() and group_id = public.my_group_id());
+
+-- ── Spaces & Shared-Lists: bring child-row and UPDATE policies up to the same
+--    bar as tasks/events. Two gaps, both the same class earlier cycles fixed
+--    elsewhere but never applied here:
+--    (1) child INSERT/UPDATE only checked the child's own group_id, never that
+--        the parent space/list is in your group → a client could attach a child
+--        to another group's parent (silent stored injection into detail views).
+--    (2) spaces/shared_lists/their items had UPDATE USING but no WITH CHECK →
+--        a member of two groups could relocate a row (and its space_id-linked
+--        children) from one group into the other, leaking its contents.
+
+-- spaces
+drop policy if exists "spaces_update" on public.spaces;
+create policy "spaces_update" on public.spaces
+  for update using (group_id = public.my_group_id())
+  with check (group_id = public.my_group_id());
+
+-- space_items (parent = spaces)
+drop policy if exists "space_items_insert" on public.space_items;
+create policy "space_items_insert" on public.space_items
+  for insert with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.spaces s where s.id = space_id and s.group_id = public.my_group_id())
+  );
+drop policy if exists "space_items_update" on public.space_items;
+create policy "space_items_update" on public.space_items
+  for update using (group_id = public.my_group_id())
+  with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.spaces s where s.id = space_id and s.group_id = public.my_group_id())
+  );
+
+-- shared_lists
+drop policy if exists "shared_lists_update" on public.shared_lists;
+create policy "shared_lists_update" on public.shared_lists
+  for update using (group_id = public.my_group_id())
+  with check (group_id = public.my_group_id());
+
+-- shared_list_items (parent = shared_lists)
+drop policy if exists "shared_list_items_insert" on public.shared_list_items;
+create policy "shared_list_items_insert" on public.shared_list_items
+  for insert with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
+  );
+drop policy if exists "shared_list_items_update" on public.shared_list_items;
+create policy "shared_list_items_update" on public.shared_list_items
+  for update using (group_id = public.my_group_id())
+  with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
+  );
+
+-- shared_list_activity (parent = shared_lists)
+drop policy if exists "shared_list_activity_insert" on public.shared_list_activity;
+create policy "shared_list_activity_insert" on public.shared_list_activity
+  for insert with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
+  );
 
 -- ─── Realtime: REPLICA IDENTITY FULL ─────────────────────────────────────────
 -- Without this, a DELETE's WAL record carries only the primary key, so the
@@ -310,3 +454,25 @@ drop index if exists public.events_is_private_idx;
 create index if not exists shared_list_items_group_idx on public.shared_list_items (group_id);
 create index if not exists space_items_group_idx       on public.space_items       (group_id);
 create index if not exists task_suggestions_group_idx  on public.task_suggestions  (group_id, created_at);
+
+-- ─── Re-assert EXECUTE grants ────────────────────────────────────────────────
+-- `create or replace function` preserves an existing ACL, but if any of these
+-- were re-created on a DB where they didn't already carry the tightened grant,
+-- the default (EXECUTE to PUBLIC, incl. anon) would apply. Re-assert defensively.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in (
+        'respawn_recurring_task','respond_baton','vote_on_poll','set_event_rsvp',
+        'grab_task','decide_suggestion','join_group_by_code','create_group'
+      )
+  loop
+    execute format('revoke execute on function %s from public', r.sig);
+    execute format('grant execute on function %s to authenticated', r.sig);
+  end loop;
+end $$;

@@ -24,7 +24,6 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSwitchSpace
   const [memberColors, setMemberColors] = React.useState({}); // { colorId: displayName }
   const [members, setMembers] = React.useState([]); // full group roster
   const groupMenuRef = React.useRef(null);
-  const fileInputRef = React.useRef(null);
   // Multi-space switcher: every group/Personal the user belongs to.
   const [spaces, setSpaces] = React.useState([]); // [{ id, name, is_personal }]
   const [creatingGroup, setCreatingGroup] = React.useState(false);
@@ -167,31 +166,6 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSwitchSpace
     setAvatarMode('main');
   };
 
-  const onPickPhoto = async (file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const size = 128;
-        const canvas = document.createElement('canvas');
-        canvas.width = size; canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        const min = Math.min(img.naturalWidth, img.naturalHeight);
-        const sx = (img.naturalWidth - min) / 2;
-        const sy = (img.naturalHeight - min) / 2;
-        ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        saveAvatar(dataUrl);
-        setAvatarPickerOpen(false);
-        setAvatarMode('main');
-      };
-      img.onerror = () => alert('Could not load that image — try another file.');
-      img.src = reader.result;
-    };
-    reader.onerror = () => alert('Could not read the file.');
-    reader.readAsDataURL(file);
-  };
 
   const removeAvatar = () => {
     saveAvatar('');
@@ -209,8 +183,11 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSwitchSpace
   const avatarIsImage = typeof avatar === 'string' && (avatar.startsWith('data:image') || /^https?:\/\//.test(avatar));
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    onSignOut();
+    // Always clear local auth state, even if the network sign-out rejects
+    // (offline/flaky). On a shared device the important part is dropping the
+    // local session + on-screen profile; leaving the sheet stuck on a fully
+    // authenticated Settings screen is the worse failure.
+    try { await supabase.auth.signOut(); } finally { onSignOut(); }
   };
 
   return (
@@ -274,13 +251,6 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSwitchSpace
                 >
                   {!avatarIsImage && (avatar || (profile?.display_name || '?')[0].toUpperCase())}
                 </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={e => { onPickPhoto(e.target.files?.[0]); e.target.value = ''; }}
-                />
               </div>
             </div>
 
@@ -610,27 +580,7 @@ export function SettingsScreen({ profile, onBack, onProfileUpdate, onSwitchSpace
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-glass)'; e.currentTarget.style.borderColor = 'var(--border-glass)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-soft)'; }}
                     >
                       <span style={{ fontSize: 40, lineHeight: 1 }} aria-hidden="true">😀</span>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>Emoji</span>
-                    </button>
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      style={{
-                        flex: 1,
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-                        padding: '22px 12px',
-                        background: 'var(--surface-glass)',
-                        border: '1px solid var(--border-glass)',
-                        borderRadius: 'var(--r-lg)',
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
-                        boxShadow: 'var(--shadow-soft)',
-                        transition: 'all 0.25s var(--ease)',
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-tint)'; e.currentTarget.style.borderColor = 'var(--hover-border)'; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow-medium)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-glass)'; e.currentTarget.style.borderColor = 'var(--border-glass)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-soft)'; }}
-                    >
-                      <span style={{ fontSize: 40, lineHeight: 1 }} aria-hidden="true">📷</span>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>Photo</span>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>Choose an emoji</span>
                     </button>
                   </div>
                 )}

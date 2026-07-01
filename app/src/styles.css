@@ -1850,6 +1850,7 @@ html { overscroll-behavior-x: none; }
 }
 .reply-composer-cancel {
   margin-left: auto;
+  position: relative;
   background: transparent;
   border: 0;
   color: var(--text-muted);
@@ -1861,6 +1862,8 @@ html { overscroll-behavior-x: none; }
   flex: 0 0 auto;
   transition: background 120ms ease, color 120ms ease;
 }
+/* Invisible expanded hit area → ≥44px tap target without changing the look. */
+.reply-composer-cancel::before { content: ''; position: absolute; inset: -14px -10px; }
 .reply-composer-cancel:hover {
   background: rgba(15, 18, 40, 0.06);
   color: var(--text);
@@ -3365,6 +3368,7 @@ html { overscroll-behavior-x: none; }
   box-shadow: 0 -12px 40px rgba(9, 18, 38, 0.18);
   position: relative;
   overflow: auto;
+  overscroll-behavior: contain; /* don't chain a flick past the sheet to the feed behind */
   will-change: transform;
   animation: sheet-slide-up 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -3423,6 +3427,7 @@ html { overscroll-behavior-x: none; }
 .sheet-hd h3 em { font-style: normal; background: var(--brand-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .sheet-hd .close {
   background: none; border: 0; padding: 6px 10px;
+  min-height: 44px; /* iOS min tap target */
   font-family: var(--font-main);
   font-size: 14px; color: var(--text-secondary);
   cursor: pointer; font-weight: 500;
@@ -3659,6 +3664,8 @@ html { overscroll-behavior-x: none; }
   transition: transform 0.15s var(--ease), background-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
   -webkit-tap-highlight-color: transparent;
 }
+/* Invisible expanded hit area → ≥44px tap target without changing the look. */
+.fb-bell-item-x::before { content: ''; position: absolute; inset: -11px; border-radius: 50%; }
 .fb-bell-item-x:hover {
   background: #E03028;
   box-shadow: 0 3px 8px rgba(255, 59, 48, 0.50);

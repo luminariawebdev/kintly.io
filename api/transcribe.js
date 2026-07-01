@@ -9,35 +9,7 @@
 // Zero dependencies: uses the runtime's built-in fetch / FormData / Blob
 // (Node 18+ on Vercel), so there's nothing to npm-install.
 
-async function readJson(req) {
-  if (req.body && typeof req.body === 'object') return req.body;
-  if (typeof req.body === 'string') {
-    try { return JSON.parse(req.body); } catch { return {}; }
-  }
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  const raw = Buffer.concat(chunks).toString('utf8');
-  try { return JSON.parse(raw); } catch { return {}; }
-}
-
-// Require a signed-in Supabase user before spending the Groq budget. Public
-// values (the anon key already ships in the browser bundle).
-const SUPABASE_URL = 'https://bqdkizavhlpswjtgxdjw.supabase.co';
-const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxZGtpemF2aGxwc3dqdGd4ZGp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3ODQzMDYsImV4cCI6MjA5NDM2MDMwNn0.Oedpsru9CCbKihZ-azAu4Uj2MNOF2HGNRFGFM2f86Fg';
-async function getUser(req) {
-  const h = req.headers['authorization'] || req.headers['Authorization'] || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
-  if (!token) return null;
-  try {
-    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!r.ok) return null;
-    const u = await r.json().catch(() => null);
-    return u && u.id ? u : null;
-  } catch { return null; }
-}
+const { readJson, getUser } = require('./_shared');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -57,9 +29,12 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const body = await readJson(req);
+    const body = await readJson(req, 9000000); // audio base64 can be several MB
     const b64 = body.audio;
-    const mime = typeof body.mime === 'string' ? body.mime : 'audio/webm';
+    // Validate mime against an allowlist rather than forwarding an arbitrary
+    // client string to Groq's multipart request.
+    const rawMime = typeof body.mime === 'string' ? body.mime : '';
+    const mime = /^audio\/(webm|mp4|mpeg|mp3|wav|ogg|m4a|x-m4a)$/.test(rawMime) ? rawMime : 'audio/webm';
     if (!b64) {
       res.status(400).json({ error: 'No audio received.' });
       return;
@@ -94,13 +69,19 @@ module.exports = async (req, res) => {
     });
     const data = await r.json().catch(() => null);
     if (!r.ok) {
-      const msg = (data && data.error && data.error.message) || `Transcription failed (${r.status}).`;
-      res.status(502).json({ error: msg });
+      // Log upstream detail server-side; return a fixed message so Groq's error
+      // strings (model/account/rate-limit state) don't reach the client.
+      console.error('transcribe upstream error:', r.status, data && data.error && data.error.message);
+      res.status(502).json({ error: 'Transcription failed — please try again.' });
       return;
     }
     res.status(200).json({ text: ((data && data.text) || '').trim() });
   } catch (e) {
     // Don't leak internal error strings to the client.
+    if (e && e.statusCode === 413) {
+      res.status(413).json({ error: 'That recording is too large.' });
+      return;
+    }
     if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
       res.status(504).json({ error: 'Transcription took too long — please try a shorter clip.' });
       return;

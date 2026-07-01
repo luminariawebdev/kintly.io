@@ -255,6 +255,7 @@ function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
   const [loading, setLoading] = React.useState(false);
   const [created, setCreated] = React.useState(null); // { name, code, id }
   const [spaces, setSpaces] = React.useState([]);      // [{ id, name, is_personal }]
+  const [entering, setEntering] = React.useState(false); // guards double-tap on the enter buttons
 
   // Every space this account already belongs to (shared groups + Personal),
   // so a returning member can pick which to enter and a new one can jump
@@ -278,7 +279,11 @@ function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
     return () => { cancelled = true; };
   }, []);
 
-  const enter = (id) => { if (onEnterSpace) onEnterSpace(id); else window.location.reload(); };
+  const enter = (id) => {
+    if (entering) return; // block a double-tap firing enterSpace twice
+    setEntering(true);
+    if (onEnterSpace) onEnterSpace(id); else window.location.reload();
+  };
 
   const createGroup = async () => {
     if (!groupName.trim()) { setErr('Enter a group name'); return; }

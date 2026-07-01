@@ -2,26 +2,8 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal, EmojiInput } from '../Components';
+import { COLOR_MAP } from '../lib/colors';
 
-const COLOR_MAP = {
-  red:        '#E63946',
-  coral:      '#FF6B35',
-  // peach / lemon / moss are offered on the signup screen — without
-  // entries here they fell through to the #999 gray fallback on every
-  // dot, bubble, and chip until the user changed colors in Settings.
-  peach:      '#FFC18C',
-  amber:      '#FFD60A',
-  lemon:      '#F0E68C',
-  moss:       '#C8D685',
-  green:      '#2DC653',
-  teal:       '#00B4D8',
-  blue:       '#4361EE',
-  periwinkle: '#7B2FBE',
-  plum:       '#C77DFF',
-  lilac:      '#F72585',
-  rose:       '#FF86C8',
-  black:      '#2D2D2D',
-};
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
 
@@ -49,6 +31,61 @@ const toLocalISO = (d) => {
 };
 const localTodayISO = () => toLocalISO(new Date());
 
+// Add one calendar month, clamping the day to the target month's length so
+// e.g. Aug 31 → Sep 30 (not the overflow Oct 1 that a bare setMonth gives).
+const addOneMonth = (d) => {
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + 1);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return d;
+};
+
+// A space with a non-empty member_ids is scoped to that subset of the group.
+// Supabase Realtime channels and the tables' RLS are BOTH only group-scoped
+// (no per-row filtering on payloads), so without a client guard a member-scoped
+// space — and its checklist items — would stream to, and be fetched by, group
+// members who aren't in it. This predicate is the client-side read boundary.
+const spaceHiddenFrom = (s, uid) =>
+  !!s && Array.isArray(s.member_ids) && s.member_ids.length > 0 &&
+  !s.member_ids.includes(uid) && s.created_by !== uid;
+
+// Stable empty array for closed-modal props, so the parent doesn't allocate a
+// fresh filtered array on every render while the modal is shut.
+const EMPTY_EVENTS = [];
+
+// Client-side temp id for an optimistic row before the DB assigns the real one.
+const newTempId = () => (typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+// Returns true the FIRST time it's called for a key, false after — for
+// show-a-migration-hint-once warnings (replaces a handful of window.__*Warned
+// globals). Module-scoped so it persists for the app session, like they did.
+const _warnedKeys = new Set();
+const warnOnce = (key) => (_warnedKeys.has(key) ? false : (_warnedKeys.add(key), true));
+
+// Run a Supabase write, and if the DB rejects a column an older schema is
+// missing ("column X does not exist"), strip that column and retry. runQuery is
+// caller-supplied so this covers both insert(...).select().single() and
+// update(...).eq(...). Returns { data, error, droppedCols } — callers keep their
+// own per-column "that field didn't save" warnings by reading droppedCols.
+async function writeStrippingMissing(runQuery, payload, optionalCols) {
+  const droppedCols = [];
+  let data = null, error = null;
+  for (let i = 0; i <= optionalCols.length; i++) {
+    ({ data = null, error } = await runQuery(payload));
+    if (!error) break;
+    const msg = (error.message || '').toLowerCase();
+    const col = optionalCols.find(c => payload[c] !== undefined && msg.includes(c));
+    if (!col) break; // a non-column error (RLS/network) — stop and surface it
+    const { [col]: _drop, ...rest } = payload;
+    payload = rest;
+    droppedCols.push(col);
+  }
+  return { data, error, droppedCols };
+}
+
 // Format an "HH:MM" 24-hour time string for display as 12-hour
 // w/ AM/PM. Returns '' for empty / invalid input so the caller can
 // show its own placeholder ("Pick a time").
@@ -62,6 +99,9 @@ const formatTime12 = (v) => {
   if (h === 0) h = 12;
   return `${h}:${String(m).padStart(2, '0')} ${period}`;
 };
+// One time formatter for the whole app. `fmtTime` is a back-compat alias so the
+// existing call sites don't churn (verified identical output for all HH:MM).
+const fmtTime = formatTime12;
 
 // Render text with @[Name] mentions highlighted as styled spans.
 // `members` is an optional array of profiles used to look up each
@@ -434,6 +474,8 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
   const streamRef = React.useRef(null);  // getUserMedia stream — MediaRecorder.stream is undefined on iOS Safari
   const abortRef = React.useRef(null);   // aborts the in-flight transcribe/interpret fetches
   const deadRef = React.useRef(false);   // set on unmount so late async work bails
+  const startingRef = React.useRef(false);         // a start() is awaiting getUserMedia (blocks re-entrant taps)
+  const startedProcessingRef = React.useRef(false); // process() actually began (so we can detect onstop never firing)
   const phaseRef = React.useRef(phase);
   React.useEffect(() => { phaseRef.current = phase; }, [phase]);
 
@@ -462,6 +504,8 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     const t = setTimeout(() => {
       try { abortRef.current?.abort(); } catch { /* noop */ }
       stopStream();
+      try { if (recRef.current) recRef.current.onstop = null; } catch { /* noop */ }
+      recRef.current = null;
       setError('That took too long — please try again.');
       setPhase('error');
     }, 75000);
@@ -476,6 +520,13 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     return (members.find((m) => norm(m.display_name) === n)
       || members.find((m) => norm(m.display_name).includes(n) || n.includes(norm(m.display_name)))
       || null)?.id || null;
+  };
+  // resolveMember returns null for BOTH an explicit "unassigned" and an
+  // unresolvable name — this distinguishes them so a voice edit/handoff to a
+  // name we can't find is flagged, not silently turned into an unassign.
+  const isUnassignToken = (name) => {
+    const n = norm(name);
+    return !!n && ['unassigned', 'no one', 'nobody', 'anyone', 'none'].includes(n);
   };
   const resolveSpace = (name) => {
     const n = norm(name);
@@ -495,15 +546,6 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     if (isNaN(d)) return iso;
     return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
-  const fmtTime = (t) => {
-    if (!t) return null;
-    const [h, m] = t.split(':').map(Number);
-    if (isNaN(h)) return t;
-    const ap = h >= 12 ? 'PM' : 'AM';
-    const hr = h % 12 === 0 ? 12 : h % 12;
-    return `${hr}:${String(m || 0).padStart(2, '0')} ${ap}`;
-  };
-
   const blobToBase64 = (blob) => new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onloadend = () => { const s = String(fr.result || ''); resolve(s.slice(s.indexOf(',') + 1)); };
@@ -543,14 +585,23 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
 
   const start = async () => {
     if (phase !== 'idle' && phase !== 'error') return; // ignore rapid re-taps mid-flow
+    // getUserMedia is async and phase is still 'idle' while its permission
+    // prompt is up, so a second tap would otherwise start a SECOND recorder and
+    // orphan the first mic stream (left live = privacy leak). Guard synchronously.
+    if (startingRef.current) return;
+    startingRef.current = true;
     setError('');
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('Voice input is not supported on this browser.');
       setPhase('error');
+      startingRef.current = false;
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Torn down while the permission prompt was up — stop this stream rather
+      // than leaving the mic hot.
+      if (deadRef.current) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} return; }
       streamRef.current = stream;
       const rec = new MediaRecorder(stream);
       chunksRef.current = [];
@@ -567,17 +618,34 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     } catch {
       setError('Microphone access was blocked. Allow it for this site and try again.');
       setPhase('error');
+    } finally {
+      startingRef.current = false;
     }
   };
 
   const stop = () => {
     if (recRef.current && phase === 'recording') {
       setPhase('working');
+      startedProcessingRef.current = false;
       try { recRef.current.stop(); } catch { /* already stopped */ }
+      // Safety net: on iOS Safari an ultra-short tap can leave the recorder
+      // without ever firing onstop, so process() never runs and the UI would
+      // sit on "Thinking" until the 75s watchdog. Recover fast if that happens.
+      setTimeout(() => {
+        if (deadRef.current) return;
+        if (phaseRef.current === 'working' && !startedProcessingRef.current) {
+          setError("I didn't catch that — try again.");
+          setPhase('error');
+          stopStream();
+          try { if (recRef.current) recRef.current.onstop = null; } catch { /* noop */ }
+          recRef.current = null;
+        }
+      }, 4000);
     }
   };
 
   const process = async (blob) => {
+    startedProcessingRef.current = true; // tells stop()'s safety net that onstop fired
     try {
       if (!blob || !blob.size) { setError("I didn't catch any audio. Try again."); setPhase('error'); return; }
       const audio = await blobToBase64(blob);
@@ -678,18 +746,38 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
         const task = findTask(a.task_id, a.target_label);
         const base = { op: a.op, task, label: a.target_label || task?.title || '?', invalid: !task };
         if (a.op === 'postpone') return { ...base, new_date: a.new_date || null, new_time: a.new_time || null, invalid: !task || !a.new_date };
-        if (a.op === 'handoff') return { ...base, to: a.handoff_to || null };
-        if (a.op === 'edit') return {
-          ...base,
-          edit: {
-            title: a.new_title || null,
-            assignee: a.new_assignee || null,
-            due_date: a.new_due_date || null,
-            due_time: a.new_due_time || null,
-            repeats: a.new_repeats || null,
-            details: a.new_details || null,
-          },
-        };
+        if (a.op === 'handoff') {
+          // Resolve the target NOW so an unfindable name is flagged in the
+          // review sheet instead of being silently dropped at apply time.
+          const to = a.handoff_to || null;
+          const toPool = !!to && norm(to) === 'pool';
+          const toId = to && !toPool ? resolveMember(to) : null;
+          return { ...base, to, toPool, toId, invalid: base.invalid || !to || (!toPool && !toId) };
+        }
+        if (a.op === 'edit') {
+          // Resolve the assignee now and distinguish an explicit "unassign"
+          // from a name we can't find — the latter must NOT quietly strip the
+          // current owner (it's flagged invalid instead).
+          const rawAssignee = a.new_assignee || null;
+          const unassign = isUnassignToken(rawAssignee);
+          const assigneeId = (rawAssignee && !unassign) ? resolveMember(rawAssignee) : null;
+          const assigneeUnresolved = !!rawAssignee && !unassign && !assigneeId;
+          return {
+            ...base,
+            edit: {
+              title: a.new_title || null,
+              assignee: rawAssignee,
+              // undefined = leave assignee untouched; null = explicit unassign; id = reassign
+              assigneeId: rawAssignee ? (unassign ? null : assigneeId) : undefined,
+              assigneeSet: !!rawAssignee && !assigneeUnresolved,
+              due_date: a.new_due_date || null,
+              due_time: a.new_due_time || null,
+              repeats: a.new_repeats || null,
+              details: a.new_details || null,
+            },
+            invalid: base.invalid || assigneeUnresolved,
+          };
+        }
         return base; // complete, delete
       });
       const total = plannedTasks.length + events.length + items.length + posts.length + actions.length;
@@ -710,12 +798,34 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
     }
   };
 
-  const reset = () => { setPlan(null); setTranscript(''); setError(''); setEditing(null); setPhase('idle'); };
+  const reset = () => {
+    // Clear the finished run's AbortController so a later cancel path can't
+    // abort a stale controller (and a fresh run always makes its own).
+    try { abortRef.current?.abort(); } catch { /* noop */ }
+    abortRef.current = null;
+    chunksRef.current = [];
+    startedProcessingRef.current = false;
+    setPlan(null); setTranscript(''); setError(''); setEditing(null); setPhase('idle');
+  };
+
+  // Cancel an in-flight run (during "Thinking") — abort the fetches, release
+  // the mic, and return to idle so the user isn't locked out until the watchdog.
+  const cancel = () => {
+    try { abortRef.current?.abort(); } catch { /* noop */ }
+    abortRef.current = null;
+    stopStream();
+    reset();
+  };
 
   const apply = async () => {
     if (!plan || applying) return;
     setApplying(true);
     try {
+      // Race the whole apply chain against a timeout so a hung Supabase write
+      // can't trap the user in an undismissable "Working…" sheet (dismiss is
+      // neutered while applying). On timeout, recover to a retryable error.
+      await Promise.race([
+        (async () => {
       // Events FIRST, so a task in the same command can link to one just
       // created. Capture each new event's id by title.
       const newEventIdByTitle = {};
@@ -783,12 +893,17 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
         else if (a.op === 'delete') await onDelete?.(a.task.id);
         else if (a.op === 'postpone') { if (a.new_date) await onPostpone?.(a.task, a.new_date, a.new_time || null); }
         else if (a.op === 'handoff') {
-          if (norm(a.to) === 'pool') await onRelease?.(a.task, 'Handed off by voice');
-          else { const id = resolveMember(a.to); if (id) await onPass?.(a.task, id); }
+          // Use the target resolved at staging (invalid handoffs were filtered
+          // above), so we never re-resolve to a wrong/empty result here.
+          if (a.toPool) await onRelease?.(a.task, 'Handed off by voice');
+          else if (a.toId) await onPass?.(a.task, a.toId);
         } else if (a.op === 'edit') {
           const patch = {};
           if (a.edit.title) patch.title = a.edit.title;
-          if (a.edit.assignee) patch.assigned_to = resolveMember(a.edit.assignee); // "unassigned" → null
+          // Only touch assignee when it was explicitly set (a resolved name or
+          // an explicit unassign) — an unresolvable name was flagged invalid,
+          // so we never silently strip the current owner.
+          if (a.edit.assigneeSet) patch.assigned_to = a.edit.assigneeId ?? null;
           if (a.edit.due_date) patch.due_date = a.edit.due_date;
           if (a.edit.due_time) patch.due_time = a.edit.due_time;
           if (a.edit.repeats) patch.recurrence = a.edit.repeats === 'none' ? null : { freq: a.edit.repeats };
@@ -796,9 +911,15 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
           if (Object.keys(patch).length) await onUpdate?.(a.task.id, patch);
         }
       }
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('apply timeout')), 30000)),
+      ]);
+      reset();
+    } catch {
+      setError('That took too long — some items may not have been added. Try again.');
+      setPhase('error');
     } finally {
       setApplying(false);
-      reset();
     }
   };
 
@@ -810,6 +931,14 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
       {(recording || working) && (
         <div className="va-thinking" role="status" aria-live="polite">
           {recording ? 'Speak to dictate' : 'Thinking'}<span className="va-dots" aria-hidden><span>.</span><span>.</span><span>.</span></span>
+          {working && (
+            <button
+              type="button"
+              onClick={cancel}
+              aria-label="Cancel voice input"
+              style={{ marginLeft: 8, background: 'none', border: 'none', color: 'inherit', font: 'inherit', textDecoration: 'underline', opacity: 0.85, cursor: 'pointer', padding: '10px 8px', minHeight: 44 }}
+            >Cancel</button>
+          )}
         </div>
       )}
       <button
@@ -1039,7 +1168,9 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
                     {detail && <div className="va-item-sub">{detail}</div>}
                     {a.invalid && (
                       <div className="va-item-sub" style={{ color: 'var(--kinnekt-coral)' }}>
-                        {a.op === 'postpone' && a.task ? 'needs a new date — will be skipped' : 'couldn’t find that one — will be skipped'}
+                        {a.op === 'postpone' && a.task ? 'needs a new date — will be skipped'
+                          : (a.op === 'handoff' || a.op === 'edit') && a.task ? 'couldn’t find that person — will be skipped'
+                          : 'couldn’t find that one — will be skipped'}
                       </div>
                     )}
                   </div>
@@ -1068,6 +1199,10 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
 function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, getProfile, myId }) {
   useRerenderEvery(60 * 1000);
   const now = Date.now();
+  // Minute-granularity key: the 60s tick and any incidental re-render within the
+  // same minute share it, so the memos below don't recompute on every render —
+  // only when their data changes or the minute actually rolls.
+  const minuteTick = Math.floor(now / 60000);
   const back = now - 24 * 60 * 60 * 1000;
   const todayIso = localTodayISO();
   const tomorrowIso = toLocalISO(new Date(now + 24 * 60 * 60 * 1000));
@@ -1083,7 +1218,9 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
 
   // Open tasks that are overdue, due today, or due tomorrow. Date-based
   // (a date-only task due tomorrow counts), with overdue ones flagged.
-  const dueTasks = (tasks || [])
+  // Date-based (not minute-based): only changes when tasks change or the day
+  // rolls, so this skips the 60s tick entirely.
+  const dueTasks = React.useMemo(() => (tasks || [])
     .filter(t => !t.completed && !t.cancelled_at && t.due_date)
     .filter(t => t.due_date <= tomorrowIso)
     .sort((a, b) => {
@@ -1091,44 +1228,49 @@ function DaySummary({ tasks, events, expandedEvents, notes, spaces, spaceItems, 
       const ak = a.due_time ? `${a.due_date}T${a.due_time}` : `${a.due_date}T23:59`;
       const bk = b.due_time ? `${b.due_date}T${b.due_time}` : `${b.due_date}T23:59`;
       return ak.localeCompare(bk);
-    });
+    }), [tasks, tomorrowIso]);
 
   // Events occurring in the next 24h — use the expanded occurrences,
-  // one entry per event id (a multi-day event shows once).
-  const seenEv = new Set();
-  const dueEvents = (expandedEvents || [])
-    .filter(e => {
-      // Only today or tomorrow — never a past event (no "overdue" events).
-      if (!e.date || e.date < todayIso || e.date > tomorrowIso) return false;
-      // Today's timed events only if they haven't already started; all-day
-      // today and anything tomorrow are included.
-      if (e.date === todayIso && validTime(e.start_time)) {
-        return new Date(`${e.date}T${e.start_time}`).getTime() >= now;
-      }
-      return true;
-    })
-    .sort((a, b) => `${a.date}T${a.start_time || '00:00'}`.localeCompare(`${b.date}T${b.start_time || '00:00'}`))
-    .filter(e => { if (seenEv.has(e.id)) return false; seenEv.add(e.id); return true; });
+  // one entry per event id (a multi-day event shows once). Minute-dependent
+  // (the "hasn't started yet" check), so it re-buckets on the tick.
+  const dueEvents = React.useMemo(() => {
+    const seenEv = new Set();
+    return (expandedEvents || [])
+      .filter(e => {
+        // Only today or tomorrow — never a past event (no "overdue" events).
+        if (!e.date || e.date < todayIso || e.date > tomorrowIso) return false;
+        // Today's timed events only if they haven't already started; all-day
+        // today and anything tomorrow are included.
+        if (e.date === todayIso && validTime(e.start_time)) {
+          return new Date(`${e.date}T${e.start_time}`).getTime() >= now;
+        }
+        return true;
+      })
+      .sort((a, b) => `${a.date}T${a.start_time || '00:00'}`.localeCompare(`${b.date}T${b.start_time || '00:00'}`))
+      .filter(e => { if (seenEv.has(e.id)) return false; seenEv.add(e.id); return true; });
+  }, [expandedEvents, todayIso, tomorrowIso, minuteTick]);
 
   // Posts from the last 24h.
-  const recentPosts = (notes || [])
+  const recentPosts = React.useMemo(() => (notes || [])
     .filter(n => !n.payload?.deleted && within24hBack(n.created_at))
-    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')), [notes, minuteTick]);
 
   // Space activity in the last 24h: items added / checked off, plus
   // tasks/events/notes tagged into a space (by creation time).
-  const spaceMap = new Map();
-  const noteSpace = (sid, text) => { if (!sid) return; if (!spaceMap.has(sid)) spaceMap.set(sid, []); spaceMap.get(sid).push(text); };
-  (spaceItems || []).forEach(it => {
-    if (within24hBack(it.created_at)) noteSpace(it.space_id, `added “${it.title}”`);
-    if (it.completed && within24hBack(it.completed_at)) noteSpace(it.space_id, `checked off “${it.title}”`);
-  });
-  (tasks || []).forEach(t => { if (t.space_id && within24hBack(t.created_at)) noteSpace(t.space_id, `task “${t.title}”`); });
-  (events || []).forEach(e => { if (e.space_id && within24hBack(e.created_at)) noteSpace(e.space_id, `event “${e.title}”`); });
-  (notes || []).forEach(n => { if (n.space_id && !n.payload?.deleted && within24hBack(n.created_at)) noteSpace(n.space_id, 'a post'); });
-  const spaceEntries = [...spaceMap.entries()]
-    .map(([id, changes]) => ({ space: (spaces || []).find(s => s.id === id), changes }))
-    .filter(e => e.space);
+  const spaceEntries = React.useMemo(() => {
+    const spaceMap = new Map();
+    const noteSpace = (sid, text) => { if (!sid) return; if (!spaceMap.has(sid)) spaceMap.set(sid, []); spaceMap.get(sid).push(text); };
+    (spaceItems || []).forEach(it => {
+      if (within24hBack(it.created_at)) noteSpace(it.space_id, `added “${it.title}”`);
+      if (it.completed && within24hBack(it.completed_at)) noteSpace(it.space_id, `checked off “${it.title}”`);
+    });
+    (tasks || []).forEach(t => { if (t.space_id && within24hBack(t.created_at)) noteSpace(t.space_id, `task “${t.title}”`); });
+    (events || []).forEach(e => { if (e.space_id && within24hBack(e.created_at)) noteSpace(e.space_id, `event “${e.title}”`); });
+    (notes || []).forEach(n => { if (n.space_id && !n.payload?.deleted && within24hBack(n.created_at)) noteSpace(n.space_id, 'a post'); });
+    return [...spaceMap.entries()]
+      .map(([id, changes]) => ({ space: (spaces || []).find(s => s.id === id), changes }))
+      .filter(e => e.space);
+  }, [spaceItems, tasks, events, notes, spaces, minuteTick]);
 
   // NOTE: this hook MUST stay above the early-return below. It used to sit
   // after it, so on renders with no items the hook was skipped — and the
@@ -1470,7 +1612,19 @@ function computeNextDue(task) {
   if (r.freq === 'daily') {
     d = new Date(base); d.setDate(d.getDate() + 1);
   } else if (r.freq === 'monthly') {
-    d = new Date(base); d.setMonth(d.getMonth() + 1);
+    // Anchor on the original day-of-month and SKIP months that don't have it
+    // (e.g. the 31st), matching the calendar's monthly expansion. A naive
+    // setMonth(+1) overflows Jan 31 → Mar 3 and — because each respawn feeds
+    // its own output back as the next due date — the "31st" drifts permanently.
+    const anchorDay = base.getDate();
+    let y = base.getFullYear();
+    let m = base.getMonth(); // 0-based
+    for (let i = 0; i < 12; i++) {
+      m += 1;
+      if (m > 11) { m = 0; y += 1; }
+      const cand = new Date(y, m, anchorDay);
+      if (cand.getMonth() === m) { d = cand; break; } // month actually has that day
+    }
   } else if ((r.freq === 'weekly' || r.freq === 'custom') && Array.isArray(r.days) && r.days.length > 0) {
     const sorted = [...r.days].sort((a, b) => a - b);
     const cur = base.getDay(); // 0-6 (Sun-Sat)
@@ -1479,8 +1633,7 @@ function computeNextDue(task) {
     d = new Date(base); d.setDate(d.getDate() + diff);
   }
   if (!d) return null;
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return toLocalISO(d);
 }
 
 // Completed tasks auto-vanish 8 days after they're checked off (the DB purge
@@ -1840,50 +1993,43 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
   }, [tasks, members]);
   const [loadOpen, setLoadOpen] = React.useState(null); // expanded member id
 
-  const applyFilter = (list) => list.filter(t => {
-    if (filter === 'all') return true;
-    if (filter === 'week') {
+  // Whole task pipeline in one memo, so local-state renders (showDone toggle,
+  // member-expand, the 6h freshness tick) don't re-run the O(tasks)+O(members×
+  // tasks) filter/sort/group work. todayKey keeps the week-filter + freshness
+  // correct across midnight without recomputing every render.
+  const todayKey = localTodayISO();
+  const { grouped, unassigned, doneItems, openCount } = React.useMemo(() => {
+    const applyFilter = (list) => list.filter(t => {
+      if (filter !== 'week') return true;
       if (!t.due_date) return true;
-      const diff = Math.round((new Date(t.due_date + 'T00:00:00') - new Date().setHours(0,0,0,0)) / 86400000);
+      const diff = Math.round((new Date(t.due_date + 'T00:00:00') - new Date().setHours(0, 0, 0, 0)) / 86400000);
       return diff <= 7;
-    }
-    return true;
-  });
-
-  // Personal todos are flagged is_private and only ever surfaced to
-  // the creator (RLS enforces this server-side too). Everything else
-  // is "shared" — grouped by assignee like before.
-  const sharedTasks = tasks.filter(t => !t.is_private);
-
-  const filtered = applyFilter(sharedTasks);
-
-  // Soonest-due first (overdue → today → tomorrow → … → no date last), so
-  // the list reads top-to-bottom in the order things actually come due.
-  const byDueAsc = (a, b) => {
-    const ad = a.due_date || '9999-12-31';
-    const bd = b.due_date || '9999-12-31';
-    if (ad !== bd) return ad < bd ? -1 : 1;
-    const at = a.due_time || '99:99';
-    const bt = b.due_time || '99:99';
-    return at < bt ? -1 : at > bt ? 1 : 0;
-  };
-  const openItems = filtered.filter(t => !t.completed).sort(byDueAsc);
-  const doneItems = filtered.filter(t => t.completed && isFresh(t));
-
-  // A task mid-hand-off is "in transit" to the person it was offered to, so
-  // it surfaces in THEIR list (with an Accept/Decline) rather than the
-  // current holder's — the ball is in the recipient's court. The holder
-  // still sees their "Offered to … / Cancel" inline (canHandOff is keyed off
-  // the real assigned_to, not the group it renders under).
-  const pendingOwner = (t) => (t.baton_offer && !t.completed && !t.cancelled_at) ? t.baton_offer : t.assigned_to;
-
-  const grouped = members.map(m => ({
-    member: m,
-    items: openItems.filter(t => pendingOwner(t) === m.id),
-  })).filter(g => g.items.length > 0);
-
-  const unassigned = openItems.filter(t => !pendingOwner(t));
-  const openCount = sharedTasks.filter(t => !t.completed).length;
+    });
+    // Personal todos are is_private (creator-only, RLS-enforced); everything
+    // else is "shared" — grouped by assignee.
+    const sharedTasks = tasks.filter(t => !t.is_private);
+    const filtered = applyFilter(sharedTasks);
+    // Soonest-due first (overdue → today → … → no date last).
+    const byDueAsc = (a, b) => {
+      const ad = a.due_date || '9999-12-31';
+      const bd = b.due_date || '9999-12-31';
+      if (ad !== bd) return ad < bd ? -1 : 1;
+      const at = a.due_time || '99:99';
+      const bt = b.due_time || '99:99';
+      return at < bt ? -1 : at > bt ? 1 : 0;
+    };
+    const openItems = filtered.filter(t => !t.completed).sort(byDueAsc);
+    const doneItems = filtered.filter(t => t.completed && isFresh(t));
+    // A task mid-hand-off surfaces in the RECIPIENT's list (ball in their court).
+    const pendingOwner = (t) => (t.baton_offer && !t.completed && !t.cancelled_at) ? t.baton_offer : t.assigned_to;
+    const grouped = members.map(m => ({
+      member: m,
+      items: openItems.filter(t => pendingOwner(t) === m.id),
+    })).filter(g => g.items.length > 0);
+    const unassigned = openItems.filter(t => !pendingOwner(t));
+    const openCount = sharedTasks.filter(t => !t.completed).length;
+    return { grouped, unassigned, doneItems, openCount };
+  }, [tasks, members, filter, todayKey]);
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-tasks">
@@ -2096,20 +2242,20 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
     return expandedEvents.filter(e => !e.is_private);
   }, [expandedEvents, view, myId]);
 
-  const monthEvents = expanded.filter(e => {
+  const monthEvents = React.useMemo(() => expanded.filter(e => {
     const d = new Date(e.date + 'T00:00:00');
     return d.getFullYear() === calYear && d.getMonth() === calMonth;
-  });
+  }), [expanded, calYear, calMonth]);
 
   // Keyed by full ISO date so dim cells (prev/next month days visible
   // in the grid) can render their events too. monthEvents stays
   // scoped to the current month for the section header count and the
   // "view all" modal.
-  const eventsByDate = {};
-  expanded.forEach(e => {
-    eventsByDate[e.date] = eventsByDate[e.date] || [];
-    eventsByDate[e.date].push(e);
-  });
+  const eventsByDate = React.useMemo(() => {
+    const map = {};
+    expanded.forEach(e => { (map[e.date] = map[e.date] || []).push(e); });
+    return map;
+  }, [expanded]);
 
   // Upcoming events are filtered by the tab above the list.
   //   week  = today through end of the current calendar week (Saturday)
@@ -2117,23 +2263,26 @@ const CalendarSection = React.memo(function CalendarSection({ events, expandedEv
   //   all   = everything from today onward (within the expansion window)
   // Default to "week" since that's the most common quick-glance view.
   const [upcomingFilter, setUpcomingFilter] = React.useState('week');
-  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  const endOfWeek = new Date(todayStart);
-  endOfWeek.setDate(endOfWeek.getDate() + (6 - todayStart.getDay()));
-  endOfWeek.setHours(23, 59, 59, 999);
-  const endOfMonth = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
-  const upcomingRangeEnd =
-    upcomingFilter === 'week'  ? endOfWeek  :
-    upcomingFilter === 'month' ? endOfMonth :
-    null; // 'all' — no upper bound
-  const upcoming = expanded
-    .filter(e => {
-      const d = new Date(e.date + 'T00:00:00');
-      if (d < todayStart) return false;
-      if (upcomingRangeEnd && d > upcomingRangeEnd) return false;
-      return true;
-    })
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '99').localeCompare(b.start_time || '99'));
+  const todayKey = localTodayISO(); // day-granularity memo key (rolls at midnight)
+  const upcoming = React.useMemo(() => {
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const endOfWeek = new Date(todayStart);
+    endOfWeek.setDate(endOfWeek.getDate() + (6 - todayStart.getDay()));
+    endOfWeek.setHours(23, 59, 59, 999);
+    const endOfMonth = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+    const rangeEnd =
+      upcomingFilter === 'week'  ? endOfWeek  :
+      upcomingFilter === 'month' ? endOfMonth :
+      null; // 'all' — no upper bound
+    return expanded
+      .filter(e => {
+        const d = new Date(e.date + 'T00:00:00');
+        if (d < todayStart) return false;
+        if (rangeEnd && d > rangeEnd) return false;
+        return true;
+      })
+      .sort((a, b) => a.date.localeCompare(b.date) || (a.start_time || '99').localeCompare(b.start_time || '99'));
+  }, [expanded, upcomingFilter, todayKey]);
 
   // Pagination — mirrors the home feed's "load more / see less" pills.
   // Show the first 7 events, then a +10 bump per click; "see less"
@@ -2445,6 +2594,13 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
   const handlePressEnd = () => {
     cancelLongPress();
   };
+
+  // Clear a pending long-press timer if the bubble unmounts mid-press (an
+  // incoming realtime post, load-more collapse, or composer open) so the
+  // 450ms callback can't fire onLongPress for a row that's gone.
+  React.useEffect(() => () => {
+    if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+  }, []);
 
   // Short-click handler used by every bubble:
   //   • If a long-press just fired → suppress (so the action-bar
@@ -2994,26 +3150,28 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
   // Sorts use plain string compare — created_at is ISO-8601, which is
   // already lexicographically ordered, so there's no need to allocate
   // two Date objects per comparison on every render.
-  const pinned = notes
+  // Memoized on `notes` so long-press / reply / load-more (local-state renders
+  // that don't touch note data) don't re-run these full filter+sort passes.
+  const pinned = React.useMemo(() => notes
     .filter(n => {
       const type = n.type || 'message';
       if (type === 'announcement' || type === 'quick_update') return true;
       return n.pinned && type !== 'message';
     })
-    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')), [notes]);
 
   // Main feed: NEWEST first (top). Anything in the Pinned section is
   // explicitly excluded — pinned items live ONLY in pinned so they
   // never appear in two places. (Urgent/Reminder are always pinned,
   // and manually-pinned posts also drop out of the main feed.)
-  const sorted = notes
+  const sorted = React.useMemo(() => notes
     .filter(n => {
       const type = n.type || 'message';
       if (type === 'announcement' || type === 'quick_update') return false;
       if (n.pinned && type !== 'message') return false; // manually-pinned non-messages
       return true;
     })
-    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')), [notes]);
 
   // O(1) reply-target lookups — the feed loop used notes.find() per
   // post, which was quadratic in feed length.
@@ -3573,7 +3731,7 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
     if (dueOpt === 'today') return toLocalISO(d);
     if (dueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return toLocalISO(d); }
     if (dueOpt === 'week') { d.setDate(d.getDate() + 7); return toLocalISO(d); }
-    if (dueOpt === 'month') { d.setMonth(d.getMonth() + 1); return toLocalISO(d); }
+    if (dueOpt === 'month') { return toLocalISO(addOneMonth(d)); }
     if (dueOpt === 'pick') return dueDate || null;
     return null;
   };
@@ -4317,14 +4475,6 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
 }
 
 // ─── Day Details Modal ────────────────────────────────────────────────────────
-function fmtTime(t) {
-  if (!t) return '';
-  const [hh, mm] = t.split(':').map(Number);
-  const period = hh >= 12 ? 'PM' : 'AM';
-  const h12 = ((hh + 11) % 12) + 1;
-  return `${h12}:${String(mm).padStart(2, '0')} ${period}`;
-}
-
 function fmtDateShort(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-').map(Number);
@@ -4879,10 +5029,6 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
   const [startTimePickerOpen,    setStartTimePickerOpen]    = React.useState(false);
   const [endTimePickerOpen,      setEndTimePickerOpen]      = React.useState(false);
 
-  // Photo upload state
-  const [photos, setPhotos] = React.useState([]); // array of dataURLs
-  const photoInputRef = React.useRef(null);
-
   // Poll state
   const [pollQuestion, setPollQuestion] = React.useState('');
   const [pollOptions, setPollOptions] = React.useState(['', '']);
@@ -4952,7 +5098,6 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
       setEventAttendees((members || []).map(m => m.id));
       setTitleEdited(false);
       setMentionAnchor(null);
-      setPhotos([]);
       setPollQuestion('');
       setPollOptions(['', '']);
       setSpaceId(initialSpaceId || null);
@@ -4960,50 +5105,6 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
       // scrolled mid-form. The user taps the editor to start typing.
     }
   }, [open, profile?.id, initialSpaceId]);
-
-  // Photo upload helpers — turn user-selected files into compressed data URLs
-  const handlePhotoSelect = (e) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-    // Hard cap: 10 photos per post (good for the chat feed)
-    const remaining = 10 - photos.length;
-    const toRead = files.slice(0, remaining);
-    toRead.forEach(file => {
-      if (!file.type.startsWith('image/')) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const dataUrl = ev.target.result;
-        // Downscale through a canvas so we don't store 10 MB photos in the DB
-        const img = new Image();
-        img.onload = () => {
-          const maxDim = 1200;
-          let { width, height } = img;
-          if (width > maxDim || height > maxDim) {
-            if (width >= height) { height = Math.round((height / width) * maxDim); width = maxDim; }
-            else { width = Math.round((width / height) * maxDim); height = maxDim; }
-          }
-          const canvas = document.createElement('canvas');
-          canvas.width = width; canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL('image/jpeg', 0.82);
-          setPhotos(prev => prev.length >= 10 ? prev : [...prev, compressed]);
-        };
-        img.onerror = () => {
-          // Fallback to the raw data URL if canvas fails
-          setPhotos(prev => prev.length >= 10 ? prev : [...prev, dataUrl]);
-        };
-        img.src = dataUrl;
-      };
-      reader.readAsDataURL(file);
-    });
-    // Reset so the user can pick the same file again later
-    e.target.value = '';
-  };
-
-  const removePhoto = (idx) => {
-    setPhotos(prev => prev.filter((_, i) => i !== idx));
-  };
 
   // Poll option helpers
   const setPollOption = (idx, val) => {
@@ -5203,7 +5304,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
     if (taskDueOpt === 'today') return toLocalISO(d);
     if (taskDueOpt === 'tomorrow') { d.setDate(d.getDate() + 1); return toLocalISO(d); }
     if (taskDueOpt === 'week') { d.setDate(d.getDate() + 7); return toLocalISO(d); }
-    if (taskDueOpt === 'month') { d.setMonth(d.getMonth() + 1); return toLocalISO(d); }
+    if (taskDueOpt === 'month') { return toLocalISO(addOneMonth(d)); }
     if (taskDueOpt === 'pick') return taskDueDate || null;
     return null;
   };
@@ -5215,9 +5316,6 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
     // Validate per type
     if (postType === 'message' || postType === 'announcement' || postType === 'quick_update') {
       if (!content) { alert('Please enter a message before posting.'); return; }
-    } else if (postType === 'photos') {
-      if (photos.length === 0) { alert('Please add at least one photo.'); return; }
-      payload = { photos };
     } else if (postType === 'poll') {
       const q = pollQuestion.trim();
       const opts = pollOptions.map(o => o.trim()).filter(Boolean);
@@ -5292,12 +5390,11 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
     { id: 'message',      label: 'Message',  icon: '💬' },
     { id: 'announcement', label: 'Urgent',   icon: '🚨' },
     { id: 'quick_update', label: 'Reminder', icon: '🔔' },
-    { id: 'photos',       label: 'Photos',   icon: '📷' },
     { id: 'poll',         label: 'Poll',     icon: '📊' },
   ];
 
   // Title shows the active post type
-  const typeLabels = { message: 'Message', announcement: 'Urgent', quick_update: 'Reminder', photos: 'Photos', poll: 'Poll' };
+  const typeLabels = { message: 'Message', announcement: 'Urgent', quick_update: 'Reminder', poll: 'Poll' };
   const titleNode = <>New <em>{typeLabels[postType] || 'Post'}</em></>;
 
   // Helper — render the contentEditable message editor (used by message, announcement, quick_update)
@@ -5426,47 +5523,6 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
         </>
       )}
 
-      {postType === 'photos' && (
-        <>
-          <div className="field">
-            <label>Photos <span style={{ fontWeight: 400, opacity: 0.5 }}>· up to 10</span></label>
-            <input
-              ref={photoInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              capture="environment"
-              onChange={handlePhotoSelect}
-              style={{ display: 'none' }}
-            />
-            <button
-              type="button"
-              className="fb-btn"
-              onClick={() => photoInputRef.current?.click()}
-              style={{ marginBottom: photos.length > 0 ? 10 : 0 }}
-            >
-              <span className="plus">+</span> Add photos
-            </button>
-            {photos.length > 0 && (
-              <div className="photo-thumbs">
-                {photos.map((src, idx) => (
-                  <div key={idx} className="photo-thumb">
-                    <img src={src} alt="" />
-                    <button
-                      type="button"
-                      className="photo-thumb-remove"
-                      onClick={() => removePhoto(idx)}
-                      title="Remove photo"
-                      aria-label="Remove photo"
-                    >×</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          {renderMessageEditor('Caption (optional)', 'Say something about these photos…')}
-        </>
-      )}
 
       {postType === 'poll' && (
         <>
@@ -7396,38 +7452,6 @@ function parseListItemInput(raw, members) {
   return { title: text.replace(/\s+/g, ' ').trim(), quantity, category, assigned_to };
 }
 
-// Tiny relative-time helper for the activity feed ("2m ago", "yesterday").
-function relTime(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60)    return 'just now';
-  const m = Math.floor(s / 60);
-  if (m < 60)    return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24)    return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d === 1)   return 'yesterday';
-  if (d < 7)     return `${d}d ago`;
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-// Human label for an activity row.
-function activityLabel(row, getProfile) {
-  const who = (getProfile(row.actor_id)?.display_name) || 'Someone';
-  const t = row.payload?.title || row.payload?.item_title || '';
-  switch (row.action) {
-    case 'list_created':    return `${who} created the list`;
-    case 'list_renamed':    return `${who} renamed the list`;
-    case 'list_deleted':    return `${who} deleted the list`;
-    case 'item_added':      return `${who} added ${t || 'an item'}`;
-    case 'item_completed':  return `${who} checked off ${t || 'an item'}`;
-    case 'item_uncompleted':return `${who} unchecked ${t || 'an item'}`;
-    case 'item_removed':    return `${who} removed ${t || 'an item'}`;
-    case 'item_assigned':   return `${who} assigned ${t || 'an item'}`;
-    default:                return `${who} ${row.action}`;
-  }
-}
 
 // One row inside a list. Tap the checkbox to toggle completion. Swipe-left
 // to delete (mirrors the task swipe pattern). Tap the assignee chip to
@@ -7468,213 +7492,7 @@ function ListItemRow({ item, members, getProfile, myId, onToggle, onDelete, onCy
   );
 }
 
-// Single list "card" — collapsed shows title + counts; expanded shows
-// items, the inline add composer, and an optional activity feed.
-// ─── List Detail Modal ────────────────────────────────────────────────────────
-// Full-screen bottom sheet for one list: items, add-item composer, activity.
-function ListDetailModal({ open, list, items, members, getProfile, myId, onClose, onAddItem, onToggleItem, onDeleteItem, onCycleAssignee, activity, onLoadActivity }) {
-  const [draft, setDraft] = React.useState('');
-  const [showActivity, setShowActivity] = React.useState(false);
-  const inputRef = React.useRef(null);
 
-  React.useEffect(() => {
-    if (open) {
-      setDraft('');
-      setShowActivity(false);
-      // No autoFocus on open (iOS keyboard pops the sheet mid-form). Tap to type.
-    }
-  }, [open]);
-
-  React.useEffect(() => {
-    if (showActivity && onLoadActivity && list?.id) onLoadActivity(list.id);
-  }, [showActivity, list?.id, onLoadActivity]);
-
-  if (!open || !list) return null;
-
-  const openItems = (items || []).filter(i => !i.completed).sort((a, b) => a.position - b.position);
-  const doneItems = (items || []).filter(i =>  i.completed).sort((a, b) => a.position - b.position);
-  const ordered   = [...openItems, ...doneItems];
-  const color     = getColor(list.color || 'coral');
-
-  const submitDraft = () => {
-    const t = draft.trim();
-    if (!t) return;
-    const parsed = parseListItemInput(t, members);
-    if (!parsed.title) return;
-    onAddItem(list.id, parsed);
-    setDraft('');
-    inputRef.current?.focus();
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title={list.title}>
-      <div style={{ borderLeft: `4px solid ${color}`, paddingLeft: 12, marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.06em' }}>
-          {openItems.length} {openItems.length === 1 ? 'item' : 'items'} open
-          {doneItems.length > 0 && ` · ${doneItems.length} done`}
-        </div>
-      </div>
-
-      {ordered.length > 0 ? (
-        <div className="list-items" style={{ marginBottom: 14 }}>
-          {ordered.map(it => (
-            <ListItemRow
-              key={it.id}
-              item={it}
-              members={members}
-              getProfile={getProfile}
-              myId={myId}
-              onToggle={onToggleItem}
-              onDelete={onDeleteItem}
-              onCycleAssignee={onCycleAssignee}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="list-empty" style={{ marginBottom: 14 }}>Nothing yet — add the first item below.</div>
-      )}
-
-      <div className="list-add-row">
-        <input
-          ref={inputRef}
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitDraft(); } }}
-          placeholder="Add item — try 'milk x2 #dairy @mom'"
-          className="list-add-input"
-          maxLength={200}
-        />
-        <button type="button" className="list-add-btn" onClick={submitDraft} disabled={!draft.trim()} aria-label="Add item" style={{ '--c': color }}>+</button>
-      </div>
-
-      <button type="button" className="list-activity-toggle" onClick={() => setShowActivity(s => !s)} style={{ marginTop: 10 }}>
-        {showActivity ? 'Hide activity' : 'Show activity'}
-      </button>
-      {showActivity && (
-        <div className="list-activity">
-          {(activity && activity.length > 0)
-            ? activity.slice(0, 15).map(a => (
-                <div key={a.id} className="list-activity-row">
-                  <span className="list-activity-text">{activityLabel(a, getProfile)}</span>
-                  <span className="list-activity-when">{relTime(a.created_at)}</span>
-                </div>
-              ))
-            : <div className="list-activity-empty">No activity yet.</div>}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-// ─── Add List Modal ───────────────────────────────────────────────────────────
-// Name input + member picker. Opens when user clicks Create with empty input,
-// or directly via a create button press.
-function AddListModal({ open, onClose, members, myId, initialTitle = '', spaces, initialSpaceId, onSave }) {
-  const [title, setTitle]       = React.useState('');
-  const [memberIds, setMemberIds] = React.useState([]);
-  const [spaceId, setSpaceId]   = React.useState(initialSpaceId || null);
-  const [saving, setSaving]     = React.useState(false);
-
-  // Reset every time the modal opens; pre-fill title if caller passed one.
-  React.useEffect(() => {
-    if (open) {
-      setTitle(initialTitle || '');
-      // Start empty so the "Everyone" chip isn't pre-highlighted — the
-      // user actively picks members (or taps Everyone). The list-helper
-      // text below the picker handles the "no one selected" state.
-      setMemberIds([]);
-      setSpaceId(initialSpaceId || null);
-      setSaving(false);
-    }
-  }, [open, initialTitle, members, initialSpaceId]);
-
-  const toggleMember = (id) => {
-    setMemberIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
-  const allSelected = (members || []).length > 0 && (members || []).every(m => memberIds.includes(m.id));
-
-  const save = async () => {
-    const t = title.trim();
-    if (!t || saving) return;
-    setSaving(true);
-    const result = await onSave({ title: t, memberIds, spaceId });
-    setSaving(false);
-    if (!result?.error) onClose();
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={<>New <em>list</em></>}
-      footer={
-        <button className="fb-btn solid" onClick={save} disabled={!title.trim() || saving}>
-          {saving ? 'Creating…' : 'Create list'}
-        </button>
-      }
-    >
-      <div className="field">
-        <label>List name</label>
-        <div style={{ position: 'relative' }}>
-          <input
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
-            placeholder="e.g. Groceries, School supplies"
-            maxLength={120}
-          />
-          <SpaceHashtagDropdown
-            value={title}
-            spaces={spaces}
-            onChange={setTitle}
-            onPickSpace={setSpaceId}
-          />
-        </div>
-      </div>
-      <div className="field">
-        <label>
-          Shared with
-          <span style={{ fontWeight: 400, opacity: 0.5 }}> · tap to change</span>
-        </label>
-        <div className="assignee-picker">
-          {/* Everyone shortcut — gradient + envelope only when actually
-              all-selected. Same visual treatment as the other Add* modals. */}
-          <button
-            type="button"
-            className={'pick' + (allSelected ? ' on' : '')}
-            onClick={() => setMemberIds(allSelected ? [] : (members || []).map(m => m.id))}
-          >
-            <span aria-hidden>📨</span>
-            <span>Everyone</span>
-          </button>
-          {(members || []).map(m => (
-            <button
-              key={m.id}
-              type="button"
-              className={'pick' + (memberIds.includes(m.id) ? ' on' : '')}
-              onClick={() => toggleMember(m.id)}
-              style={memberIds.includes(m.id) ? { '--pick-c': getColor(m.color) } : {}}
-            >
-              <Dot profile={m} />
-              <MemberName profile={m} isMe={m.id === myId} />
-            </button>
-          ))}
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-          {memberIds.length === 0
-            ? 'No one selected — only you will see this list.'
-            : memberIds.length === (members || []).length
-            ? 'Everyone in the group can see this list.'
-            : `${memberIds.length} ${memberIds.length === 1 ? 'person' : 'people'} will see this list.`}
-        </div>
-      </div>
-      <div className="field">
-        <label>Space <span style={{ fontWeight: 400, opacity: 0.5 }}>· optional</span></label>
-        <SpacePicker value={spaceId} spaces={spaces} onChange={setSpaceId} />
-      </div>
-    </Modal>
-  );
-}
 
 // ─── Spaces ───────────────────────────────────────────────────────────────────
 // A Space is a lightweight tag that groups related tasks/lists/notes/events
@@ -8139,11 +7957,11 @@ function AddSpaceModal({ open, onClose, members, myId, initial, onSave }) {
 // that opens the corresponding Add* modal with space_id pre-set.
 function SpaceDetailModal({
   open, space, onClose,
-  tasks, events, notes, lists, listItems,
+  tasks, events, notes,
   spaceItems, onAddSpaceItem, onToggleSpaceItem, onDeleteSpaceItem, onCycleSpaceItemAssignee,
   members, getProfile, myId,
-  onEdit, onArchive, onAddTask, onAddEvent, onAddNote, onAddList,
-  onShowTask, onShowEvent, onShowNote, onOpenList,
+  onEdit, onArchive, onAddTask, onAddEvent, onAddNote,
+  onShowTask, onShowEvent, onShowNote,
 }) {
   const [checklistDraft, setChecklistDraft] = React.useState('');
   const checklistInputRef = React.useRef(null);
@@ -8166,7 +7984,6 @@ function SpaceDetailModal({
   const spaceTasks  = (tasks  || []).filter(t => t.space_id === space.id);
   const spaceEvents = (events || []).filter(e => e.space_id === space.id);
   const spaceNotes  = (notes  || []).filter(n => n.space_id === space.id);
-  const spaceLists  = (lists  || []).filter(l => l.space_id === space.id);
   // Built-in checklist items (the absorbed "Lists" feature). Sorted with
   // open items first, then completed, both by position to preserve order.
   const myItems = (spaceItems || []).filter(i => i.space_id === space.id);
@@ -8386,36 +8203,6 @@ function SpaceDetailModal({
         )}
       </div>
 
-      {/* Tagged Lists — hidden while the Lists feature is dormant. The
-          checklist section above now covers this need natively. Restore
-          the block (and the Lists tab) together if you re-enable Lists. */}
-      {false && (
-      <div style={{ marginBottom: 22 }}>
-        <div style={sectionLabelStyle}>
-          <span>Lists {spaceLists.length > 0 && <span style={{ color }}>· {spaceLists.length}</span>}</span>
-          <button type="button" style={addBtnStyle} onClick={() => onAddList && onAddList(space)}>+ Add</button>
-        </div>
-        {spaceLists.length === 0 ? (
-          <div style={emptyStyle}>No lists yet.</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {spaceLists.map(l => {
-              const items = (listItems || []).filter(i => i.list_id === l.id);
-              const openCount = items.filter(i => !i.completed).length;
-              const lc = getColor(l.color || 'coral');
-              return (
-                <div key={l.id} style={{ ...itemStyle, borderLeft: `4px solid ${lc}` }} onClick={() => onOpenList && onOpenList(l)}>
-                  <div style={{ fontWeight: 600 }}>{l.title}</div>
-                  <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                    {openCount} {openCount === 1 ? 'item' : 'items'}{items.length - openCount > 0 ? ` · ${items.length - openCount} done` : ''}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      )}
 
       {/* Notes */}
       <div style={{ marginBottom: past.length > 0 ? 22 : 0 }}>
@@ -8470,8 +8257,12 @@ function SpaceDetailModal({
   );
 }
 
+// Stable zero-counts object for spaces with no items (shared, so it doesn't
+// churn a memoized SpaceCard's props).
+const EMPTY_SPACE_COUNTS = { openTasks: 0, upcomingEvents: 0, openListItems: 0, notes: 0 };
+
 const SpacesSection = React.memo(function SpacesSection({
-  spaces, tasks, events, notes, lists, listItems, spaceItems,
+  spaces, tasks, events, notes, spaceItems,
   members, getProfile, myId,
   collapsed, onToggleCollapse,
   onDeleteSpace, onOpenAddModal, onOpenDetail,
@@ -8491,16 +8282,25 @@ const SpacesSection = React.memo(function SpacesSection({
     });
 
   const today = localTodayISO();
-  const countsFor = (spaceId) => ({
-    openTasks: (tasks || []).filter(t => t.space_id === spaceId && !t.completed && !t.cancelled_at).length,
-    upcomingEvents: (events || []).filter(e => e.space_id === spaceId && e.date >= today).length,
-    // openListItems now counts the built-in space_items checklist (the
-    // absorbed Lists feature). Tagged shared_lists are no longer counted
-    // here since the Lists feature is dormant — re-add a second source if
-    // it ever gets re-enabled.
-    openListItems: (spaceItems || []).filter(i => i.space_id === spaceId && !i.completed).length,
-    notes: (notes || []).filter(n => n.space_id === spaceId).length,
-  });
+  // Bucket all four arrays into per-space counts in ONE pass each, instead of
+  // re-scanning every array once per space (which was O(spaces × items) on
+  // every render — the section re-renders on any task/event/note/item change).
+  // openListItems counts the built-in space_items checklist (the absorbed Lists
+  // feature); re-add a second source if tagged shared_lists are ever revived.
+  const countsBySpace = React.useMemo(() => {
+    const m = new Map();
+    const bucket = (id) => {
+      let b = m.get(id);
+      if (!b) { b = { openTasks: 0, upcomingEvents: 0, openListItems: 0, notes: 0 }; m.set(id, b); }
+      return b;
+    };
+    (tasks || []).forEach(t => { if (t.space_id && !t.completed && !t.cancelled_at) bucket(t.space_id).openTasks++; });
+    (events || []).forEach(e => { if (e.space_id && e.date >= today) bucket(e.space_id).upcomingEvents++; });
+    (spaceItems || []).forEach(i => { if (i.space_id && !i.completed) bucket(i.space_id).openListItems++; });
+    (notes || []).forEach(n => { if (n.space_id) bucket(n.space_id).notes++; });
+    return m;
+  }, [tasks, events, spaceItems, notes, today]);
+  const countsFor = (spaceId) => countsBySpace.get(spaceId) || EMPTY_SPACE_COUNTS;
 
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-spaces">
@@ -8600,11 +8400,6 @@ export function MainApp({ profile, onSettings }) {
   const [notes, setNotes] = React.useState([]);
   // Shared Lists state — three parallel arrays keyed by group_id. The
   // realtime channel mirrors INSERT/UPDATE/DELETE for all three tables.
-  const [lists, setLists] = React.useState([]);
-  const [listItems, setListItems] = React.useState([]);
-  const [activityByList, setActivityByList] = React.useState({});
-  const [listAddOpen, setListAddOpen] = React.useState(false);
-  const [listDetailItem, setListDetailItem] = React.useState(null);
   // Spaces state — top-level containers that group items across tasks /
   // events / notes / lists by space_id. Same modal-lifting pattern as Lists.
   const [spaces, setSpaces] = React.useState([]);
@@ -8728,21 +8523,24 @@ export function MainApp({ profile, onSettings }) {
     const seq = ++fetchSeqRef.current;
     const live = () => fetchSeqRef.current === seq;
 
-    // Shared Lists — silently fall back to [] if the tables don't exist.
-    Promise.all([
-      supabase.from('shared_lists').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
-      supabase.from('shared_list_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true }),
-    ]).then(([l, i]) => {
-      if (!live()) return;
-      if (!l.error) setLists(l.data || []);
-      if (!i.error) setListItems(i.data || []);
-    });
 
-    // Spaces + space items — same defensive pattern.
+    // Spaces + space items — same defensive pattern. Drop member-scoped spaces
+    // this user isn't part of (RLS is only group-scoped), then fetch items
+    // chained off the visible-space set so an item's parent is always known
+    // (no race) and items of hidden spaces never enter local state.
     supabase.from('spaces').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false })
-      .then(({ data, error }) => { if (live() && !error) setSpaces(data || []); });
-    supabase.from('space_items').select('*').eq('group_id', profile.group_id).order('position', { ascending: true })
-      .then(({ data, error }) => { if (live() && !error) setSpaceItems(data || []); });
+      .then(({ data, error }) => {
+        if (!live() || error) return;
+        const visible = (data || []).filter(s => !spaceHiddenFrom(s, profile.id));
+        setSpaces(visible);
+        const visibleIds = visible.map(s => s.id);
+        // Narrow to visible spaces server-side: smaller payload, and the sort is
+        // served by the (space_id, position) index. Empty list → 0 rows.
+        supabase.from('space_items').select('*').in('space_id', visibleIds).order('position', { ascending: true })
+          .then(({ data: items, error: e2 }) => {
+            if (live() && !e2) setSpaceItems(items || []);
+          });
+      });
 
     // Task suggestions (silently [] if the table isn't migrated yet).
     supabase.from('task_suggestions').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: true })
@@ -8766,6 +8564,14 @@ export function MainApp({ profile, onSettings }) {
       // far more than the feed's load-more pills ever reveal.
       supabase.from('notes').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }).limit(100),
     ]);
+    // The Supabase client RESOLVES many failures with { data:null, error }
+    // rather than rejecting, so a bad connection would otherwise render a fully
+    // empty app (no tasks/events/posts) instead of the retry screen. Treat a
+    // core-query error as a load failure.
+    if (m.error || t.error || e.error || n.error) {
+      if (live()) { setLoadFailed(true); setLoading(false); }
+      return;
+    }
     const allTasks = t.data || [];
     // Auto-delete completed tasks older than 8 days. With the
     // tightened tasks_delete RLS policy (creator / assignee /
@@ -8809,6 +8615,14 @@ export function MainApp({ profile, onSettings }) {
     }
   }, [profile?.group_id, profile?.id]);
 
+  // Mirror the set of spaces this user can actually see (spaces state is kept
+  // visible-only) so the realtime space_items handler can drop items whose
+  // parent space is member-scoped away from this user.
+  const spaceVisibleRef = React.useRef(new Set());
+  React.useEffect(() => {
+    spaceVisibleRef.current = new Set(spaces.map(s => s.id));
+  }, [spaces]);
+
   React.useEffect(() => {
     if (!profile?.group_id) return;
     fetchAll();
@@ -8834,41 +8648,6 @@ export function MainApp({ profile, onSettings }) {
       })
       .subscribe();
 
-    // Realtime for Shared Lists — group-scoped, covers lists, items,
-    // and activity in a single channel. Each event merges into local
-    // state so multiple family members see edits live.
-    const listsChannel = supabase
-      .channel('kinnekt-lists-' + profile.group_id)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_lists', filter: `group_id=eq.${profile.group_id}` },
-        ({ eventType, new: row, old }) => {
-          if (eventType === 'DELETE') {
-            setLists(prev => prev.filter(l => l.id !== old.id));
-            setListItems(prev => prev.filter(i => i.list_id !== old.id));
-          } else if (eventType === 'INSERT') {
-            setLists(prev => prev.some(l => l.id === row.id) ? prev : [row, ...prev]);
-          } else {
-            setLists(prev => prev.map(l => l.id === row.id ? row : l));
-          }
-        })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_list_items', filter: `group_id=eq.${profile.group_id}` },
-        ({ eventType, new: row, old }) => {
-          if (eventType === 'DELETE') {
-            setListItems(prev => prev.filter(i => i.id !== old.id));
-          } else if (eventType === 'INSERT') {
-            setListItems(prev => prev.some(i => i.id === row.id) ? prev : [...prev, row]);
-          } else {
-            setListItems(prev => prev.map(i => i.id === row.id ? row : i));
-          }
-        })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'shared_list_activity', filter: `group_id=eq.${profile.group_id}` },
-        ({ new: row }) => {
-          setActivityByList(prev => {
-            const existing = prev[row.list_id] || [];
-            if (existing.some(a => a.id === row.id)) return prev;
-            return { ...prev, [row.list_id]: [row, ...existing].slice(0, 30) };
-          });
-        })
-      .subscribe();
 
     // Realtime for Spaces — group-scoped. Items in other tables that
     // gain/lose a space_id come through their own table channels.
@@ -8879,14 +8658,38 @@ export function MainApp({ profile, onSettings }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'spaces', filter: `group_id=eq.${profile.group_id}` },
         ({ eventType, new: row, old }) => {
           if (eventType === 'DELETE') {
+            spaceVisibleRef.current.delete(old.id);
             setSpaces(prev => prev.filter(s => s.id !== old.id));
             // Cascade-delete on the FK handles space_items in the DB;
             // mirror locally so the UI doesn't show orphaned items.
             setSpaceItems(prev => prev.filter(i => i.space_id !== old.id));
           } else if (eventType === 'INSERT') {
+            // The channel filters group_id only — drop member-scoped spaces
+            // this user isn't part of (realtime carries no per-row RLS).
+            if (spaceHiddenFrom(row, profile.id)) return;
+            // Add to the ref synchronously so this space's items (which stream
+            // in right after) aren't dropped by the space_items guard before
+            // the [spaces] effect reconciles the ref.
+            spaceVisibleRef.current.add(row.id);
             setSpaces(prev => prev.some(s => s.id === row.id) ? prev : [row, ...prev]);
           } else {
-            setSpaces(prev => prev.map(s => s.id === row.id ? row : s));
+            if (spaceHiddenFrom(row, profile.id)) {
+              // Flipped to member-scoped-without-me — hide it and its items.
+              spaceVisibleRef.current.delete(row.id);
+              setSpaces(prev => prev.filter(s => s.id !== row.id));
+              setSpaceItems(prev => prev.filter(i => i.space_id !== row.id));
+            } else {
+              // Visible: merge, or SURFACE a space that just became visible
+              // (member added / made group-wide). On that transition its items
+              // were never streamed to us, so backfill them.
+              const wasVisible = spaceVisibleRef.current.has(row.id);
+              spaceVisibleRef.current.add(row.id);
+              setSpaces(prev => prev.some(s => s.id === row.id) ? prev.map(s => s.id === row.id ? row : s) : [row, ...prev]);
+              if (!wasVisible) {
+                supabase.from('space_items').select('*').eq('space_id', row.id).order('position', { ascending: true })
+                  .then(({ data }) => { if (data && data.length) setSpaceItems(prev => { const have = new Set(prev.map(i => i.id)); return [...prev, ...data.filter(i => !have.has(i.id))]; }); });
+              }
+            }
           }
         })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'space_items', filter: `group_id=eq.${profile.group_id}` },
@@ -8894,9 +8697,16 @@ export function MainApp({ profile, onSettings }) {
           if (eventType === 'DELETE') {
             setSpaceItems(prev => prev.filter(i => i.id !== old.id));
           } else if (eventType === 'INSERT') {
-            setSpaceItems(prev => prev.some(i => i.id === row.id) ? prev : [...prev, row]);
+            // Only accept items whose parent space is visible to this user
+            // (parent unknown = drop, to avoid leaking a scoped space's items).
+            if (!spaceVisibleRef.current.has(row.space_id)) return;
+            setSpaceItems(prev => prev.some(i => i.id === row.id) ? prev : [...prev, row].sort((a, b) => (a.position ?? 0) - (b.position ?? 0)));
           } else {
-            setSpaceItems(prev => prev.map(i => i.id === row.id ? row : i));
+            if (!spaceVisibleRef.current.has(row.space_id)) {
+              setSpaceItems(prev => prev.filter(i => i.id !== row.id));
+            } else {
+              setSpaceItems(prev => prev.map(i => i.id === row.id ? row : i));
+            }
           }
         })
       .subscribe();
@@ -8911,21 +8721,41 @@ export function MainApp({ profile, onSettings }) {
           if (eventType === 'DELETE') {
             setTasks(prev => prev.filter(t => t.id !== old.id));
           } else if (eventType === 'INSERT') {
+            // Realtime filters group_id only and applies NO per-row RLS to
+            // payloads, so another member's private task would otherwise stream
+            // in. The initial fetch is RLS-filtered; mirror that boundary here.
+            if (row.is_private && row.created_by !== profile.id) return;
             setTasks(prev => prev.some(t => t.id === row.id) ? prev : [row, ...prev]);
           } else {
-            setTasks(prev => prev.map(t => t.id === row.id ? row : t));
+            // An UPDATE that flips a visible task to private-not-mine must hide
+            // it; one that flips private→public must SURFACE it (upsert), since
+            // it was never inserted while private.
+            if (row.is_private && row.created_by !== profile.id) {
+              setTasks(prev => prev.filter(t => t.id !== row.id));
+            } else {
+              setTasks(prev => prev.some(t => t.id === row.id) ? prev.map(t => t.id === row.id ? row : t) : [row, ...prev]);
+            }
           }
         })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'events', filter: `group_id=eq.${profile.group_id}` },
         ({ eventType, new: row, old }) => {
+          const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
           if (eventType === 'DELETE') {
             setEvents(prev => prev.filter(e => e.id !== old.id));
           } else if (eventType === 'INSERT') {
+            // Same private-row guard as tasks (realtime carries no RLS).
+            if (row.is_private && row.created_by !== profile.id) return;
             // Keep date order (the initial fetch is ordered by date) so a
             // realtime-added event doesn't land at the bottom out of sequence.
-            setEvents(prev => prev.some(e => e.id === row.id) ? prev : [...prev, row].sort((a, b) => (a.date || '').localeCompare(b.date || '')));
+            setEvents(prev => prev.some(e => e.id === row.id) ? prev : [...prev, row].sort(byDate));
           } else {
-            setEvents(prev => prev.map(e => e.id === row.id ? row : e));
+            if (row.is_private && row.created_by !== profile.id) {
+              setEvents(prev => prev.filter(e => e.id !== row.id));
+            } else {
+              // Upsert (surface a private→public flip) + re-sort so an edited
+              // date moves to its new slot.
+              setEvents(prev => (prev.some(e => e.id === row.id) ? prev.map(e => e.id === row.id ? row : e) : [...prev, row]).sort(byDate));
+            }
           }
         })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notes', filter: `group_id=eq.${profile.group_id}` },
@@ -8952,7 +8782,6 @@ export function MainApp({ profile, onSettings }) {
 
     return () => {
       supabase.removeChannel(channel);
-      supabase.removeChannel(listsChannel);
       supabase.removeChannel(spacesChannel);
       supabase.removeChannel(coreChannel);
     };
@@ -9088,23 +8917,11 @@ export function MainApp({ profile, onSettings }) {
           };
           if (s.event_id) payload.event_id = s.event_id;
           const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
-          let row = null, insErr = null;
-          for (let i = 0; i < 7; i++) {
-            ({ data: row, error: insErr } = await supabase.from('tasks').insert(payload).select().single());
-            if (!insErr) break;
-            const msg = (insErr.message || '').toLowerCase();
-            let stripped = false;
-            for (const col of optional) {
-              if (payload[col] !== undefined && msg.includes(col)) {
-                const { [col]: _, ...rest } = payload; payload = rest; stripped = true; break;
-              }
-            }
-            if (!stripped) break;
-          }
+          const { data: row } = await writeStrippingMissing(
+            (p) => supabase.from('tasks').insert(p).select().single(), payload, optional);
           if (row) {
             addRow(row);
-          } else if (!window.__kinnektRespawnWarned) {
-            window.__kinnektRespawnWarned = true;
+          } else if (warnOnce('respawn')) {
             alert(
               'This recurring task could not roll forward to its next day.\n\n' +
               'Your database is missing the respawn function. Run schema.sql\n' +
@@ -9128,8 +8945,7 @@ export function MainApp({ profile, onSettings }) {
     if (error) {
       // Most likely the notifications table or RLS policies are missing.
       // Don't crash the calling save — but flag it once for the user.
-      if (!window.__kinnektNotifWarned) {
-        window.__kinnektNotifWarned = true;
+      if (warnOnce('notif')) {
         console.warn('Notification insert failed (run the notifications SQL migration):', error.message);
       }
     }
@@ -9142,25 +8958,8 @@ export function MainApp({ profile, onSettings }) {
     // tasks" -> create new task). Null when the task isn't tied to an
     // event, present otherwise. Strip-on-error mirrors recurrence.
     const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time', 'baton_offer'];
-    const droppedCols = [];
-    let row = null;
-    let error = null;
-    for (let i = 0; i < 7; i++) {
-      ({ data: row, error } = await supabase.from('tasks').insert(payload).select().single());
-      if (!error) break;
-      let stripped = null;
-      const msg = (error.message || '').toLowerCase();
-      for (const col of optional) {
-        if (payload[col] !== undefined && msg.includes(col)) {
-          const { [col]: _, ...rest } = payload;
-          payload = rest;
-          stripped = col;
-          droppedCols.push(col);
-          break;
-        }
-      }
-      if (!stripped) break;
-    }
+    const { data: row, error, droppedCols } = await writeStrippingMissing(
+      (p) => supabase.from('tasks').insert(p).select().single(), payload, optional);
     if (error || !row) {
       if (error) alert('Could not save task: ' + error.message);
       return;
@@ -9169,8 +8968,7 @@ export function MainApp({ profile, onSettings }) {
     // description silently vanished. This is the "I added details and they
     // didn't show up" case.
     if (droppedCols.includes('description') && data.description) {
-      if (!window.__kinnektDescWarned) {
-        window.__kinnektDescWarned = true;
+      if (warnOnce('desc')) {
         alert(
           'Task saved, but the details/notes could NOT be stored.\n\n' +
           'The "description" column is missing from your tasks table.\n' +
@@ -9183,8 +8981,7 @@ export function MainApp({ profile, onSettings }) {
     // won't appear linked under the event. One-time gate so we don't
     // nag repeatedly.
     if (droppedCols.includes('event_id') && data.event_id) {
-      if (!window.__kinnektEventIdWarned) {
-        window.__kinnektEventIdWarned = true;
+      if (warnOnce('eventId')) {
         alert(
           'Task saved, but it could NOT be linked to the event.\n\n' +
           'The "event_id" column is missing from your tasks table.\n' +
@@ -9193,7 +8990,9 @@ export function MainApp({ profile, onSettings }) {
         );
       }
     }
-    setTasks(prev => [row, ...prev]);
+    // Dedup: our own realtime INSERT can beat this promise, so guard by id
+    // (else the row appears twice with a duplicate React key).
+    setTasks(prev => prev.some(t => t.id === row.id) ? prev : [row, ...prev]);
     if (row.assigned_to && row.assigned_to !== profile.id) {
       notify([row.assigned_to], 'task_assigned', {
         task_id: row.id,
@@ -9211,36 +9010,22 @@ export function MainApp({ profile, onSettings }) {
     setTasks(prev => prev.map(t => t.id === id ? next : t));
     // Optional columns: strip on error so the update still goes
     // through on older schemas (same pattern as addTask).
-    let payload = { ...patch };
+    const payload = { ...patch };
     const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
-    for (let i = 0; i < 7; i++) {
-      const { error } = await supabase.from('tasks').update(payload).eq('id', id);
-      if (!error) return { error: null };
-      const msg = (error.message || '').toLowerCase();
-      let stripped = null;
-      for (const col of optional) {
-        if (payload[col] !== undefined && msg.includes(col)) {
-          // Surface a silently-dropped description (the "my details didn't
-          // save" case) the same way addTask does.
-          if (col === 'description' && patch.description && !window.__kinnektDescWarned) {
-            window.__kinnektDescWarned = true;
-            alert(
-              'Saved, but the details/notes could NOT be stored.\n\n' +
-              'The "description" column is missing from your tasks table.\n' +
-              'Run this in your Supabase SQL Editor:\n\n' +
-              'alter table public.tasks add column if not exists description text;'
-            );
-          }
-          const { [col]: _, ...rest } = payload;
-          payload = rest;
-          stripped = col;
-          break;
-        }
-      }
-      if (!stripped) {
-        setTasks(prev => prev.map(t => t.id === id ? existing : t));
-        return { error };
-      }
+    const { error, droppedCols } = await writeStrippingMissing(
+      (p) => supabase.from('tasks').update(p).eq('id', id), payload, optional);
+    // Surface a silently-dropped description (the "my details didn't save" case).
+    if (droppedCols.includes('description') && patch.description && warnOnce('desc')) {
+      alert(
+        'Saved, but the details/notes could NOT be stored.\n\n' +
+        'The "description" column is missing from your tasks table.\n' +
+        'Run this in your Supabase SQL Editor:\n\n' +
+        'alter table public.tasks add column if not exists description text;'
+      );
+    }
+    if (error) {
+      setTasks(prev => prev.map(t => t.id === id ? existing : t));
+      return { error };
     }
     return { error: null };
   };
@@ -9538,27 +9323,8 @@ export function MainApp({ profile, onSettings }) {
 
     // Optional columns that may not exist in older schemas — strip them on error.
     const optionalCols = ['description', 'location', 'attendees', 'recurrence', 'rsvps', 'space_id', 'is_private', 'end_date'];
-    const droppedCols = [];
-
-    let row = null;
-    let error = null;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      ({ data: row, error } = await supabase.from('events').insert(payload).select().single());
-      if (!error) break;
-      // Parse missing-column name from PostgREST error and strip it.
-      const msg = error.message || '';
-      let stripped = null;
-      for (const col of optionalCols) {
-        if (payload[col] !== undefined && msg.toLowerCase().includes(col)) {
-          const { [col]: _, ...next } = payload;
-          payload = next;
-          stripped = col;
-          droppedCols.push(col);
-          break;
-        }
-      }
-      if (!stripped) break;
-    }
+    const { data: row, error, droppedCols } = await writeStrippingMissing(
+      (p) => supabase.from('events').insert(p).select().single(), payload, optionalCols);
 
     if (error || !row) {
       alert('Could not save event: ' + (error?.message || 'no row returned'));
@@ -9590,8 +9356,7 @@ export function MainApp({ profile, onSettings }) {
       // Always show this one — the modal will render RSVP buttons
       // and the user will hit a wall the first time they try to RSVP.
       // Showing it at save-time gives them the fix up front.
-      if (!window.__kinnektRsvpWarned) {
-        window.__kinnektRsvpWarned = true;
+      if (warnOnce('rsvp')) {
         alert(
           'RSVP feature needs a database update.\n\n' +
           'Run this in your Supabase SQL Editor:\n\n' +
@@ -9612,7 +9377,7 @@ export function MainApp({ profile, onSettings }) {
       );
     }
 
-    setEvents(prev => [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
+    setEvents(prev => prev.some(e => e.id === row.id) ? prev : [...prev, row].sort((a, b) => a.date.localeCompare(b.date)));
     const attendeeIds = attendees.filter(id => id !== profile.id);
     if (attendeeIds.length > 0) {
       notify(attendeeIds, 'event_invited', {
@@ -9649,46 +9414,31 @@ export function MainApp({ profile, onSettings }) {
     const sortByDate = (list) => list.sort((a, b) => a.date.localeCompare(b.date));
     const rollback = () => setEvents(prev => sortByDate(prev.map(e => e.id === id ? existing : e)));
     setEvents(prev => sortByDate(prev.map(e => e.id === id ? { ...e, ...patch } : e)));
-    let payload = { ...patch };
+    const payload = { ...patch };
     const optional = ['description', 'location', 'attendees', 'recurrence', 'space_id', 'is_private', 'end_date'];
-    for (let i = 0; i < 8; i++) {
-      // .select() so a real save (returns the row) is distinguishable
-      // from an RLS no-op (0 rows, NO error) — the latter looked like
-      // success but silently reverted on the next refresh.
-      const { data, error } = await supabase.from('events').update(payload).eq('id', id).select();
-      if (!error) {
-        if (!data || data.length === 0) {
-          rollback();
-          alert(
-            'Could not save the changes — the database blocked the update\n' +
-            '(0 rows changed). Your events table is missing its UPDATE\n' +
-            'policy. Run this once in the Supabase SQL Editor:\n\n' +
-            'drop policy if exists "events_update" on public.events;\n' +
-            'create policy "events_update" on public.events\n' +
-            '  for update using (group_id = public.my_group_id());'
-          );
-          return { error: { message: 'no rows updated (RLS)' } };
-        }
-        // Reconcile local state with the row the DB actually saved.
-        setEvents(prev => sortByDate(prev.map(e => e.id === id ? data[0] : e)));
-        return { error: null };
-      }
-      const msg = (error.message || '').toLowerCase();
-      let stripped = null;
-      for (const col of optional) {
-        if (payload[col] !== undefined && msg.includes(col)) {
-          const { [col]: _, ...rest } = payload;
-          payload = rest;
-          stripped = col;
-          break;
-        }
-      }
-      if (!stripped) {
-        rollback();
-        alert('Could not save changes: ' + error.message);
-        return { error };
-      }
+    // .select() so a real save (returns the row) is distinguishable from an RLS
+    // no-op (0 rows, NO error) — the latter looked like success but reverted.
+    const { data, error } = await writeStrippingMissing(
+      (p) => supabase.from('events').update(p).eq('id', id).select(), payload, optional);
+    if (error) {
+      rollback();
+      alert('Could not save changes: ' + error.message);
+      return { error };
     }
+    if (!data || data.length === 0) {
+      rollback();
+      alert(
+        'Could not save the changes — the database blocked the update\n' +
+        '(0 rows changed). Your events table is missing its UPDATE\n' +
+        'policy. Run this once in the Supabase SQL Editor:\n\n' +
+        'drop policy if exists "events_update" on public.events;\n' +
+        'create policy "events_update" on public.events\n' +
+        '  for update using (group_id = public.my_group_id());'
+      );
+      return { error: { message: 'no rows updated (RLS)' } };
+    }
+    // Reconcile local state with the row the DB actually saved.
+    setEvents(prev => sortByDate(prev.map(e => e.id === id ? data[0] : e)));
     return { error: null };
   };
   const deleteEvent = React.useCallback(async (id) => {
@@ -9701,111 +9451,20 @@ export function MainApp({ profile, onSettings }) {
       if (!ok) return;
     }
     let removed = null;
+    // tasks.event_id is ON DELETE CASCADE, so deleting the event also removes
+    // its linked tasks server-side. Drop them from local state now too, so this
+    // client doesn't show ghost tasks (a tap on which would write to a deleted
+    // row) until its own realtime DELETE echoes back.
+    let removedTasks = [];
     setEvents(prev => { removed = prev.find(e => e.id === id) || null; return prev.filter(e => e.id !== id); });
+    setTasks(prev => { removedTasks = prev.filter(t => t.event_id === id); return removedTasks.length ? prev.filter(t => t.event_id !== id) : prev; });
     const { error } = await supabase.from('events').delete().eq('id', id);
     if (error) {
       if (removed) setEvents(prev => prev.some(e => e.id === id) ? prev : [...prev, removed]);
+      if (removedTasks.length) setTasks(prev => [...prev, ...removedTasks.filter(rt => !prev.some(t => t.id === rt.id))]);
       alert('Could not delete the event: ' + (error.message || 'you may not have permission.'));
     }
   }, [events]);
-
-  // ─── Shared Lists CRUD ───────────────────────────────────────────────────
-  // Activity logging — best-effort fire-and-forget. Failures are silent
-  // so a missing table never breaks the user-facing action.
-  const logListActivity = async (listId, action, payload) => {
-    if (!listId || !profile?.group_id) return;
-    try {
-      await supabase.from('shared_list_activity').insert({
-        list_id: listId,
-        group_id: profile.group_id,
-        actor_id: profile.id,
-        action,
-        payload: payload || null,
-      });
-    } catch { /* ignore */ }
-  };
-  // Load the most recent 30 activity rows for one list on demand. Cached
-  // in activityByList so re-opening doesn't re-fetch unnecessarily.
-  const loadListActivity = React.useCallback(async (listId) => {
-    if (!listId) return;
-    const { data, error } = await supabase
-      .from('shared_list_activity')
-      .select('*')
-      .eq('list_id', listId)
-      .order('created_at', { ascending: false })
-      .limit(30);
-    if (!error) setActivityByList(prev => ({ ...prev, [listId]: data || [] }));
-  }, []);
-
-  // Accepts { title, memberIds } or a plain string for backwards compat.
-  // member_ids is stored on the row so each list can be scoped to a subset
-  // of the group. Uses the column-strip retry pattern — if member_ids column
-  // doesn't exist yet, the insert retries without it (visible to all).
-  const addList = async (arg) => {
-    const { title: rawTitle, memberIds, spaceId } =
-      typeof arg === 'string' ? { title: arg, memberIds: null, spaceId: null } : (arg || {});
-    const t = (rawTitle || '').trim();
-    if (!t) return { data: null, error: { message: 'Title is empty' } };
-    if (!profile?.group_id) {
-      return { data: null, error: { message: 'No group_id — try refreshing.' } };
-    }
-    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const row = {
-      id: tempId,
-      group_id: profile.group_id,
-      created_by: profile.id,
-      title: t,
-      color: profile.color || 'coral',
-      list_type: 'general',
-      // None selected → creator-only (see addSpace note; [] was read as "all").
-      member_ids: (Array.isArray(memberIds) && memberIds.length) ? memberIds : [profile.id],
-      space_id: spaceId || null,
-      archived_at: null,
-      created_at: new Date().toISOString(),
-    };
-    setLists(prev => prev.some(l => l.id === tempId) ? prev : [row, ...prev]);
-    let error = null;
-    // Strip member_ids / space_id on error (columns may not exist yet) — retry up to twice.
-    let payload = { ...row };
-    try {
-      let result = await supabase.from('shared_lists').insert(payload);
-      if (result.error && /space_id/i.test(result.error.message || '')) {
-        const { space_id: _s, ...stripped } = payload;
-        payload = stripped;
-        result = await supabase.from('shared_lists').insert(payload);
-      }
-      if (result.error && /member_ids/i.test(result.error.message || '')) {
-        const { member_ids: _m, ...stripped } = payload;
-        result = await supabase.from('shared_lists').insert(stripped);
-      }
-      error = result.error;
-    } catch (thrown) {
-      console.error('[shared_lists] insert threw:', thrown);
-      error = { message: String(thrown?.message || thrown) };
-    }
-    if (error) {
-      console.error('[shared_lists] insert error:', error);
-      setLists(prev => prev.filter(l => l.id !== tempId));
-      return { data: null, error };
-    }
-    logListActivity(tempId, 'list_created', { title: t });
-    return { data: row, error: null };
-  };
-  const deleteList = async (id) => {
-    const existing = lists.find(l => l.id === id);
-    setLists(prev => prev.filter(l => l.id !== id));
-    setListItems(prev => prev.filter(i => i.list_id !== id));
-    const { error } = await supabase.from('shared_lists').delete().eq('id', id);
-    if (error) {
-      // Revert + surface
-      if (existing) setLists(prev => prev.some(l => l.id === id) ? prev : [existing, ...prev]);
-      alert('Could not delete list: ' + error.message);
-      return;
-    }
-    logListActivity(id, 'list_deleted', { title: existing?.title });
-  };
 
   // ─── Spaces CRUD ─────────────────────────────────────────────────────────
   // Optimistic insert with crypto.randomUUID — same pattern as addList. Items
@@ -9820,9 +9479,7 @@ export function MainApp({ profile, onSettings }) {
     if (!profile?.group_id) {
       return { data: null, error: { message: 'No group_id — try refreshing.' } };
     }
-    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tempId = newTempId();
     const row = {
       id: tempId,
       group_id: profile.group_id,
@@ -9844,18 +9501,8 @@ export function MainApp({ profile, onSettings }) {
     let payload = { ...row };
     let error = null;
     try {
-      let result = await supabase.from('spaces').insert(payload);
-      // Column-strip retry (optional fields may not exist yet)
       const optional = ['member_ids', 'description', 'emoji', 'pinned_at'];
-      for (let i = 0; i < 4 && result.error; i++) {
-        const msg = (result.error.message || '').toLowerCase();
-        const hit = optional.find(c => payload[c] !== undefined && msg.includes(c));
-        if (!hit) break;
-        const { [hit]: _, ...stripped } = payload;
-        payload = stripped;
-        result = await supabase.from('spaces').insert(payload);
-      }
-      error = result.error;
+      ({ error } = await writeStrippingMissing((p) => supabase.from('spaces').insert(p), payload, optional));
     } catch (thrown) {
       console.error('[spaces] insert threw:', thrown);
       error = { message: String(thrown?.message || thrown) };
@@ -9914,11 +9561,10 @@ export function MainApp({ profile, onSettings }) {
     // Locally null space_id on tagged items so the UI updates instantly.
     // Capture which rows we touched (via the updater, so we don't need tasks/
     // events/etc in this callback's deps) to restore them if the delete fails.
-    let tIds = [], eIds = [], nIds = [], lIds = [];
+    let tIds = [], eIds = [], nIds = [];
     setTasks(prev => { tIds = prev.filter(t => t.space_id === id).map(t => t.id); return prev.map(t => t.space_id === id ? { ...t, space_id: null } : t); });
     setEvents(prev => { eIds = prev.filter(e => e.space_id === id).map(e => e.id); return prev.map(e => e.space_id === id ? { ...e, space_id: null } : e); });
     setNotes(prev => { nIds = prev.filter(n => n.space_id === id).map(n => n.id); return prev.map(n => n.space_id === id ? { ...n, space_id: null } : n); });
-    setLists(prev => { lIds = prev.filter(l => l.space_id === id).map(l => l.id); return prev.map(l => l.space_id === id ? { ...l, space_id: null } : l); });
     const { error } = await supabase.from('spaces').delete().eq('id', id);
     if (error) {
       if (existing) setSpaces(prev => prev.some(s => s.id === id) ? prev : [existing, ...prev]);
@@ -9926,101 +9572,10 @@ export function MainApp({ profile, onSettings }) {
       setTasks(prev => prev.map(t => tIds.includes(t.id) ? { ...t, space_id: id } : t));
       setEvents(prev => prev.map(e => eIds.includes(e.id) ? { ...e, space_id: id } : e));
       setNotes(prev => prev.map(n => nIds.includes(n.id) ? { ...n, space_id: id } : n));
-      setLists(prev => prev.map(l => lIds.includes(l.id) ? { ...l, space_id: id } : l));
       alert('Could not delete space: ' + error.message);
     }
   }, [spaces]);
 
-  const addListItem = async (listId, parsed) => {
-    if (!listId || !parsed?.title || !profile?.group_id) return;
-    const sibling = listItems.filter(i => i.list_id === listId);
-    const nextPos = sibling.length === 0 ? 0 : Math.max(...sibling.map(i => i.position || 0)) + 1;
-    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const row = {
-      id: tempId,
-      list_id: listId,
-      group_id: profile.group_id,
-      created_by: profile.id,
-      title: parsed.title,
-      quantity: parsed.quantity || null,
-      category: parsed.category || null,
-      assigned_to: parsed.assigned_to || null,
-      position: nextPos,
-      completed: false,
-      completed_at: null,
-      completed_by: null,
-      created_at: new Date().toISOString(),
-    };
-    setListItems(prev => prev.some(i => i.id === tempId) ? prev : [...prev, row]);
-    let error = null;
-    try {
-      const result = await supabase.from('shared_list_items').insert(row);
-      error = result.error;
-    } catch (thrown) {
-      console.error('[shared_list_items] insert threw:', thrown);
-      error = { message: String(thrown?.message || thrown) };
-    }
-    if (error) {
-      console.error('[shared_list_items] insert error:', error);
-      setListItems(prev => prev.filter(i => i.id !== tempId));
-      alert('Could not add item: ' + (error.message || 'unknown'));
-      return;
-    }
-    logListActivity(listId, 'item_added', { title: row.title, quantity: row.quantity });
-  };
-  const toggleListItem = async (id, next) => {
-    const it = listItems.find(i => i.id === id);
-    if (!it) return;
-    const optimistic = {
-      ...it,
-      completed: !!next,
-      completed_at: next ? new Date().toISOString() : null,
-      completed_by: next ? profile.id : null,
-    };
-    setListItems(prev => prev.map(i => i.id === id ? optimistic : i));
-    const { error } = await supabase.from('shared_list_items')
-      .update({
-        completed: optimistic.completed,
-        completed_at: optimistic.completed_at,
-        completed_by: optimistic.completed_by,
-      }).eq('id', id);
-    if (error) {
-      setListItems(prev => prev.map(i => i.id === id ? it : i));
-      alert('Could not update item: ' + error.message);
-      return;
-    }
-    logListActivity(it.list_id, next ? 'item_completed' : 'item_uncompleted', { title: it.title });
-  };
-  const deleteListItem = async (id) => {
-    const it = listItems.find(i => i.id === id);
-    if (!it) return;
-    setListItems(prev => prev.filter(i => i.id !== id));
-    const { error } = await supabase.from('shared_list_items').delete().eq('id', id);
-    if (error) {
-      setListItems(prev => prev.some(i => i.id === id) ? prev : [...prev, it]);
-      alert('Could not delete item: ' + error.message);
-      return;
-    }
-    logListActivity(it.list_id, 'item_removed', { title: it.title });
-  };
-  // Cycle through [unassigned, member1, member2, ...] each tap. Fast,
-  // no modal — exactly what the spec asks for.
-  const cycleListItemAssignee = async (item) => {
-    const ids = [null, ...(members || []).map(m => m.id)];
-    const idx = ids.indexOf(item.assigned_to ?? null);
-    const next = ids[(idx + 1) % ids.length];
-    setListItems(prev => prev.map(i => i.id === item.id ? { ...i, assigned_to: next } : i));
-    const { error } = await supabase.from('shared_list_items')
-      .update({ assigned_to: next }).eq('id', item.id);
-    if (error) {
-      setListItems(prev => prev.map(i => i.id === item.id ? item : i));
-      alert('Could not reassign: ' + error.message);
-      return;
-    }
-    logListActivity(item.list_id, 'item_assigned', { title: item.title, to: next });
-  };
 
   // ─── Space items (built-in Space checklist) ─────────────────────────────
   // Same optimistic-then-revert pattern as shared_list_items, scoped to a
@@ -10031,9 +9586,7 @@ export function MainApp({ profile, onSettings }) {
     if (!spaceId || !parsed?.title || !profile?.group_id) return;
     const sibling = spaceItems.filter(i => i.space_id === spaceId);
     const nextPos = sibling.length === 0 ? 0 : Math.max(...sibling.map(i => i.position || 0)) + 1;
-    const tempId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tempId = newTempId();
     const row = {
       id: tempId,
       space_id: spaceId,
@@ -10220,27 +9773,8 @@ export function MainApp({ profile, onSettings }) {
       space_id,
     };
     const optionalCols = ['type', 'payload', 'pinned', 'space_id'];
-    let noteRow = null;
-    let nErr = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      ({ data: noteRow, error: nErr } = await supabase
-        .from('notes')
-        .insert(insertRow)
-        .select()
-        .single());
-      if (!nErr) break;
-      const msg = (nErr.message || '').toLowerCase();
-      let stripped = null;
-      for (const col of optionalCols) {
-        if (insertRow[col] !== undefined && msg.includes(col)) {
-          const { [col]: _, ...rest } = insertRow;
-          insertRow = rest;
-          stripped = col;
-          break;
-        }
-      }
-      if (!stripped) break;
-    }
+    const { data: noteRow, error: nErr } = await writeStrippingMissing(
+      (p) => supabase.from('notes').insert(p).select().single(), insertRow, optionalCols);
     if (nErr || !noteRow) {
       const m = nErr?.message || 'unknown error';
       if (/type|payload/i.test(m)) {
@@ -10250,7 +9784,7 @@ export function MainApp({ profile, onSettings }) {
       }
       return;
     }
-    setNotes(prev => [noteRow, ...prev]);
+    setNotes(prev => prev.some(n => n.id === noteRow.id) ? prev : [noteRow, ...prev]);
 
     // Notify tagged members — parse @[Name] from content
     const tagMatches = [...(content || '').matchAll(/@\[([^\]]+)\]/g)];
@@ -10333,7 +9867,7 @@ export function MainApp({ profile, onSettings }) {
       if (tErr || !taskRow) {
         alert('Post saved but task could not be created: ' + (tErr?.message || 'no row returned'));
       } else {
-        setTasks(prev => [taskRow, ...prev]);
+        setTasks(prev => prev.some(t => t.id === taskRow.id) ? prev : [taskRow, ...prev]);
         // Make sure the new task is actually visible — "This week"
         // hides anything due more than 7 days out. If the new task
         // is further than that, bump the filter to "All".
@@ -10397,7 +9931,7 @@ export function MainApp({ profile, onSettings }) {
         alert('Post saved but event could not be created: ' + (evErr?.message || 'no row returned'));
         return;
       }
-      setEvents(prev => [...prev, evRow].sort((a, b) => a.date.localeCompare(b.date)));
+      setEvents(prev => prev.some(e => e.id === evRow.id) ? prev : [...prev, evRow].sort((a, b) => a.date.localeCompare(b.date)));
       const attendeeIds = (evRow.attendees || []).filter(id => id !== profile.id);
       if (attendeeIds.length > 0) {
         notify(attendeeIds, 'event_invited', {
@@ -10713,8 +10247,6 @@ export function MainApp({ profile, onSettings }) {
             tasks={tasks}
             events={events}
             notes={notes}
-            lists={lists}
-            listItems={listItems}
             spaceItems={spaceItems}
             members={members}
             getProfile={getProfile}
@@ -10797,19 +10329,6 @@ export function MainApp({ profile, onSettings }) {
         initialDate={eventInitDate}
       />
       <AddNoteModal open={modal === 'note'} onClose={() => { setModal(null); setPendingSpaceId(null); }} profile={profile} members={members} spaces={spaces} initialSpaceId={pendingSpaceId} onSave={addNote} />
-      <AddListModal
-        open={listAddOpen}
-        onClose={() => { setListAddOpen(false); setPendingSpaceId(null); }}
-        members={members}
-        myId={profile?.id}
-        spaces={spaces}
-        initialSpaceId={pendingSpaceId}
-        onSave={async ({ title, memberIds, spaceId }) => {
-          const result = await addList({ title, memberIds, spaceId });
-          if (!result?.error) { setListAddOpen(false); setPendingSpaceId(null); }
-          return result;
-        }}
-      />
       <AddSpaceModal
         open={spaceAddOpen}
         onClose={() => { setSpaceAddOpen(false); setSpaceEditTarget(null); }}
@@ -10834,8 +10353,6 @@ export function MainApp({ profile, onSettings }) {
         tasks={tasks}
         events={events}
         notes={notes}
-        lists={lists}
-        listItems={listItems}
         spaceItems={spaceItems}
         onAddSpaceItem={addSpaceItem}
         onToggleSpaceItem={toggleSpaceItem}
@@ -10849,33 +10366,16 @@ export function MainApp({ profile, onSettings }) {
         onAddTask={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('task');  }}
         onAddEvent={(s) => { setEventEditTarget(null); setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('event'); }}
         onAddNote={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setModal('note');  }}
-        onAddList={(s)  => { setPendingSpaceId(s.id); setSpaceDetailItem(null); setListAddOpen(true); }}
         onShowTask={(t)  => { setSpaceDetailItem(null); setDetailTaskId(t.id);  }}
         onShowEvent={(e) => { setSpaceDetailItem(null); setDetailEventId(e.id); }}
         onShowNote={(n)  => { setSpaceDetailItem(null); setDetailNoteId(n.id);  }}
-        onOpenList={(l)  => { setSpaceDetailItem(null); setListDetailItem(l);   }}
-      />
-      <ListDetailModal
-        open={!!listDetailItem}
-        list={listDetailItem}
-        items={listDetailItem ? listItems.filter(i => i.list_id === listDetailItem.id) : []}
-        members={members}
-        getProfile={getProfile}
-        myId={profile?.id}
-        onClose={() => setListDetailItem(null)}
-        onAddItem={addListItem}
-        onToggleItem={toggleListItem}
-        onDeleteItem={deleteListItem}
-        onCycleAssignee={cycleListItemAssignee}
-        activity={listDetailItem ? activityByList?.[listDetailItem.id] : null}
-        onLoadActivity={loadListActivity}
       />
       <DayDetailsModal
         open={!!dayDetailsDate}
         date={dayDetailsDate}
-        events={expandedEvents.filter(e => calView === 'personal'
+        events={dayDetailsDate ? expandedEvents.filter(e => calView === 'personal'
           ? (e.is_private && e.created_by === profile?.id)
-          : !e.is_private)}
+          : !e.is_private) : EMPTY_EVENTS}
         members={members}
         getProfile={getProfile}
         myId={profile?.id}
