@@ -3792,8 +3792,14 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
     if (!title.trim()) return;
     setSaving(true);
     try {
-      if (editing) await onUpdate(initial.id, buildPayload());
-      else await onSave(buildPayload());
+      if (editing) {
+        const res = await onUpdate(initial.id, buildPayload());
+        // updateTask resolves {error} (it already alerted) instead of throwing —
+        // keep the sheet + draft open rather than closing as if it saved.
+        if (res?.error) return;
+      } else {
+        await onSave(buildPayload());
+      }
       reset();
       onClose();
     } catch (e) {
@@ -4151,7 +4157,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
     if (editing) {
       // Update core fields only. Linked-task creation and RSVP invites
       // are creation-time actions, so they're not re-run on edit.
-      await onUpdate(initial.id, {
+      const res = await onUpdate(initial.id, {
         title: title.trim(),
         description: description.trim() || null,
         location: location.trim() || null,
@@ -4164,6 +4170,10 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
         space_id: isPrivate ? null : (spaceId || null),
         is_private: isPrivate,
       });
+      // A declined recurring-series confirm or a failed save (updateEvent
+      // already alerted) must keep the sheet open with the draft intact —
+      // falling through would clear the form and close as if it saved.
+      if (res?.error) { setSaving(false); return; }
     } else {
       await onSave({
         title: title.trim(),

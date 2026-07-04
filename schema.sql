@@ -542,6 +542,10 @@ begin
     and (is_private is not true or created_by = auth.uid())
   returning rsvps into v_rsvps;
 
+  -- Distinguish "no such event / not permitted" (raise) from a real write,
+  -- instead of returning an ambiguous NULL the client can't interpret.
+  -- (Matches cycle4-all.sql.)
+  if not found then raise exception 'event not found or not permitted'; end if;
   return v_rsvps;
 end;
 $$;
@@ -571,9 +575,13 @@ begin
     and type = 'poll'
   for update;
 
-  if v_payload is null then
+  -- FOUND distinguishes "no such poll" from "poll exists but payload is NULL"
+  -- — a null-payload poll must still be votable, not silently invisible.
+  -- (Matches cycle4-all.sql.)
+  if not found then
     return null;
   end if;
+  v_payload := coalesce(v_payload, '{}'::jsonb);
 
   -- Ignore votes for options that don't exist on this poll.
   if not coalesce(v_payload->'options', '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('id', p_option_id)) then
