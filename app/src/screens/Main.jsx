@@ -8703,6 +8703,29 @@ export function MainApp({ profile, onSettings }) {
     spaceVisibleRef.current = new Set(spaces.map(s => s.id));
   }, [spaces]);
 
+  // Re-sync on return to foreground / network regain. The realtime websocket
+  // drops whenever the phone locks or the app backgrounds, and events missed
+  // during the drop were never recovered until a reload or group switch —
+  // state silently diverged from the DB. fetchAll is safe to fire here: it
+  // never flips the loading skeleton back on, and its fetchSeqRef token
+  // discards stale responses. Throttled so rapid lock/unlock doesn't spam.
+  const lastResyncRef = React.useRef(0);
+  React.useEffect(() => {
+    const onWake = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastResyncRef.current < 10000) return; // 10s throttle
+      lastResyncRef.current = now;
+      fetchAll();
+    };
+    document.addEventListener('visibilitychange', onWake);
+    window.addEventListener('online', onWake);
+    return () => {
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('online', onWake);
+    };
+  }, [fetchAll]);
+
   React.useEffect(() => {
     if (!profile?.group_id) return;
     fetchAll();
