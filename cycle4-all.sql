@@ -60,7 +60,7 @@ begin
   end if;
 
   -- The next-due is computed on the client; it must move the series forward.
-  if p_next_due is null or p_next_due <= v_src.due_date then
+  if p_next_due is null or v_src.due_date is null or p_next_due <= v_src.due_date then
     return null;
   end if;
 
@@ -386,6 +386,7 @@ drop policy if exists "space_items_insert" on public.space_items;
 create policy "space_items_insert" on public.space_items
   for insert with check (
     group_id = public.my_group_id()
+    and created_by = auth.uid()
     and exists (select 1 from public.spaces s where s.id = space_id and s.group_id = public.my_group_id())
   );
 drop policy if exists "space_items_update" on public.space_items;
@@ -395,6 +396,15 @@ create policy "space_items_update" on public.space_items
     group_id = public.my_group_id()
     and exists (select 1 from public.spaces s where s.id = space_id and s.group_id = public.my_group_id())
   );
+
+-- Pin authorship on shared-content INSERTs (spaces / shared_lists), so a member
+-- can't stamp another member's uid as created_by on group-visible content.
+drop policy if exists "spaces_insert" on public.spaces;
+create policy "spaces_insert" on public.spaces
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "shared_lists_insert" on public.shared_lists;
+create policy "shared_lists_insert" on public.shared_lists
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
 
 -- shared_lists
 drop policy if exists "shared_lists_update" on public.shared_lists;
@@ -407,6 +417,7 @@ drop policy if exists "shared_list_items_insert" on public.shared_list_items;
 create policy "shared_list_items_insert" on public.shared_list_items
   for insert with check (
     group_id = public.my_group_id()
+    and created_by = auth.uid()
     and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
   );
 drop policy if exists "shared_list_items_update" on public.shared_list_items;
@@ -425,13 +436,43 @@ create policy "shared_list_activity_insert" on public.shared_list_activity
     and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
   );
 
+-- Ownership-scope DELETE on shared content so one member can't delete another
+-- member's space / list / item. Previously these were group-scoped only, letting
+-- any member hard-delete anyone's rows (space delete cascades its items). Now
+-- matches the tasks/notes/events ownership model: spaces & lists → creator only;
+-- their items → creator, assignee, or unassigned.
+drop policy if exists "spaces_delete" on public.spaces;
+create policy "spaces_delete" on public.spaces
+  for delete using (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "shared_lists_delete" on public.shared_lists;
+create policy "shared_lists_delete" on public.shared_lists
+  for delete using (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "space_items_delete" on public.space_items;
+create policy "space_items_delete" on public.space_items
+  for delete using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
+drop policy if exists "shared_list_items_delete" on public.shared_list_items;
+create policy "shared_list_items_delete" on public.shared_list_items
+  for delete using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
+
 -- ─── Realtime: REPLICA IDENTITY FULL ─────────────────────────────────────────
 -- Without this, a DELETE's WAL record carries only the primary key, so the
 -- group_id/user_id realtime channel filter can't apply and deletes broadcast
 -- (row id + timing) to every tenant. FULL puts the old row in the record.
 alter table public.tasks                replica identity full;
 alter table public.events               replica identity full;
-alter table public.notes                replica identity full;
+-- notes carries base64 photo payloads, so REPLICA IDENTITY FULL ships the WHOLE
+-- old row (photos included, up to a few MB) through WAL + the realtime socket on
+-- every pin/vote/soft-delete. The realtime channel only filters on group_id and
+-- the DELETE handler only reads old.id, so a narrow (group_id, id) index identity
+-- carries everything needed at ~1/1000th the old-image size.
+create unique index if not exists notes_replica_gid_id on public.notes (group_id, id);
+alter table public.notes                replica identity using index notes_replica_gid_id;
 alter table public.notifications        replica identity full;
 alter table public.task_suggestions     replica identity full;
 alter table public.spaces               replica identity full;
@@ -476,3 +517,11 @@ begin
     execute format('grant execute on function %s to authenticated', r.sig);
   end loop;
 end $$;
+
+-- ─── Cycle 8: FK indexes for cascade/set-null paths ──────────────────────────
+-- Deleting an event/note/group had to seq-scan the child table to find rows
+-- to cascade or null out. Cheap, rare-path, but free to fix.
+create index if not exists tasks_event_idx         on public.tasks         (event_id);
+create index if not exists tasks_note_idx          on public.tasks         (note_id);
+create index if not exists events_note_idx         on public.events        (note_id);
+create index if not exists group_members_group_idx on public.group_members (group_id);

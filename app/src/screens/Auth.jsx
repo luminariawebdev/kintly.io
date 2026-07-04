@@ -279,10 +279,17 @@ function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
     return () => { cancelled = true; };
   }, []);
 
-  const enter = (id) => {
+  const enter = async (id) => {
     if (entering) return; // block a double-tap firing enterSpace twice
     setEntering(true);
-    if (onEnterSpace) onEnterSpace(id); else window.location.reload();
+    try {
+      if (onEnterSpace) await onEnterSpace(id); else window.location.reload();
+    } finally {
+      // On success enterSpace unmounts this screen (harmless reset); on a
+      // failed/no-op enter (e.g. removed from the group) this re-enables the
+      // picker instead of bricking it until reload.
+      setEntering(false);
+    }
   };
 
   const createGroup = async () => {
@@ -302,8 +309,8 @@ function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
       const { data: group, error } = await supabase.rpc('join_group_by_code', { p_code: inviteCode.trim() });
       if (error) throw new Error(error.message);
       if (!group) throw new Error('Invalid invite code — check with your group admin');
-      enter(group.id);
-    } catch (e) { setErr(e.message); setLoading(false); }
+      await enter(group.id);
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
   };
 
   if (created) {
@@ -320,7 +327,7 @@ function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
               </div>
             </div>
             <div className="auth-actions">
-              <button className="fb-btn solid" onClick={() => enter(created.id)}>
+              <button className="fb-btn solid" disabled={entering} onClick={() => enter(created.id)}>
                 Continue to app →
               </button>
             </div>
@@ -348,10 +355,10 @@ function GroupSetupScreen({ profile, onGroupReady, onEnterSpace }) {
               {(groups.length > 0 || personal) && (
                 <div className="auth-actions" style={{ marginBottom: 18 }}>
                   {groups.map(g => (
-                    <button key={g.id} className="fb-btn" onClick={() => enter(g.id)}>{g.name} →</button>
+                    <button key={g.id} className="fb-btn" disabled={entering} onClick={() => enter(g.id)}>{g.name} →</button>
                   ))}
                   {personal && (
-                    <button className="fb-btn" onClick={() => enter(personal.id)}>🔒 Go to Personal →</button>
+                    <button className="fb-btn" disabled={entering} onClick={() => enter(personal.id)}>🔒 Go to Personal →</button>
                   )}
                 </div>
               )}
@@ -510,15 +517,20 @@ export function ProfileSetupScreen({ profile, onComplete }) {
 
           <div className="field">
             <label>Your color</label>
-            <div className="swatches" style={{ paddingTop: 6, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            <div className="swatches" role="radiogroup" aria-label="Your color" style={{ paddingTop: 6, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
               {PALETTE.map(c => {
                 const takenBy = taken[c.id];
                 const isMine = c.id === color;
                 const disabled = !!takenBy;
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={c.id}
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: disabled ? 'not-allowed' : 'pointer' }}
+                    role="radio"
+                    aria-checked={isMine}
+                    aria-label={disabled ? `${c.label} — chosen by ${takenBy}` : c.label}
+                    disabled={disabled}
+                    style={{ background: 'none', border: 'none', font: 'inherit', minWidth: 44, minHeight: 44, padding: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: disabled ? 'not-allowed' : 'pointer' }}
                     onClick={() => { if (!disabled) { setColor(c.id); setErr(''); } }}
                     title={disabled ? `Chosen by ${takenBy}` : c.label}
                   >
@@ -535,7 +547,7 @@ export function ProfileSetupScreen({ profile, onComplete }) {
                     {disabled && (
                       <span style={{ fontSize: 8.5, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 48, lineHeight: 1.1 }}>{takenBy}</span>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>

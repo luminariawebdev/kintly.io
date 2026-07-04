@@ -319,25 +319,11 @@ create policy "task_suggestions_delete" on public.task_suggestions
   for delete using (suggested_by = auth.uid());
 
 -- ─── Auto-create profile on signup ───────────────────────────────────────────
-
-create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path = public as $$
-begin
-  insert into public.profiles (id, display_name, color)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)),
-    coalesce(new.raw_user_meta_data->>'color', 'coral')
-  )
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
+-- handle_new_user() is defined ONCE, further down (multi-group section), with
+-- Personal-space seeding + retry loop. The old pre-personal-spaces body that
+-- used to sit here was a trap: editing it looked canonical but the later
+-- definition always won. The trigger wiring moved down there too (a CREATE
+-- TRIGGER here would forward-reference the function on a fresh DB).
 
 -- ─── Shared Lists ─────────────────────────────────────────────────────────────
 -- (Feature currently dormant in the UI — superseded by Spaces — but the
@@ -405,7 +391,7 @@ create policy "shared_lists_update" on public.shared_lists
   for update using (group_id = public.my_group_id());
 drop policy if exists "shared_lists_delete" on public.shared_lists;
 create policy "shared_lists_delete" on public.shared_lists
-  for delete using (group_id = public.my_group_id());
+  for delete using (group_id = public.my_group_id() and created_by = auth.uid());
 
 drop policy if exists "shared_list_items_select" on public.shared_list_items;
 create policy "shared_list_items_select" on public.shared_list_items
@@ -418,7 +404,10 @@ create policy "shared_list_items_update" on public.shared_list_items
   for update using (group_id = public.my_group_id());
 drop policy if exists "shared_list_items_delete" on public.shared_list_items;
 create policy "shared_list_items_delete" on public.shared_list_items
-  for delete using (group_id = public.my_group_id());
+  for delete using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
 
 drop policy if exists "shared_list_activity_select" on public.shared_list_activity;
 create policy "shared_list_activity_select" on public.shared_list_activity
@@ -459,7 +448,7 @@ create policy "spaces_update" on public.spaces
   for update using (group_id = public.my_group_id());
 drop policy if exists "spaces_delete" on public.spaces;
 create policy "spaces_delete" on public.spaces
-  for delete using (group_id = public.my_group_id());
+  for delete using (group_id = public.my_group_id() and created_by = auth.uid());
 
 -- Cross-cutting space_id columns. ON DELETE SET NULL keeps items intact
 -- when a space is deleted.
@@ -504,7 +493,10 @@ create policy "space_items_update" on public.space_items
   for update using (group_id = public.my_group_id());
 drop policy if exists "space_items_delete" on public.space_items;
 create policy "space_items_delete" on public.space_items
-  for delete using (group_id = public.my_group_id());
+  for delete using (
+    group_id = public.my_group_id()
+    and (created_by = auth.uid() or assigned_to = auth.uid() or assigned_to is null)
+  );
 
 -- ─── Personal todos / events ─────────────────────────────────────────────────
 -- is_private=true rows are only visible to their creator. The columns
@@ -658,6 +650,13 @@ begin
     return null;
   end if;
 
+  -- The next-due is computed on the client; it must move the series FORWARD.
+  -- (Matches cycle4-all.sql — a stale/replayed p_next_due must not respawn
+  -- the series backwards or onto its current due date.)
+  if p_next_due is null or v_src.due_date is null or p_next_due <= v_src.due_date then
+    return null;
+  end if;
+
   -- Who owns the NEXT occurrence? If this one was a temporary pickup (claimed
   -- via "I've got it" — from the pool or off someone else), it reverts to the
   -- series' home owner (recur_owner): null = back to the Unassigned pool, a
@@ -696,7 +695,13 @@ begin
   values
     (v_src.group_id, v_src.created_by, v_owner, v_src.note_id,
      v_src.event_id, v_src.title, v_src.description, p_next_due,
-     v_src.due_time, v_src.recurrence, v_src.is_private, v_src.space_id, false)
+     v_src.due_time, v_src.recurrence,
+     -- keep private only if the target group is a personal space (matches
+     -- cycle4-all.sql — a raw is_private carried into a shared group would
+     -- leak via realtime, which ignores per-row RLS)
+     (v_src.is_private and exists (
+        select 1 from public.groups g where g.id = v_src.group_id and coalesce(g.is_personal, false))),
+     v_src.space_id, false)
   returning * into v_new;
 
   return v_new;
@@ -1037,6 +1042,14 @@ begin
 end;
 $$;
 
+-- Trigger wiring lives HERE, right after the one true handle_new_user()
+-- definition (moved from the old signup section so a fresh top-to-bottom run
+-- never forward-references the function).
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
 -- Backfill existing accounts: a membership row for everyone's current active
 -- group, and one Personal space each. Idempotent.
 insert into public.group_members (group_id, user_id, role)
@@ -1316,7 +1329,13 @@ create policy "note_comments_update" on public.note_comments
 --     old row (incl. group_id) in the record so the existing filters apply.
 alter table public.tasks               replica identity full;
 alter table public.events              replica identity full;
-alter table public.notes               replica identity full;
+-- notes carries base64 photo payloads — FULL would ship the whole old row
+-- (photos included) through WAL + realtime on every pin/vote/soft-delete.
+-- The channel filters on group_id and the DELETE handler reads only old.id,
+-- so a narrow (group_id, id) index identity carries everything needed.
+-- (Matches cycle4-all.sql; keep the two files in agreement.)
+create unique index if not exists notes_replica_gid_id on public.notes (group_id, id);
+alter table public.notes               replica identity using index notes_replica_gid_id;
 alter table public.notifications       replica identity full;
 alter table public.task_suggestions    replica identity full;
 alter table public.spaces              replica identity full;
@@ -1331,3 +1350,114 @@ alter table public.shared_list_activity replica identity full;
 create index if not exists shared_list_items_group_idx on public.shared_list_items (group_id);
 create index if not exists space_items_group_idx       on public.space_items       (group_id);
 create index if not exists task_suggestions_group_idx  on public.task_suggestions  (group_id, created_at);
+
+-- =============================================================================
+-- SECURITY HARDENING BACK-PORT (audit cycles 4–7, 2026-07-03)
+-- Copied verbatim from cycle4-all.sql so this file alone rebuilds the FINAL
+-- effective policy set on a fresh DB. cycle4-all.sql remains the hand-run
+-- migration; keep the two in agreement.
+-- =============================================================================
+-- notifications INSERT: only notify actual members of your active group (the
+-- notifications realtime channel filters by user_id, so an arbitrary user_id
+-- here would forge an alert into a non-member's inbox). This hardened policy
+-- lives in schema.sql too; re-stated here so this run-file is self-contained.
+drop policy if exists "notifications_insert" on public.notifications;
+create policy "notifications_insert" on public.notifications
+  for insert with check (
+    group_id = public.my_group_id()
+    and user_id in (select user_id from public.group_members
+                    where group_id = public.my_group_id())
+  );
+
+-- notifications: a missing WITH CHECK let a user UPDATE their own notification's
+-- user_id, moving it into another user's inbox (the notifications realtime
+-- channel is filtered by user_id, so the victim's client would ingest it).
+-- Pin the post-image user_id to the caller. (Do NOT pin group_id here — a user's
+-- notifications legitimately span multiple groups, and mark-read must still work
+-- while active in a different group.)
+drop policy if exists "notifications_update" on public.notifications;
+create policy "notifications_update" on public.notifications
+  for update using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+-- task_suggestions: pin delete to the active group (self-scoped integrity).
+drop policy if exists "task_suggestions_delete" on public.task_suggestions;
+create policy "task_suggestions_delete" on public.task_suggestions
+  for delete using (suggested_by = auth.uid() and group_id = public.my_group_id());
+
+-- ── Spaces & Shared-Lists: bring child-row and UPDATE policies up to the same
+--    bar as tasks/events. Two gaps, both the same class earlier cycles fixed
+--    elsewhere but never applied here:
+--    (1) child INSERT/UPDATE only checked the child's own group_id, never that
+--        the parent space/list is in your group → a client could attach a child
+--        to another group's parent (silent stored injection into detail views).
+--    (2) spaces/shared_lists/their items had UPDATE USING but no WITH CHECK →
+--        a member of two groups could relocate a row (and its space_id-linked
+--        children) from one group into the other, leaking its contents.
+
+-- spaces
+drop policy if exists "spaces_update" on public.spaces;
+create policy "spaces_update" on public.spaces
+  for update using (group_id = public.my_group_id())
+  with check (group_id = public.my_group_id());
+
+-- space_items (parent = spaces)
+drop policy if exists "space_items_insert" on public.space_items;
+create policy "space_items_insert" on public.space_items
+  for insert with check (
+    group_id = public.my_group_id()
+    and created_by = auth.uid()
+    and exists (select 1 from public.spaces s where s.id = space_id and s.group_id = public.my_group_id())
+  );
+drop policy if exists "space_items_update" on public.space_items;
+create policy "space_items_update" on public.space_items
+  for update using (group_id = public.my_group_id())
+  with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.spaces s where s.id = space_id and s.group_id = public.my_group_id())
+  );
+
+-- Pin authorship on shared-content INSERTs (spaces / shared_lists), so a member
+-- can't stamp another member's uid as created_by on group-visible content.
+drop policy if exists "spaces_insert" on public.spaces;
+create policy "spaces_insert" on public.spaces
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+drop policy if exists "shared_lists_insert" on public.shared_lists;
+create policy "shared_lists_insert" on public.shared_lists
+  for insert with check (group_id = public.my_group_id() and created_by = auth.uid());
+
+-- shared_lists
+drop policy if exists "shared_lists_update" on public.shared_lists;
+create policy "shared_lists_update" on public.shared_lists
+  for update using (group_id = public.my_group_id())
+  with check (group_id = public.my_group_id());
+
+-- shared_list_items (parent = shared_lists)
+drop policy if exists "shared_list_items_insert" on public.shared_list_items;
+create policy "shared_list_items_insert" on public.shared_list_items
+  for insert with check (
+    group_id = public.my_group_id()
+    and created_by = auth.uid()
+    and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
+  );
+drop policy if exists "shared_list_items_update" on public.shared_list_items;
+create policy "shared_list_items_update" on public.shared_list_items
+  for update using (group_id = public.my_group_id())
+  with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
+  );
+
+-- shared_list_activity (parent = shared_lists)
+drop policy if exists "shared_list_activity_insert" on public.shared_list_activity;
+create policy "shared_list_activity_insert" on public.shared_list_activity
+  for insert with check (
+    group_id = public.my_group_id()
+    and exists (select 1 from public.shared_lists l where l.id = list_id and l.group_id = public.my_group_id())
+  );
+
+-- FK indexes for cascade/set-null delete paths (audit cycle 8).
+create index if not exists tasks_event_idx         on public.tasks         (event_id);
+create index if not exists tasks_note_idx          on public.tasks         (note_id);
+create index if not exists events_note_idx         on public.events        (note_id);
+create index if not exists group_members_group_idx on public.group_members (group_id);

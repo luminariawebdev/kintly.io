@@ -813,6 +813,11 @@ function VoiceAssistant({ members, spaces, tasks, spaceItems, events, profile, o
   const cancel = () => {
     try { abortRef.current?.abort(); } catch { /* noop */ }
     abortRef.current = null;
+    // Detach the recorder's onstop too (like the watchdog does) — else a
+    // not-yet-fired onstop would still launch a full transcribe+interpret call
+    // after the user cancelled, burning API budget on an abandoned run.
+    try { if (recRef.current) recRef.current.onstop = null; } catch { /* noop */ }
+    recRef.current = null;
     stopStream();
     reset();
   };
@@ -2528,7 +2533,10 @@ function SectionToggle({ collapsed, onClick }) {
 }
 
 // ─── Renderer for an individual feed post (type-aware) ──────────────────────
-function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToNote, replyToAuthor, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, onStartReply, actionBarOpen, onLongPress, onCloseActionBar, inPinned = false }) {
+// Memoized (like TaskRow): NotesSection re-renders on every reply/long-press/
+// load-more state change, and without memo every visible post re-rendered too.
+// Stable handler props come from useCallbacks in NotesSection.
+const FeedPost = React.memo(function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToNote, replyToAuthor, onOpenNote, onDelete, onTogglePin, onShowMember, onVote, onStartReply, actionBarOpen, onLongPress, onCloseActionBar, inPinned = false }) {
   const when = new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const type = n.type || 'message';
   const isDeleted = !!(n.payload && n.payload.deleted);
@@ -2960,7 +2968,7 @@ function FeedPost({ n, author, isMe, prevNote, nextNote, myId, members, replyToN
       </div>
     </SwipeToDelete>
   );
-}
+});
 
 // ─── Inline Reply Composer ────────────────────────────────────────────────────
 // Renders at the top of the home feed when the user clicks the ↩ button on
@@ -3059,8 +3067,10 @@ function QuickComposer({ onPost }) {
     if (!t || sending) return;
     setSending(true);
     try {
-      await onPost(t);
-      setText('');
+      // onPost (addNote) resolves false when the insert failed — keep the
+      // typed draft so the user can retry instead of silently losing it.
+      const ok = await onPost(t);
+      if (ok !== false) setText('');
     } finally {
       setSending(false);
     }
@@ -3108,6 +3118,10 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
   // floating "Reply" pill. Only one post can have the bar open at a
   // time. Tap-outside or Escape dismisses it.
   const [actionBarFor, setActionBarFor] = React.useState(null);
+  // Stable handlers for the memo'd FeedPost — inline lambdas here would
+  // hand every post a fresh function each render and defeat React.memo.
+  const onLongPress = React.useCallback((note) => setActionBarFor(note), []);
+  const onCloseActionBar = React.useCallback(() => setActionBarFor(null), []);
 
   // Pagination — both lists use the same "load more / see less"
   // pattern: render the first N items, then a pill at the bottom
@@ -3256,8 +3270,8 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
                       onVote={onVote}
                       onStartReply={setReplyingTo}
                       actionBarOpen={actionBarFor?.id === n.id}
-                      onLongPress={(note) => setActionBarFor(note)}
-                      onCloseActionBar={() => setActionBarFor(null)}
+                      onLongPress={onLongPress}
+                      onCloseActionBar={onCloseActionBar}
                       inPinned={true}
                     />
                   );
@@ -3340,8 +3354,8 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
                     onVote={onVote}
                     onStartReply={setReplyingTo}
                     actionBarOpen={actionBarFor?.id === n.id}
-                    onLongPress={(note) => setActionBarFor(note)}
-                    onCloseActionBar={() => setActionBarFor(null)}
+                    onLongPress={onLongPress}
+                    onCloseActionBar={onCloseActionBar}
                   />
                 );
               })}
@@ -3777,22 +3791,31 @@ function AddTaskModal({ open, onClose, members, myId, spaces, initialSpaceId, in
   const save = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    if (editing) {
-      await onUpdate(initial.id, buildPayload());
-    } else {
-      await onSave(buildPayload());
+    try {
+      if (editing) await onUpdate(initial.id, buildPayload());
+      else await onSave(buildPayload());
+      reset();
+      onClose();
+    } catch (e) {
+      // A rejected write must not leave the button stuck on "Saving…" with the
+      // sheet open and no feedback — surface it and re-enable.
+      alert('Could not save: ' + (e?.message || 'please try again.'));
+    } finally {
+      setSaving(false);
     }
-    reset();
-    setSaving(false);
-    onClose();
   };
 
   const saveAndAnother = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    await onSave(buildPayload());
-    setTitle(''); setDescription('');
-    setSaving(false);
+    try {
+      await onSave(buildPayload());
+      setTitle(''); setDescription('');
+    } catch (e) {
+      alert('Could not save: ' + (e?.message || 'please try again.'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -4124,6 +4147,7 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
     // notify() loop reaches them with `event_invited` (the RSVP
     // request) and their responses surface in the attendee list.
     const finalAttendees = isPrivate ? [] : Array.from(new Set([...attendees, ...rsvpRecipients]));
+    try {
     if (editing) {
       // Update core fields only. Linked-task creation and RSVP invites
       // are creation-time actions, so they're not re-run on edit.
@@ -4161,8 +4185,12 @@ function AddEventModal({ open, onClose, members, myId, onSave, onUpdate, initial
     setLinkedTasks([]); setAddLinkedTaskOpen(false);
     setRepeatFreq('none'); setRepeatDays([]);
     setSpaceId(initialSpaceId || null);
-    setSaving(false);
     onClose();
+    } catch (e) {
+      alert('Could not save: ' + (e?.message || 'please try again.'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -5366,7 +5394,7 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
         }
       : null;
     try {
-      await onSave({
+      const ok = await onSave({
         content: content || (postType === 'poll' ? pollQuestion.trim() : ''),
         type: postType,
         payload,
@@ -5374,8 +5402,14 @@ function AddNoteModal({ open, onClose, profile, members, onSave, spaces, initial
         space_id: spaceId || null,
       }, taskPayload ? { ...taskPayload, space_id: spaceId || null } : null,
          eventPayload ? { ...eventPayload, space_id: spaceId || null } : null);
+      // Only close on success — a failed save (onSave returned false) keeps the
+      // sheet open with the draft intact, matching AddTask/AddEvent. onSave
+      // surfaces its own error alert.
+      if (ok === false) { setSaving(false); return; }
     } catch (e) {
       alert('Error: ' + (e?.message || String(e)));
+      setSaving(false);
+      return;
     }
     setSaving(false);
     onClose();
@@ -5827,6 +5861,13 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
     lineHeight: 1.4,
     transition: 'all 0.2s var(--ease)',
   };
+  // Keyboard/SR access for the clickable rows below — they're styled divs,
+  // so give them button semantics + Enter/Space activation.
+  const rowA11y = (fn) => ({
+    role: 'button',
+    tabIndex: 0,
+    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); } },
+  });
   const sectionLabelStyle = {
     fontFamily: 'var(--font-main)',
     fontSize: 10,
@@ -5880,7 +5921,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {memberNotes.map(n => (
-              <div key={n.id} style={itemStyle} onClick={() => onShowNote && onShowNote(n)}>
+              <div key={n.id} style={itemStyle} {...rowA11y(() => onShowNote && onShowNote(n))} onClick={() => onShowNote && onShowNote(n)}>
                 <div style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap', textOverflow: 'ellipsis' }}>
                   {n.content}
                 </div>
@@ -5905,7 +5946,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
             {openTasks.map(t => {
               const overdue = dueDateOverdue(t.due_date);
               return (
-                <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${getColor(member.color)}` }} onClick={() => onShowTask && onShowTask(t)}>
+                <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${getColor(member.color)}` }} {...rowA11y(() => onShowTask && onShowTask(t))} onClick={() => onShowTask && onShowTask(t)}>
                   <div style={{ fontWeight: 600 }}>{t.title}</div>
                   {t.due_date && (
                     <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: overdue ? '#E27457' : 'var(--text-muted)' }}>
@@ -5921,7 +5962,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
                   Completed · {doneTasks.length}
                 </div>
                 {doneTasks.map(t => (
-                  <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${getColor(member.color)}`, opacity: 0.55 }} onClick={() => onShowTask && onShowTask(t)}>
+                  <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${getColor(member.color)}`, opacity: 0.55 }} {...rowA11y(() => onShowTask && onShowTask(t))} onClick={() => onShowTask && onShowTask(t)}>
                     <div style={{ fontWeight: 500, textDecoration: 'line-through' }}>{t.title}</div>
                   </div>
                 ))}
@@ -5944,7 +5985,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
               const [y, mo, da] = e.date.split('-').map(Number);
               const dateLabel = new Date(y, mo - 1, da).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
               return (
-                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}` }} onClick={() => onShowEvent && onShowEvent(e)}>
+                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}` }} {...rowA11y(() => onShowEvent && onShowEvent(e))} onClick={() => onShowEvent && onShowEvent(e)}>
                   <div style={{ fontWeight: 600 }}>{e.title}</div>
                   <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                     {dateLabel}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''} · {role}
@@ -6512,6 +6553,7 @@ function NoteDetailsModal({ open, note, tasks, events, myId, myGroupId, members,
       .select('*')
       .eq('payload->>reply_to', note.id)
       .order('created_at', { ascending: true })
+      .limit(200) // bound worst-case thread size (rows carry base64 payload)
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) { setComments([]); return; }
@@ -7741,7 +7783,10 @@ function SpaceHashtagDropdown({ value, spaces, onChange, onPickSpace }) {
 // Full-width Space card shown inside SpacesSection. Counts are an
 // at-a-glance summary of how many items across all four content types
 // currently belong to this Space.
-function SpaceCard({ space, counts, members, getProfile, myId, onOpen, onDeleteSpace }) {
+// Memoized (like TaskRow/FeedPost): counts identity is stable per space (from
+// the countsBySpace useMemo Map), so unrelated SpacesSection re-renders skip
+// untouched cards.
+const SpaceCard = React.memo(function SpaceCard({ space, counts, members, getProfile, myId, onOpen, onDeleteSpace }) {
   // Color derives from the Space creator's profile color so the visual
   // identity follows them app-wide. If they change their profile color,
   // every space they made re-tints to match.
@@ -7800,7 +7845,7 @@ function SpaceCard({ space, counts, members, getProfile, myId, onOpen, onDeleteS
       </button>
     </div>
   );
-}
+});
 
 function AddSpaceModal({ open, onClose, members, myId, initial, onSave }) {
   const [title, setTitle] = React.useState('');
@@ -8020,6 +8065,13 @@ function SpaceDetailModal({
     fontSize: 13,
     lineHeight: 1.4,
   };
+  // Keyboard/SR access for the clickable rows below (styled divs → button
+  // semantics + Enter/Space). Same helper as the member-detail modal.
+  const rowA11y = (fn) => ({
+    role: 'button',
+    tabIndex: 0,
+    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); } },
+  });
   const sectionLabelStyle = {
     fontFamily: 'var(--font-main)',
     fontSize: 10, fontWeight: 700,
@@ -8152,7 +8204,7 @@ function SpaceDetailModal({
               const [y, mo, da] = e.date.split('-').map(Number);
               const dateLabel = new Date(y, mo - 1, da).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
               return (
-                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}` }} onClick={() => onShowEvent && onShowEvent(e)}>
+                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}` }} {...rowA11y(() => onShowEvent && onShowEvent(e))} onClick={() => onShowEvent && onShowEvent(e)}>
                   <div style={{ fontWeight: 600 }}>{e.title}</div>
                   <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                     {dateLabel}{e.start_time ? ` · ${fmtTime(e.start_time)}` : ''}
@@ -8179,7 +8231,7 @@ function SpaceDetailModal({
               const aColor = getColor(assn?.color);
               const overdue = dueDateOverdue(t.due_date);
               return (
-                <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${aColor || color}` }} onClick={() => onShowTask && onShowTask(t)}>
+                <div key={t.id} style={{ ...itemStyle, borderLeft: `4px solid ${aColor || color}` }} {...rowA11y(() => onShowTask && onShowTask(t))} onClick={() => onShowTask && onShowTask(t)}>
                   <div style={{ fontWeight: 600 }}>{t.title}</div>
                   <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: overdue ? '#E27457' : 'var(--text-muted)' }}>
                     {t.due_date ? formatDue(t.due_date) : 'No due'}{assn ? ` · ${assn.display_name}` : ''}
@@ -8193,7 +8245,7 @@ function SpaceDetailModal({
                   Completed · {doneTasks.length}
                 </div>
                 {doneTasks.slice(0, 5).map(t => (
-                  <div key={t.id} style={{ ...itemStyle, opacity: 0.55 }} onClick={() => onShowTask && onShowTask(t)}>
+                  <div key={t.id} style={{ ...itemStyle, opacity: 0.55 }} {...rowA11y(() => onShowTask && onShowTask(t))} onClick={() => onShowTask && onShowTask(t)}>
                     <div style={{ fontWeight: 500, textDecoration: 'line-through' }}>{t.title}</div>
                   </div>
                 ))}
@@ -8218,7 +8270,7 @@ function SpaceDetailModal({
               const author = getProfile(n.created_by);
               const aColor = getColor(author?.color);
               return (
-                <div key={n.id} style={{ ...itemStyle, borderLeft: `4px solid ${aColor || color}` }} onClick={() => onShowNote && onShowNote(n)}>
+                <div key={n.id} style={{ ...itemStyle, borderLeft: `4px solid ${aColor || color}` }} {...rowA11y(() => onShowNote && onShowNote(n))} onClick={() => onShowNote && onShowNote(n)}>
                   <div style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap', textOverflow: 'ellipsis' }}>
                     {n.content || (n.type === 'photo' ? '📷 Photo' : n.type === 'poll' ? '📊 Poll' : '')}
                   </div>
@@ -8242,7 +8294,7 @@ function SpaceDetailModal({
               const [y, mo, da] = e.date.split('-').map(Number);
               const dateLabel = new Date(y, mo - 1, da).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
               return (
-                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}`, opacity: 0.6 }} onClick={() => onShowEvent && onShowEvent(e)}>
+                <div key={e.id} style={{ ...itemStyle, borderLeft: `4px solid ${evColor}`, opacity: 0.6 }} {...rowA11y(() => onShowEvent && onShowEvent(e))} onClick={() => onShowEvent && onShowEvent(e)}>
                   <div style={{ fontWeight: 500 }}>{e.title}</div>
                   <div style={{ fontSize: 10, marginTop: 4, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                     {dateLabel}
@@ -8287,6 +8339,7 @@ const SpacesSection = React.memo(function SpacesSection({
   // every render — the section re-renders on any task/event/note/item change).
   // openListItems counts the built-in space_items checklist (the absorbed Lists
   // feature); re-add a second source if tagged shared_lists are ever revived.
+  const prevCountsRef = React.useRef(new Map());
   const countsBySpace = React.useMemo(() => {
     const m = new Map();
     const bucket = (id) => {
@@ -8298,6 +8351,18 @@ const SpacesSection = React.memo(function SpacesSection({
     (events || []).forEach(e => { if (e.space_id && e.date >= today) bucket(e.space_id).upcomingEvents++; });
     (spaceItems || []).forEach(i => { if (i.space_id && !i.completed) bucket(i.space_id).openListItems++; });
     (notes || []).forEach(n => { if (n.space_id) bucket(n.space_id).notes++; });
+    // Reuse the previous render's bucket object when the numbers didn't change,
+    // so SpaceCard's React.memo sees a stable `counts` prop — otherwise every
+    // non-empty space re-rendered on ANY unrelated task/event/note change.
+    const prev = prevCountsRef.current;
+    m.forEach((b, id) => {
+      const p = prev.get(id);
+      if (p && p.openTasks === b.openTasks && p.upcomingEvents === b.upcomingEvents
+            && p.openListItems === b.openListItems && p.notes === b.notes) {
+        m.set(id, p);
+      }
+    });
+    prevCountsRef.current = m;
     return m;
   }, [tasks, events, spaceItems, notes, today]);
   const countsFor = (spaceId) => countsBySpace.get(spaceId) || EMPTY_SPACE_COUNTS;
@@ -8398,6 +8463,11 @@ export function MainApp({ profile, onSettings }) {
     return expandRecurringEvents(events, start, end);
   }, [events]);
   const [notes, setNotes] = React.useState([]);
+  // Mirror of `notes` for callbacks that only need a point-in-time read
+  // (voteOnPoll/deleteNote). Depending on [notes] there gave them a fresh
+  // identity on every feed change, defeating FeedPost's React.memo list-wide.
+  const notesRef = React.useRef(notes);
+  React.useEffect(() => { notesRef.current = notes; }, [notes]);
   // Shared Lists state — three parallel arrays keyed by group_id. The
   // realtime channel mirrors INSERT/UPDATE/DELETE for all three tables.
   // Spaces state — top-level containers that group items across tasks /
@@ -8687,7 +8757,13 @@ export function MainApp({ profile, onSettings }) {
               setSpaces(prev => prev.some(s => s.id === row.id) ? prev.map(s => s.id === row.id ? row : s) : [row, ...prev]);
               if (!wasVisible) {
                 supabase.from('space_items').select('*').eq('space_id', row.id).order('position', { ascending: true })
-                  .then(({ data }) => { if (data && data.length) setSpaceItems(prev => { const have = new Set(prev.map(i => i.id)); return [...prev, ...data.filter(i => !have.has(i.id))]; }); });
+                  .then(({ data }) => {
+                    // Guard a group switch mid-fetch: if this space is no longer
+                    // visible (spaceVisibleRef rebuilt for the new group), drop the
+                    // result instead of bleeding old-group items into new state.
+                    if (!data || !data.length || !spaceVisibleRef.current.has(row.id)) return;
+                    setSpaceItems(prev => { const have = new Set(prev.map(i => i.id)); return [...prev, ...data.filter(i => !have.has(i.id))]; });
+                  });
               }
             }
           }
@@ -8853,16 +8929,19 @@ export function MainApp({ profile, onSettings }) {
       snapshot = prev.find(t => t.id === id) || null;
       return prev.map(t => t.id === id ? { ...t, completed: next, completed_at: completedAt } : t);
     });
-    let { error } = await supabase.from('tasks').update({ completed: next, completed_at: completedAt }).eq('id', id);
+    // .select() so an RLS no-op (ownership-scoped tasks_update: 0 rows, NO
+    // error) is caught — otherwise the checkbox looks saved then reverts on
+    // the next refresh (phantom toggle). Same guard as updateTask.
+    let { data, error } = await supabase.from('tasks').update({ completed: next, completed_at: completedAt }).eq('id', id).select();
     // Fall back without completed_at if the column hasn't been migrated yet
     if (error && /completed_at/i.test(error.message || '')) {
-      ({ error } = await supabase.from('tasks').update({ completed: next }).eq('id', id));
+      ({ data, error } = await supabase.from('tasks').update({ completed: next }).eq('id', id).select());
     }
-    // On a real failure (e.g. RLS), revert the optimistic flip and DO NOT spawn
-    // a recurrence off a completion that never persisted.
-    if (error) {
+    // On a real failure (e.g. RLS error OR 0-row no-op), revert the optimistic
+    // flip and DO NOT spawn a recurrence off a completion that never persisted.
+    if (error || !data || data.length === 0) {
       if (snapshot) setTasks(prev => prev.map(t => t.id === id ? snapshot : t));
-      alert('Could not update the task: ' + (error.message || 'please try again.'));
+      alert('Could not update the task: ' + (error?.message || 'you may not have permission.'));
       return;
     }
 
@@ -8990,6 +9069,12 @@ export function MainApp({ profile, onSettings }) {
         );
       }
     }
+    // Generic net for the remaining optional columns — previously recurrence/
+    // space_id/is_private/due_time/baton_offer dropped with ZERO feedback.
+    const silentDrops = droppedCols.filter(c => c !== 'description' && c !== 'event_id' && data[c] != null);
+    if (silentDrops.length && warnOnce('taskCols:' + silentDrops.join(','))) {
+      alert('Task saved, but these fields could not be stored (column missing in your tasks table): ' + silentDrops.join(', ') + '.\nRun the latest schema migration to add them.');
+    }
     // Dedup: our own realtime INSERT can beat this promise, so guard by id
     // (else the row appears twice with a duplicate React key).
     setTasks(prev => prev.some(t => t.id === row.id) ? prev : [row, ...prev]);
@@ -9012,8 +9097,11 @@ export function MainApp({ profile, onSettings }) {
     // through on older schemas (same pattern as addTask).
     const payload = { ...patch };
     const optional = ['description', 'recurrence', 'event_id', 'space_id', 'is_private', 'due_time'];
-    const { error, droppedCols } = await writeStrippingMissing(
-      (p) => supabase.from('tasks').update(p).eq('id', id), payload, optional);
+    // .select() so a real save (returns the row) is distinguishable from an RLS
+    // no-op (0 rows, NO error) — the latter looked like success but reverted on
+    // next refresh (phantom edit). Mirrors updateEvent.
+    const { data, error, droppedCols } = await writeStrippingMissing(
+      (p) => supabase.from('tasks').update(p).eq('id', id).select(), payload, optional);
     // Surface a silently-dropped description (the "my details didn't save" case).
     if (droppedCols.includes('description') && patch.description && warnOnce('desc')) {
       alert(
@@ -9023,21 +9111,44 @@ export function MainApp({ profile, onSettings }) {
         'alter table public.tasks add column if not exists description text;'
       );
     }
+    // Generic net for the other optional columns (recurrence/space_id/
+    // is_private/due_time) — they previously dropped with zero feedback.
+    const silentDrops = droppedCols.filter(c => c !== 'description' && patch[c] != null);
+    if (silentDrops.length && warnOnce('taskCols:' + silentDrops.join(','))) {
+      alert('Saved, but these fields could not be stored (column missing in your tasks table): ' + silentDrops.join(', ') + '.\nRun the latest schema migration to add them.');
+    }
     if (error) {
       setTasks(prev => prev.map(t => t.id === id ? existing : t));
       return { error };
     }
+    if (!data || data.length === 0) {
+      setTasks(prev => prev.map(t => t.id === id ? existing : t));
+      alert('Could not save the change — you may not have permission (0 rows changed).');
+      return { error: { message: 'no rows updated (RLS)' } };
+    }
+    // Reconcile ONLY the fields this update actually patched. A full-row
+    // replace with data[0] would stomp concurrent optimistic writes from the
+    // sibling mutations (toggleTask/claimTask/...) whose DB commit raced this
+    // SELECT snapshot — e.g. a just-checked checkbox silently reverting.
+    setTasks(prev => prev.map(t => {
+      if (t.id !== id) return t;
+      const merged = { ...t };
+      for (const k of Object.keys(patch)) if (k in data[0]) merged[k] = data[0][k];
+      return merged;
+    }));
     return { error: null };
   };
   const deleteTask = React.useCallback(async (id) => {
     let removed = null;
     setTasks(prev => { removed = prev.find(t => t.id === id) || null; return prev.filter(t => t.id !== id); });
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
-    if (error) {
+    // .select() so an RLS-blocked delete (0 rows, no error) is caught and rolled
+    // back rather than silently leaving a phantom-removed row that snaps back.
+    const { data, error } = await supabase.from('tasks').delete().eq('id', id).select();
+    if (error || !data || data.length === 0) {
       // Restore the row instead of letting it silently reappear on next refresh
       // (the "it won't delete / ghost task" case when RLS blocks the delete).
       if (removed) setTasks(prev => prev.some(t => t.id === id) ? prev : [removed, ...prev]);
-      alert('Could not delete the task: ' + (error.message || 'you may not have permission.'));
+      alert('Could not delete the task: ' + (error?.message || 'you may not have permission.'));
     }
   }, []);
 
@@ -9047,11 +9158,15 @@ export function MainApp({ profile, onSettings }) {
     const cancelledAt = new Date().toISOString();
     setTasks(prev => prev.map(t => t.id === id ? { ...t, cancelled_at: cancelledAt, cancellation_reason: reason || null } : t));
     const payload = { cancelled_at: cancelledAt, cancellation_reason: reason || null };
-    let { error } = await supabase.from('tasks').update(payload).eq('id', id);
+    // .select() catches the RLS 0-row no-op (ownership-scoped tasks_update).
+    let { data, error } = await supabase.from('tasks').update(payload).eq('id', id).select();
     // Optional column missing → strip it and retry once (re-reading the new error).
     if (error && (error.message || '').toLowerCase().includes('cancellation_reason')) {
       const { cancellation_reason: _r, ...rest } = payload;
-      ({ error } = await supabase.from('tasks').update(rest).eq('id', id));
+      ({ data, error } = await supabase.from('tasks').update(rest).eq('id', id).select());
+    }
+    if (!error && (!data || data.length === 0)) {
+      error = { message: 'you may not have permission (0 rows changed).' };
     }
     if (error) {
       // Any remaining failure (missing column, RLS denial, network): revert the
@@ -9086,13 +9201,14 @@ export function MainApp({ profile, onSettings }) {
     // Mark it claimed (so a recurring task's next occurrence resets to
     // Unassigned, not the claimer) and clear the pool note.
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: profile.id, claimed: true, pool_reason: null, pool_by: null } : t));
-    let { error } = await supabase.from('tasks').update({ assigned_to: profile.id, claimed: true, pool_reason: null, pool_by: null }).eq('id', task.id);
+    let { data, error } = await supabase.from('tasks').update({ assigned_to: profile.id, claimed: true, pool_reason: null, pool_by: null }).eq('id', task.id).select();
     if (error && /pool_reason|pool_by|claimed/i.test(error.message || '')) {
-      ({ error } = await supabase.from('tasks').update({ assigned_to: profile.id }).eq('id', task.id));
+      ({ data, error } = await supabase.from('tasks').update({ assigned_to: profile.id }).eq('id', task.id).select());
     }
-    if (error) {
+    // 0 rows + no error = RLS no-op (e.g. someone else claimed it first).
+    if (error || !data || data.length === 0) {
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: task.assigned_to, pool_reason: task.pool_reason ?? null, pool_by: task.pool_by ?? null } : t));
-      alert('Could not claim task: ' + error.message);
+      alert('Could not claim task: ' + (error?.message || 'someone may have beaten you to it.'));
       return;
     }
     // Anyone picking up a task pings the whole group (except the picker).
@@ -9111,14 +9227,14 @@ export function MainApp({ profile, onSettings }) {
     // Store who dropped it + why, so the task detail can show the note.
     // Clear `claimed` — it's back in the pool, not a personal pickup.
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: null, claimed: false, recur_owner: null, pool_reason: r, pool_by: profile.id } : t));
-    let { error } = await supabase.from('tasks').update({ assigned_to: null, claimed: false, recur_owner: null, pool_reason: r, pool_by: profile.id }).eq('id', task.id);
+    let { data, error } = await supabase.from('tasks').update({ assigned_to: null, claimed: false, recur_owner: null, pool_reason: r, pool_by: profile.id }).eq('id', task.id).select();
     if (error && /pool_reason|pool_by|claimed|recur_owner/i.test(error.message || '')) {
       // Columns not migrated yet — release anyway; the note just won't persist.
-      ({ error } = await supabase.from('tasks').update({ assigned_to: null }).eq('id', task.id));
+      ({ data, error } = await supabase.from('tasks').update({ assigned_to: null }).eq('id', task.id).select());
     }
-    if (error) {
+    if (error || !data || data.length === 0) {
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assigned_to: task.assigned_to, pool_reason: task.pool_reason ?? null, pool_by: task.pool_by ?? null } : t));
-      alert('Could not release task: ' + error.message);
+      alert('Could not release task: ' + (error?.message || 'you may not have permission.'));
       return;
     }
     // Anyone can pick it up, so tell the whole group (except the dropper).
@@ -9180,10 +9296,10 @@ export function MainApp({ profile, onSettings }) {
     if (!task) return;
     const next = toId || null;
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, baton_offer: next } : t));
-    const { error } = await supabase.from('tasks').update({ baton_offer: next }).eq('id', task.id);
-    if (error) {
+    const { data, error } = await supabase.from('tasks').update({ baton_offer: next }).eq('id', task.id).select();
+    if (error || !data || data.length === 0) {
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, baton_offer: task.baton_offer ?? null } : t));
-      alert('Could not hand off the task: ' + error.message);
+      alert('Could not hand off the task: ' + (error?.message || 'you may not have permission.'));
       return;
     }
     if (next && next !== profile.id) {
@@ -9227,15 +9343,15 @@ export function MainApp({ profile, onSettings }) {
       postponed_by: profile.id,
     };
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...patch } : t));
-    let { error } = await supabase.from('tasks').update(patch).eq('id', task.id);
+    let { data, error } = await supabase.from('tasks').update(patch).eq('id', task.id).select();
     if (error && /postponed_from|postponed_by|postponed_from_time/i.test(error.message || '')) {
       // Columns not migrated — still move the date; the history note just
       // won't persist.
-      ({ error } = await supabase.from('tasks').update({ due_date: newDate, due_time: newTime || null }).eq('id', task.id));
+      ({ data, error } = await supabase.from('tasks').update({ due_date: newDate, due_time: newTime || null }).eq('id', task.id).select());
     }
-    if (error) {
+    if (error || !data || data.length === 0) {
       setTasks(prev => prev.map(t => t.id === task.id ? task : t));
-      alert('Could not postpone the task: ' + error.message);
+      alert('Could not postpone the task: ' + (error?.message || 'you may not have permission.'));
       return;
     }
     // Tell the creator their task moved (unless they did it themselves).
@@ -9411,6 +9527,13 @@ export function MainApp({ profile, onSettings }) {
   const updateEvent = async (id, patch) => {
     const existing = events.find(e => e.id === id);
     if (!existing) return { error: { message: 'Event not found' } };
+    // A recurring event is ONE row expanded virtually across occurrences, so
+    // any edit rewrites the whole series. deleteEvent already confirms this;
+    // mirror it here so "edit just this Tuesday's" isn't a silent series edit.
+    if (existing.recurrence?.freq && existing.recurrence.freq !== 'none') {
+      const ok = window.confirm(`"${existing.title}" repeats. Changes apply to every occurrence — save anyway?`);
+      if (!ok) return { error: { message: 'cancelled' } };
+    }
     const sortByDate = (list) => list.sort((a, b) => a.date.localeCompare(b.date));
     const rollback = () => setEvents(prev => sortByDate(prev.map(e => e.id === id ? existing : e)));
     setEvents(prev => sortByDate(prev.map(e => e.id === id ? { ...e, ...patch } : e)));
@@ -9458,11 +9581,13 @@ export function MainApp({ profile, onSettings }) {
     let removedTasks = [];
     setEvents(prev => { removed = prev.find(e => e.id === id) || null; return prev.filter(e => e.id !== id); });
     setTasks(prev => { removedTasks = prev.filter(t => t.event_id === id); return removedTasks.length ? prev.filter(t => t.event_id !== id) : prev; });
-    const { error } = await supabase.from('events').delete().eq('id', id);
-    if (error) {
+    // .select() so an RLS 0-row no-op rolls back instead of phantom-removing
+    // the event (and its locally-dropped linked tasks) until the next refresh.
+    const { data, error } = await supabase.from('events').delete().eq('id', id).select();
+    if (error || !data || data.length === 0) {
       if (removed) setEvents(prev => prev.some(e => e.id === id) ? prev : [...prev, removed]);
       if (removedTasks.length) setTasks(prev => [...prev, ...removedTasks.filter(rt => !prev.some(t => t.id === rt.id))]);
-      alert('Could not delete the event: ' + (error.message || 'you may not have permission.'));
+      alert('Could not delete the event: ' + (error?.message || 'you may not have permission.'));
     }
   }, [events]);
 
@@ -9535,10 +9660,17 @@ export function MainApp({ profile, onSettings }) {
     if (patch.description !== undefined) dbPatch.description = next.description;
     if (patch.memberIds !== undefined)   dbPatch.member_ids  = next.member_ids;
     dbPatch.updated_at = next.updated_at;
-    const { error } = await supabase.from('spaces').update(dbPatch).eq('id', id);
+    // .select() to catch an RLS no-op (0 rows, no error) — otherwise a blocked
+    // edit looks saved then snaps back on refresh.
+    const { data, error } = await supabase.from('spaces').update(dbPatch).eq('id', id).select();
     if (error) {
       setSpaces(prev => prev.map(s => s.id === id ? existing : s));
       return { data: null, error };
+    }
+    if (!data || data.length === 0) {
+      setSpaces(prev => prev.map(s => s.id === id ? existing : s));
+      alert('Could not save the space — you may not have permission (0 rows changed).');
+      return { data: null, error: { message: 'no rows updated (RLS)' } };
     }
     return { data: next, error: null };
   };
@@ -9548,10 +9680,13 @@ export function MainApp({ profile, onSettings }) {
     const isArchived = !!space.archived_at;
     const nextArchive = isArchived ? null : new Date().toISOString();
     setSpaces(prev => prev.map(s => s.id === space.id ? { ...s, archived_at: nextArchive } : s));
-    const { error } = await supabase.from('spaces').update({ archived_at: nextArchive }).eq('id', space.id);
+    const { data, error } = await supabase.from('spaces').update({ archived_at: nextArchive }).eq('id', space.id).select();
     if (error) {
       setSpaces(prev => prev.map(s => s.id === space.id ? space : s));
       alert('Could not ' + (isArchived ? 'unarchive' : 'archive') + ' space: ' + error.message);
+    } else if (!data || data.length === 0) {
+      setSpaces(prev => prev.map(s => s.id === space.id ? space : s));
+      alert('Could not ' + (isArchived ? 'unarchive' : 'archive') + ' space — you may not have permission.');
     }
   };
 
@@ -9565,14 +9700,16 @@ export function MainApp({ profile, onSettings }) {
     setTasks(prev => { tIds = prev.filter(t => t.space_id === id).map(t => t.id); return prev.map(t => t.space_id === id ? { ...t, space_id: null } : t); });
     setEvents(prev => { eIds = prev.filter(e => e.space_id === id).map(e => e.id); return prev.map(e => e.space_id === id ? { ...e, space_id: null } : e); });
     setNotes(prev => { nIds = prev.filter(n => n.space_id === id).map(n => n.id); return prev.map(n => n.space_id === id ? { ...n, space_id: null } : n); });
-    const { error } = await supabase.from('spaces').delete().eq('id', id);
-    if (error) {
+    // .select() so an RLS no-op (non-creator delete: 0 rows, no error) rolls back
+    // instead of leaving the space phantom-removed until the next refresh.
+    const { data, error } = await supabase.from('spaces').delete().eq('id', id).select();
+    if (error || !data || data.length === 0) {
       if (existing) setSpaces(prev => prev.some(s => s.id === id) ? prev : [existing, ...prev]);
       // Restore the space_id we optimistically stripped, so items don't show untagged.
       setTasks(prev => prev.map(t => tIds.includes(t.id) ? { ...t, space_id: id } : t));
       setEvents(prev => prev.map(e => eIds.includes(e.id) ? { ...e, space_id: id } : e));
       setNotes(prev => prev.map(n => nIds.includes(n.id) ? { ...n, space_id: id } : n));
-      alert('Could not delete space: ' + error.message);
+      alert('Could not delete space: ' + (error?.message || 'only the space’s creator can delete it.'));
     }
   }, [spaces]);
 
@@ -9642,10 +9779,12 @@ export function MainApp({ profile, onSettings }) {
     const it = spaceItems.find(i => i.id === id);
     if (!it) return;
     setSpaceItems(prev => prev.filter(i => i.id !== id));
-    const { error } = await supabase.from('space_items').delete().eq('id', id);
-    if (error) {
+    // .select() so an RLS no-op (not creator/assignee: 0 rows, no error) rolls
+    // back instead of phantom-removing the item until refresh.
+    const { data, error } = await supabase.from('space_items').delete().eq('id', id).select();
+    if (error || !data || data.length === 0) {
       setSpaceItems(prev => prev.some(i => i.id === id) ? prev : [...prev, it]);
-      alert('Could not delete item: ' + error.message);
+      alert('Could not delete item: ' + (error?.message || 'only its creator or assignee can delete it.'));
     }
   };
   const cycleSpaceItemAssignee = async (item) => {
@@ -9782,7 +9921,7 @@ export function MainApp({ profile, onSettings }) {
       } else {
         alert('Could not save post: ' + m);
       }
-      return;
+      return false; // note insert failed — caller keeps the sheet open + draft
     }
     setNotes(prev => prev.some(n => n.id === noteRow.id) ? prev : [noteRow, ...prev]);
 
@@ -9929,7 +10068,9 @@ export function MainApp({ profile, onSettings }) {
       }
       if (evErr || !evRow) {
         alert('Post saved but event could not be created: ' + (evErr?.message || 'no row returned'));
-        return;
+        // The NOTE itself saved — linked outputs are best-effort, so this is
+        // still "success" to the composer (explicit, matching the task branch).
+        return true;
       }
       setEvents(prev => prev.some(e => e.id === evRow.id) ? prev : [...prev, evRow].sort((a, b) => a.date.localeCompare(b.date)));
       const attendeeIds = (evRow.attendees || []).filter(id => id !== profile.id);
@@ -9944,6 +10085,7 @@ export function MainApp({ profile, onSettings }) {
         });
       }
     }
+    return true; // note saved (linked task/event failures alert but don't lose the post)
   // notify is intentionally not a dep — it only reads `profile`, which
   // is, so the captured copy is never meaningfully stale.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9961,12 +10103,14 @@ export function MainApp({ profile, onSettings }) {
 
   // Stable wrapper for the feed's quick composer (plain messages).
   const postQuickMessage = React.useCallback(async (content) => {
-    await addNote({ content, type: 'message', payload: null, pinned: false });
+    // Pass addNote's success flag through so QuickComposer keeps the draft
+    // when the insert fails.
+    return await addNote({ content, type: 'message', payload: null, pinned: false });
   }, [addNote]);
 
   // Vote on a poll — updates the note's payload.votes
   const voteOnPoll = React.useCallback(async (noteId, optionId) => {
-    const note = notes.find(n => n.id === noteId);
+    const note = notesRef.current.find(n => n.id === noteId);
     if (!note || note.type !== 'poll') return;
     const payload = note.payload || {};
     const options = Array.isArray(payload.options) ? payload.options : [];
@@ -10009,7 +10153,9 @@ export function MainApp({ profile, onSettings }) {
         alert('Could not save vote: ' + error.message);
       }
     }
-  }, [notes, profile]);
+  // notesRef (not notes) so this identity survives feed changes — keeps
+  // FeedPost's memo intact.
+  }, [profile]);
 
   // Soft-delete a note in the home feed. The note row stays in the
   // table so reply chains still resolve (otherwise a "replying to …"
@@ -10020,7 +10166,7 @@ export function MainApp({ profile, onSettings }) {
   // guard this via `canDelete = n.created_by === myId`, but we
   // re-check here as a backstop.
   const deleteNote = React.useCallback(async (id) => {
-    const current = notes.find(n => n.id === id);
+    const current = notesRef.current.find(n => n.id === id);
     if (!current) return;
     if (current.created_by !== profile?.id) return;
     if (current.payload?.deleted) return; // already gone
@@ -10044,7 +10190,8 @@ export function MainApp({ profile, onSettings }) {
       setNotes(prev => prev.map(n => n.id === id ? current : n));
       alert('Could not delete post: ' + error.message);
     }
-  }, [notes, profile?.id]);
+  // notesRef (not notes) — stable identity keeps FeedPost's memo intact.
+  }, [profile?.id]);
   const deleteNotification = async (id) => {
     let removed;
     setNotifications(prev => { removed = prev.find(n => n.id === id); return prev.filter(n => n.id !== id); });
@@ -10081,7 +10228,7 @@ export function MainApp({ profile, onSettings }) {
     let raf;
     const compute = () => {
       if (Date.now() < suppressScrollSync.current) return;
-      const ids = ['notes', 'tasks', 'spaces', 'calendar']; // 'lists' hidden
+      const ids = SECTION_ORDER; // single source of truth (module const)
       const headH = wrap.querySelector('.fb-stickyhead')?.getBoundingClientRect().height || 0;
       let cur = ids[0];
       for (const id of ids) {

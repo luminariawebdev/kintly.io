@@ -238,7 +238,9 @@ export function App() {
       // auth lock (the sign-in hangs on "Signing in…"); and routing on every
       // SIGNED_IN would also bounce an active user to the picker on a
       // background token refresh. So we deliberately do nothing on SIGNED_IN.
-      if (event === 'SIGNED_OUT' || !session) {
+      // Gate strictly on SIGNED_OUT: a transient event carrying a null session
+      // (some gotrue versions during a refresh) must NOT eject a valid user.
+      if (event === 'SIGNED_OUT') {
         setScreen('auth');
         setProfile(null);
       }

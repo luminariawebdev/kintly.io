@@ -133,11 +133,8 @@ export function AnchorTabs({ active, onChange }) {
   const tabs = [
     { id: 'notes',    label: 'Home' },
     { id: 'tasks',    label: 'Tasks' },
-    // Lists is hidden — superseded by Spaces. Code stays intact in
-    // ListsSection / AddListModal / ListDetailModal in case we ever
-    // want to revive it; just un-comment this line and the matching
-    // entry in SECTION_ORDER + scroll-sync ids + JSX render in Main.
-    // { id: 'lists',    label: 'Lists' },
+    // 'lists' tab retired — superseded by Spaces (its components were removed
+    // in the cycle-5 cleanup; reviving means rebuilding, not un-commenting).
     { id: 'spaces',   label: 'Spaces' },
     { id: 'calendar', label: 'Calendar' },
   ];
