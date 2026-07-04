@@ -1098,6 +1098,16 @@ html { overscroll-behavior-x: none; }
 .fb-btn.solid:hover { background: var(--brand-grad-fill); box-shadow: 0 15px 35px rgba(106, 77, 255, 0.35); }
 .fb-btn.ghost { border-style: dashed; color: var(--text-muted); background: transparent; box-shadow: none; }
 .fb-btn:active { transform: translateY(0); }
+/* Keyboard focus must be VISIBLE on the glass surfaces (the browser default
+   ring can vanish against them, especially in dark mode). Covers the rowA11y
+   div-rows (role="button"), the fb-btn family, and the profile color swatches. */
+[role="button"]:focus-visible,
+.fb-btn:focus-visible,
+.swatches button:focus-visible {
+  outline: 2px solid var(--kinnekt-purple);
+  outline-offset: 2px;
+}
+
 /* In-flight / inert buttons: visibly dimmed, no hover lift, no pointer —
    otherwise disabled={loading/entering} gives zero visual signal. */
 .fb-btn:disabled { opacity: 0.5; cursor: not-allowed; }

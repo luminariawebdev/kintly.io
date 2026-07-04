@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal, EmojiInput } from '../Components';
 import { COLOR_MAP } from '../lib/colors';
+import { toLocalISO, localTodayISO, addOneMonth, computeNextDue, writeStrippingMissing } from '../lib/helpers';
 
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
@@ -19,27 +20,7 @@ const MyIdContext = React.createContext(null);
 // profile color — from just `spaceId`, without prop-drilling.
 const SpacesContext = React.createContext({ spaces: [], showSpace: null, getProfile: () => null });
 
-// Local-timezone ISO date helpers. `new Date().toISOString()` is UTC —
-// for US users any evening use made "Today" resolve to tomorrow's date
-// (due dates, default event dates, the date-picker highlight). These
-// format y-m-d from the *local* clock instead.
-const toLocalISO = (d) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-const localTodayISO = () => toLocalISO(new Date());
-
-// Add one calendar month, clamping the day to the target month's length so
-// e.g. Aug 31 → Sep 30 (not the overflow Oct 1 that a bare setMonth gives).
-const addOneMonth = (d) => {
-  const day = d.getDate();
-  d.setDate(1);
-  d.setMonth(d.getMonth() + 1);
-  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
-  return d;
-};
+// Date + write helpers live in ../lib/helpers (extracted for unit tests).
 
 // A space with a non-empty member_ids is scoped to that subset of the group.
 // Supabase Realtime channels and the tables' RLS are BOTH only group-scoped
@@ -64,27 +45,6 @@ const newTempId = () => (typeof crypto !== 'undefined' && crypto.randomUUID)
 // globals). Module-scoped so it persists for the app session, like they did.
 const _warnedKeys = new Set();
 const warnOnce = (key) => (_warnedKeys.has(key) ? false : (_warnedKeys.add(key), true));
-
-// Run a Supabase write, and if the DB rejects a column an older schema is
-// missing ("column X does not exist"), strip that column and retry. runQuery is
-// caller-supplied so this covers both insert(...).select().single() and
-// update(...).eq(...). Returns { data, error, droppedCols } — callers keep their
-// own per-column "that field didn't save" warnings by reading droppedCols.
-async function writeStrippingMissing(runQuery, payload, optionalCols) {
-  const droppedCols = [];
-  let data = null, error = null;
-  for (let i = 0; i <= optionalCols.length; i++) {
-    ({ data = null, error } = await runQuery(payload));
-    if (!error) break;
-    const msg = (error.message || '').toLowerCase();
-    const col = optionalCols.find(c => payload[c] !== undefined && msg.includes(c));
-    if (!col) break; // a non-column error (RLS/network) — stop and surface it
-    const { [col]: _drop, ...rest } = payload;
-    payload = rest;
-    droppedCols.push(col);
-  }
-  return { data, error, droppedCols };
-}
 
 // Format an "HH:MM" 24-hour time string for display as 12-hour
 // w/ AM/PM. Returns '' for empty / invalid input so the caller can
@@ -1604,42 +1564,7 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
   return out;
 }
 
-// Given a recurring task, return the ISO date (YYYY-MM-DD) of its next
-// scheduled occurrence after its current due_date — or null if the task
-// isn't recurring. Same recurrence shape used by events
-// ({ freq, days, time }). Computed in local time so a US-evening "next
-// Wednesday" doesn't slip a day.
-function computeNextDue(task) {
-  const r = task && task.recurrence;
-  if (!r || !r.freq || r.freq === 'none') return null;
-  const base = task.due_date ? new Date(task.due_date + 'T12:00:00') : new Date();
-  let d = null;
-  if (r.freq === 'daily') {
-    d = new Date(base); d.setDate(d.getDate() + 1);
-  } else if (r.freq === 'monthly') {
-    // Anchor on the original day-of-month and SKIP months that don't have it
-    // (e.g. the 31st), matching the calendar's monthly expansion. A naive
-    // setMonth(+1) overflows Jan 31 → Mar 3 and — because each respawn feeds
-    // its own output back as the next due date — the "31st" drifts permanently.
-    const anchorDay = base.getDate();
-    let y = base.getFullYear();
-    let m = base.getMonth(); // 0-based
-    for (let i = 0; i < 12; i++) {
-      m += 1;
-      if (m > 11) { m = 0; y += 1; }
-      const cand = new Date(y, m, anchorDay);
-      if (cand.getMonth() === m) { d = cand; break; } // month actually has that day
-    }
-  } else if ((r.freq === 'weekly' || r.freq === 'custom') && Array.isArray(r.days) && r.days.length > 0) {
-    const sorted = [...r.days].sort((a, b) => a - b);
-    const cur = base.getDay(); // 0-6 (Sun-Sat)
-    const nextDay = sorted.find(x => x > cur) ?? sorted[0];
-    const diff = nextDay > cur ? nextDay - cur : 7 - cur + nextDay;
-    d = new Date(base); d.setDate(d.getDate() + diff);
-  }
-  if (!d) return null;
-  return toLocalISO(d);
-}
+// computeNextDue moved to ../lib/helpers (extracted for unit tests).
 
 // Completed tasks auto-vanish 8 days after they're checked off (the DB purge
 // lives in fetchAll; the Tasks section also hides them live at this mark).
@@ -8638,7 +8563,13 @@ export function MainApp({ profile, onSettings }) {
     const [m, t, e, n] = await Promise.all([
       supabase.from('profiles').select('*').eq('group_id', profile.group_id),
       supabase.from('tasks').select('*').eq('group_id', profile.group_id).order('created_at', { ascending: false }),
-      supabase.from('events').select('*').eq('group_id', profile.group_id).order('date', { ascending: true }),
+      // Bound the payload: skip non-recurring events older than ~3 months
+      // (they accumulate forever otherwise). Recurring rows must ALWAYS come
+      // through — a weekly event's base row can carry a year-old date and
+      // still project live occurrences. Non-destructive: rows stay in the DB.
+      supabase.from('events').select('*').eq('group_id', profile.group_id)
+        .or(`date.gte.${toLocalISO(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000))},recurrence.not.is.null`)
+        .order('date', { ascending: true }),
       // Notes carry base64 photos in their payloads, so an unbounded
       // select was the slowest query in the app by far. 100 newest is
       // far more than the feed's load-more pills ever reveal.
@@ -9705,7 +9636,17 @@ export function MainApp({ profile, onSettings }) {
       alert('Could not save the space — you may not have permission (0 rows changed).');
       return { data: null, error: { message: 'no rows updated (RLS)' } };
     }
-    return { data: next, error: null };
+    // Reconcile the patched keys with what the DB actually saved (same
+    // patched-keys-only merge as updateTask — full-row replace could stomp
+    // a concurrent optimistic write).
+    let merged = next;
+    setSpaces(prev => prev.map(s => {
+      if (s.id !== id) return s;
+      merged = { ...s };
+      for (const k of Object.keys(dbPatch)) if (k in data[0]) merged[k] = data[0][k];
+      return merged;
+    }));
+    return { data: merged, error: null };
   };
 
   const archiveSpace = async (space) => {
