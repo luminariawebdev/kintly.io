@@ -1,7 +1,7 @@
 // Plain-node unit tests for src/lib/helpers.js — no framework, no fixtures.
 // Run: npm test (from app/), or: node test/helpers.test.mjs
 import assert from 'node:assert/strict';
-import { toLocalISO, addOneMonth, computeNextDue, writeStrippingMissing } from '../src/lib/helpers.js';
+import { toLocalISO, addOneMonth, computeNextDue, catchUpDate, writeStrippingMissing } from '../src/lib/helpers.js';
 
 let passed = 0;
 const test = (name, fn) => {
@@ -80,6 +80,29 @@ test('weekly with empty days → null', () => {
   assert.equal(
     computeNextDue({ due_date: '2026-07-03', recurrence: { freq: 'weekly', days: [] } }),
     null);
+});
+
+// ── catchUpDate ──────────────────────────────────────────────────────────────
+test('catch-up: Mon/Wed task 2.5 weeks overdue lands on first trash day >= today', () => {
+  // 2026-06-15 is a Monday; today 2026-07-03 is a Friday → next is Mon 07-06.
+  assert.equal(
+    catchUpDate('2026-06-15', { freq: 'weekly', days: [1, 3] }, '2026-07-03'),
+    '2026-07-06');
+});
+test('catch-up: daily overdue lands on today itself', () => {
+  assert.equal(catchUpDate('2026-07-01', { freq: 'daily' }, '2026-07-03'), '2026-07-03');
+});
+test('catch-up: today IS a scheduled day → lands on today, stays actionable', () => {
+  // 2026-07-03 is a Friday (5); Mon/Fri task overdue since Mon 06-29.
+  assert.equal(
+    catchUpDate('2026-06-29', { freq: 'weekly', days: [1, 5] }, '2026-07-03'),
+    '2026-07-03');
+});
+test('catch-up: already current or not recurring → null', () => {
+  assert.equal(catchUpDate('2026-07-03', { freq: 'daily' }, '2026-07-03'), null);
+  assert.equal(catchUpDate('2026-07-10', { freq: 'daily' }, '2026-07-03'), null);
+  assert.equal(catchUpDate('2026-06-01', null, '2026-07-03'), null);
+  assert.equal(catchUpDate('2026-06-01', { freq: 'none' }, '2026-07-03'), null);
 });
 
 // ── writeStrippingMissing ────────────────────────────────────────────────────

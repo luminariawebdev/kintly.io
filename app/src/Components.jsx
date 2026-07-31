@@ -131,10 +131,11 @@ export function EmojiInput({ value, onChange, presets = POPULAR_EMOJIS, placehol
 
 export function AnchorTabs({ active, onChange }) {
   const tabs = [
-    { id: 'notes',    label: 'Home' },
-    { id: 'tasks',    label: 'Tasks' },
+    // 'notes' (Home) tab retired 2026-07-30 — chat feed cut; the Next-24-hours
+    // card moved above Tasks. NotesSection still exists in Main.jsx, unmounted.
     // 'lists' tab retired — superseded by Spaces (its components were removed
     // in the cycle-5 cleanup; reviving means rebuilding, not un-commenting).
+    { id: 'tasks',    label: 'Tasks' },
     { id: 'spaces',   label: 'Spaces' },
     { id: 'calendar', label: 'Calendar' },
   ];

@@ -59,6 +59,22 @@ export function computeNextDue(task) {
   return toLocalISO(d);
 }
 
+// First scheduled occurrence of a recurring series on/after `today`, walking
+// forward from `dueDate` — the "Catch up" button's target when a recurring
+// task sat overdue for weeks. Null when there's nothing to advance (not
+// recurring, already current, or the rule yields no next date).
+export function catchUpDate(dueDate, recurrence, today) {
+  if (!recurrence?.freq || recurrence.freq === 'none') return null;
+  let d = dueDate;
+  // ponytail: bounded walk (400 ≈ a year of daily misses), no closed form
+  for (let i = 0; d && d < today && i < 400; i++) {
+    const n = computeNextDue({ due_date: d, recurrence });
+    if (!n || n <= d) break;
+    d = n;
+  }
+  return d && d !== dueDate ? d : null;
+}
+
 // Run a Supabase write, and if the DB rejects a column an older schema is
 // missing ("column X does not exist"), strip that column and retry. runQuery is
 // caller-supplied so this covers both insert(...).select().single() and

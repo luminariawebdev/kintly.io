@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal, EmojiInput } from '../Components';
 import { COLOR_MAP } from '../lib/colors';
-import { toLocalISO, localTodayISO, addOneMonth, computeNextDue, writeStrippingMissing } from '../lib/helpers';
+import { toLocalISO, localTodayISO, addOneMonth, computeNextDue, catchUpDate, writeStrippingMissing } from '../lib/helpers';
 
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
@@ -21,6 +21,13 @@ const MyIdContext = React.createContext(null);
 const SpacesContext = React.createContext({ spaces: [], showSpace: null, getProfile: () => null });
 
 // Date + write helpers live in ../lib/helpers (extracted for unit tests).
+
+// Chat feed hidden (product call, 2026-07-30): the Home tab keeps the
+// "Next 24 hours" glance card, but the social layer — message bubbles,
+// pinned posts, polls/urgent/photo posts, quick composer, "+ Post" — is
+// hidden, NOT deleted. DB rows and Space-scoped notes stay untouched;
+// notifications and note-detail modals still open. Flip to revive.
+const SHOW_HOME_FEED = false;
 
 // A space with a non-empty member_ids is scoped to that subset of the group.
 // Supabase Realtime channels and the tables' RLS are BOTH only group-scoped
@@ -1961,6 +1968,36 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
     return { grouped, unassigned, doneItems, openCount };
   }, [tasks, members, filter, todayKey]);
 
+  // Long lists collapse PER MEMBER: each group shows its first 5 open tasks
+  // (soonest-due), the rest behind that member's own purple more-pill — every
+  // member stays visible. Same pill as the Calendar's "load more events".
+  const TASKS_INITIAL = 5;
+  const [openGroups, setOpenGroups] = React.useState({}); // member id / 'unassigned' → expanded
+  const toggleGroup = (id) => setOpenGroups(o => ({ ...o, [id]: !o[id] }));
+  const groupPill = (id, total) => {
+    if (total <= TASKS_INITIAL) return null;
+    const expanded = !!openGroups[id];
+    return (
+      <div className="feed-more-row">
+        <button
+          type="button"
+          className={'feed-more-pill' + (expanded ? ' feed-less-pill' : '')}
+          onClick={() => toggleGroup(id)}
+          aria-label={expanded ? 'Collapse back to the first 5 tasks' : `Show all ${total} tasks`}
+        >
+          <span className="feed-more-arrow" aria-hidden>
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <path d={expanded ? 'M7 11V3m0 0l-3.5 3.5M7 3l3.5 3.5' : 'M7 3v8m0 0l-3.5-3.5M7 11l3.5-3.5'}
+                    stroke="currentColor" strokeWidth="1.8"
+                    fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="feed-more-text">{expanded ? 'see less' : `${total - TASKS_INITIAL} more`}</span>
+        </button>
+      </div>
+    );
+  };
+
   return (
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-tasks">
       <div className="fb-sec-hd">
@@ -2026,10 +2063,11 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
                 <span className="count">{g.items.length}</span>
               </div>
               <div className="tasklist">
-                {g.items.map(t => (
+                {(openGroups[g.member.id] ? g.items : g.items.slice(0, TASKS_INITIAL)).map(t => (
                   <TaskRow key={t.id} task={t} assignee={g.member} myId={myId} onToggle={onToggle} onDelete={onDelete} onShowTask={onShowTask} {...rowExtra} />
                 ))}
               </div>
+              {groupPill(g.member.id, g.items.length)}
             </div>
           ))}
           {unassigned.length > 0 && (
@@ -2039,10 +2077,11 @@ const TasksSection = React.memo(function TasksSection({ tasks, members, myId, ge
                 <span className="count">{unassigned.length}</span>
               </div>
               <div className="tasklist">
-                {unassigned.map(t => (
+                {(openGroups['unassigned'] ? unassigned : unassigned.slice(0, TASKS_INITIAL)).map(t => (
                   <TaskRow key={t.id} task={t} assignee={null} myId={myId} onToggle={onToggle} onDelete={onDelete} onShowTask={onShowTask} {...rowExtra} />
                 ))}
               </div>
+              {groupPill('unassigned', unassigned.length)}
             </div>
           )}
 
@@ -3128,11 +3167,11 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
     <section className={'fb-sec' + (collapsed ? ' collapsed' : '')} id="sec-notes">
       <div className="fb-sec-hd">
         <div className="fb-sec-hd-left">
-          <h2 className="fb-sec-title">Home Feed</h2>
+          <h2 className="fb-sec-title">{SHOW_HOME_FEED ? 'Home Feed' : 'Home'}</h2>
           <SectionToggle collapsed={collapsed} onClick={onToggleCollapse} />
         </div>
         <div className="fb-sec-hd-right">
-          <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'post' : 'posts'}</div>
+          {SHOW_HOME_FEED && <div className="fb-sec-meta">{notes.length} {notes.length === 1 ? 'post' : 'posts'}</div>}
         </div>
       </div>
 
@@ -3145,6 +3184,7 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
           Tasks "To-do" container — so the section reads as a single
           unified surface. Pinned is its own (slightly more saturated)
           sub-box nested inside, so the two regions visually separate. */}
+      {SHOW_HOME_FEED && (<>
       {(pinned.length > 0 || sorted.length > 0 || replyingTo) ? (
         <div className="feed-box">
           {/* Inline reply composer — slides in at the top of the feed
@@ -3340,6 +3380,7 @@ const NotesSection = React.memo(function NotesSection({ notes, members, getProfi
       <button className="fb-btn" onClick={onAdd} style={{ marginTop: 14 }}>
         <span className="plus">+</span> Post
       </button>
+      </>)}
       </>)}
     </section>
   );
@@ -5937,7 +5978,7 @@ function MemberDetailsModal({ open, member, notes, tasks, events, onClose, onSho
 
 // ─── Note Details Modal ───────────────────────────────────────────────────────
 // ─── Task Details Modal ───────────────────────────────────────────────────────
-function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond, onGrab, suggestions, onSuggest, onDecideSuggestion, onWithdrawSuggestion }) {
+function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onToggle, onDelete, onOpenNote, onShowMember, onCancelTask, onEdit, onPostpone, onPass, onRespond, onGrab, onCatchUp, suggestions, onSuggest, onDecideSuggestion, onWithdrawSuggestion }) {
   const [cancelMode, setCancelMode] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
   const [cancelling, setCancelling] = React.useState(false);
@@ -6379,6 +6420,18 @@ function TaskDetailsModal({ open, task, notes, myId, getProfile, onClose, onTogg
               className="copy-btn"
               style={{ marginLeft: 0 }}
             >Cancel task</button>
+          )}
+          {/* Recurring task overdue → skip the missed instances in one tap
+              instead of check-off/respawn looping through each one. */}
+          {onCatchUp && task.recurrence?.freq && task.recurrence.freq !== 'none'
+            && !task.completed && !task.cancelled_at && !cancelMode
+            && task.due_date && task.due_date < localTodayISO()
+            && (task.assigned_to === myId || task.created_by === myId || !task.assigned_to) && (
+            <button
+              onClick={() => { onClose(); onCatchUp(task); }}
+              className="copy-btn"
+              style={{ marginLeft: 0 }}
+            >Catch up</button>
           )}
           {(task.created_by === myId || !task.assigned_to || task.assigned_to === myId) && (
             <button
@@ -8353,10 +8406,13 @@ const SpacesSection = React.memo(function SpacesSection({
 // 'lists' is temporarily hidden — Spaces covers the same use case better.
 // Restore by adding it back here AND in the scroll-sync ids array AND in
 // the JSX render below (search for "ListsSection is hidden").
-const SECTION_ORDER = ['notes', 'tasks', 'spaces', 'calendar'];
+// 'notes' (the Home tab) retired 2026-07-30 — chat feed cut from the product;
+// the Next-24-hours card moved above Tasks. Restore by re-adding 'notes' here,
+// in Components.jsx AnchorTabs, and re-mounting <NotesSection> in the JSX.
+const SECTION_ORDER = ['tasks', 'spaces', 'calendar'];
 
 export function MainApp({ profile, onSettings }) {
-  const [tab, setTab] = React.useState('notes');
+  const [tab, setTab] = React.useState('tasks');
   const [modal, setModal] = React.useState(null);
   const [eventInitDate, setEventInitDate] = React.useState(null);
   const [dayDetailsDate, setDayDetailsDate] = React.useState(null);
@@ -9327,6 +9383,18 @@ export function MainApp({ profile, onSettings }) {
       });
     }
   }, [profile]);
+
+  // ── Catch up: fast-forward an overdue recurring task to its first scheduled
+  // occurrence >= today, in ONE tap — without checking off each missed
+  // instance (2 weeks of "trash cans out" ≈ 4 respawn round-trips otherwise).
+  // Skipped instances are NOT logged as completed (they weren't done — the
+  // Load card stays honest). Routed through postponeTask so the detail row
+  // shows "postponed from <old> to <new>" and the RLS 0-row guard applies.
+  const catchUpTask = React.useCallback(async (task) => {
+    const d = catchUpDate(task?.due_date, task?.recurrence, localTodayISO());
+    if (!d) return; // not recurring or already current
+    await postponeTask(task, d, task.due_time || null);
+  }, [postponeTask]);
 
   // ── Suggestions: any group member (but the creator) proposes a written
   // note on a task; the creator approves/dismisses; approved ones show in
@@ -10342,23 +10410,10 @@ export function MainApp({ profile, onSettings }) {
 
         <div className="fb-sec-wrap">
           <LiveClock />
-          <NotesSection
-            notes={notes}
-            summary={daySummary}
-            members={members}
-            getProfile={getProfile}
-            myId={profile?.id}
-            onAdd={openAddNote}
-            onDelete={deleteNote}
-            onTogglePin={togglePin}
-            onOpenNote={showNoteDetail}
-            onShowMember={showMemberDetail}
-            onVote={voteOnPoll}
-            onReply={postReply}
-            onQuickPost={postQuickMessage}
-            collapsed={collapsed.notes}
-            onToggleCollapse={toggleCollapseNotes}
-          />
+          {/* Home tab retired (2026-07-30). The "Next 24 hours" glance card
+              lives here now, above Tasks — NotesSection stays in the file
+              unmounted so the feed is revivable. */}
+          {daySummary}
           <TasksSection tasks={tasks} members={members} myId={profile?.id} getProfile={getProfile} suggestions={suggestions} onToggle={toggleTask} onAdd={openAddTask} onAddPersonal={openAddPersonalTask} onDelete={deleteTask} onShowTask={showTaskDetail} onClaim={claimTask} onGrab={grabTask} onRelease={releaseTask} onPass={passBaton} onRespond={respondBaton} onPostpone={setPostponeTarget} collapsed={collapsed.tasks} onToggleCollapse={toggleCollapseTasks} filter={tasksFilter} setFilter={setTasksFilter} />
           {/* Lists are superseded by Spaces (the Lists tab is hidden). The
               Spaces-reachable list modals + CRUD stay; only the standalone
@@ -10570,6 +10625,7 @@ export function MainApp({ profile, onSettings }) {
         onPass={passBaton}
         onRespond={respondBaton}
         onGrab={grabTask}
+        onCatchUp={catchUpTask}
         suggestions={suggestions}
         onSuggest={addSuggestion}
         onDecideSuggestion={decideSuggestion}
