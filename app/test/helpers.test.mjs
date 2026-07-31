@@ -1,7 +1,7 @@
 // Plain-node unit tests for src/lib/helpers.js — no framework, no fixtures.
 // Run: npm test (from app/), or: node test/helpers.test.mjs
 import assert from 'node:assert/strict';
-import { toLocalISO, addOneMonth, computeNextDue, catchUpDate, writeStrippingMissing } from '../src/lib/helpers.js';
+import { toLocalISO, addOneMonth, computeNextDue, catchUpDate, normalizeDays, writeStrippingMissing } from '../src/lib/helpers.js';
 
 let passed = 0;
 const test = (name, fn) => {
@@ -80,6 +80,24 @@ test('weekly with empty days → null', () => {
   assert.equal(
     computeNextDue({ due_date: '2026-07-03', recurrence: { freq: 'weekly', days: [] } }),
     null);
+});
+
+// ── normalizeDays + legacy string-days rows (the "trash cans → Thursday 2030"
+//    bug: '4' + '0' string-concat in the weekly walk jumped years ahead) ──────
+test('normalizeDays coerces strings, dedupes, sorts, drops junk', () => {
+  assert.deepEqual(normalizeDays(['3', '0']), [0, 3]);
+  assert.deepEqual(normalizeDays([5, '5', 'x', -1, 9]), [5]);
+  assert.deepEqual(normalizeDays(null), []);
+});
+test('weekly with LEGACY STRING days computes the same as numeric days', () => {
+  assert.equal(
+    computeNextDue({ due_date: '2026-07-15', recurrence: { freq: 'weekly', days: ['0', '3'] } }),
+    '2026-07-19'); // Wed Jul 15 → Sun Jul 19, NOT a string-concat year jump
+});
+test('catch-up with LEGACY STRING days lands on the right day', () => {
+  assert.equal(
+    catchUpDate('2026-07-15', { freq: 'weekly', days: ['0', '3'] }, '2026-07-30'),
+    '2026-08-02'); // Sunday — the trash-cans case, fixed
 });
 
 // ── catchUpDate ──────────────────────────────────────────────────────────────

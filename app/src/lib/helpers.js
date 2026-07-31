@@ -23,6 +23,16 @@ export const addOneMonth = (d) => {
   return d;
 };
 
+// Recurrence day lists from older stored rows can contain STRINGS ("0"–"6").
+// Strict number math silently broke on those rows — '0' > 3 is false,
+// 4 + '0' is '40' (a years-long setDate jump), and [3].includes('3') is
+// false — while display code coerced and rendered "Sun, Wed" fine, hiding
+// the corruption. Normalize at every consumer instead of migrating data.
+export const normalizeDays = (days) =>
+  Array.isArray(days)
+    ? [...new Set(days.map(Number))].filter(n => Number.isInteger(n) && n >= 0 && n <= 6).sort((a, b) => a - b)
+    : [];
+
 // Given a recurring task ({ due_date, recurrence: { freq, days } }), the next
 // scheduled occurrence after its current due_date — or null if the task
 // isn't recurring. Same recurrence shape used by events. Computed in local
@@ -48,12 +58,14 @@ export function computeNextDue(task) {
       const cand = new Date(y, m, anchorDay);
       if (cand.getMonth() === m) { d = cand; break; } // month actually has that day
     }
-  } else if ((r.freq === 'weekly' || r.freq === 'custom') && Array.isArray(r.days) && r.days.length > 0) {
-    const sorted = [...r.days].sort((a, b) => a - b);
-    const cur = base.getDay(); // 0-6 (Sun-Sat)
-    const nextDay = sorted.find(x => x > cur) ?? sorted[0];
-    const diff = nextDay > cur ? nextDay - cur : 7 - cur + nextDay;
-    d = new Date(base); d.setDate(d.getDate() + diff);
+  } else if (r.freq === 'weekly' || r.freq === 'custom') {
+    const sorted = normalizeDays(r.days); // coerces legacy string days
+    if (sorted.length > 0) {
+      const cur = base.getDay(); // 0-6 (Sun-Sat)
+      const nextDay = sorted.find(x => x > cur) ?? sorted[0];
+      const diff = nextDay > cur ? nextDay - cur : 7 - cur + nextDay;
+      d = new Date(base); d.setDate(d.getDate() + diff);
+    }
   }
   if (!d) return null;
   return toLocalISO(d);

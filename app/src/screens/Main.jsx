@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabase';
 import { AnchorTabs, Modal, EmojiInput } from '../Components';
 import { COLOR_MAP } from '../lib/colors';
-import { toLocalISO, localTodayISO, addOneMonth, computeNextDue, catchUpDate, writeStrippingMissing } from '../lib/helpers';
+import { toLocalISO, localTodayISO, addOneMonth, computeNextDue, catchUpDate, normalizeDays, writeStrippingMissing } from '../lib/helpers';
 
 const getColor = c => COLOR_MAP[c] || '#999';
 const getInitial = n => (n || '?')[0].toUpperCase();
@@ -1542,8 +1542,11 @@ function expandRecurringEvents(rawEvents, windowStart, windowEnd) {
       continue;
     }
     if (r.freq === 'weekly' || r.freq === 'custom') {
-      const days = Array.isArray(r.days) && r.days.length > 0
-        ? r.days
+      // normalizeDays coerces legacy STRING day lists — ['0','3'].includes(3)
+      // is false, which made these events never render a single occurrence.
+      const nd = normalizeDays(r.days);
+      const days = nd.length > 0
+        ? nd
         : [anchor.getDay()]; // fall back to original weekday if no days set
       let cur = new Date(scanStart);
       while (cur.getTime() <= endMs) {
